@@ -1,0 +1,5779 @@
+/* eval.c — Neutrino tree-walking evaluator. */
+#define _XOPEN_SOURCE 700         /* open_memstream + jn/yn Bessel (superset of POSIX.1-2008) */
+#define _DARWIN_C_SOURCE 1        /* macOS: _XOPEN_SOURCE alone HIDES extension fields like
+                                     rusage.ru_maxrss (Darwin clamps visibility to the requested
+                                     standard); this re-widens it. Inert on other platforms. */
+#include <errno.h>
+#include <float.h>
+#include <sys/resource.h>
+#include <time.h>
+#include "eval.h"
+#include "parser.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdarg.h>
+#include <math.h>
+#include <sys/wait.h>
+#include "nrt.h"
+#include "chunk.h"
+#include "linalg.h"
+
+/* ------------------------------------------------------------------ */
+/* errors                                                              */
+/* ------------------------------------------------------------------ */
+[[noreturn]] void runtime_error(Interp *I, const char *fmt, ...)
+{
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(I->err, sizeof I->err, fmt, ap);
+    va_end(ap);
+    I->had_error = true;
+    longjmp(I->jmp, 1);
+}
+
+static const char *type_name(ValueKind k)
+{
+    switch (k) {
+    case VAL_NULL:    return "Null";
+    case VAL_BOOL:    return "Bool";
+    case VAL_INT:     return "Int";
+    case VAL_FLOAT:   return "Float";
+    case VAL_COMPLEX: return "Complex";
+    case VAL_STRING:  return "String";
+    case VAL_ARRAY:   return "Array";
+    case VAL_RECORD:  return "Record";
+    case VAL_CLOSURE: return "Closure";
+    case VAL_BUILTIN: return "Builtin";
+    }
+    return "?";
+}
+
+static const char *elt_name(EltType e)
+{
+    switch (e) {
+    case ELT_BOOL:    return "Bool";
+    case ELT_INT:     return "Int";
+    case ELT_FLOAT:   return "Float";
+    case ELT_COMPLEX: return "Complex";
+    case ELT_STRING:  return "String";
+    }
+    return "?";
+}
+
+static bool is_num(Value v)   { return v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_COMPLEX; }
+static bool is_array(Value v) { return v.kind == VAL_ARRAY; }
+
+/* ------------------------------------------------------------------ */
+/* numeric tower — scalar arithmetic                                   */
+/* ------------------------------------------------------------------ */
+typedef enum { AR_ADD, AR_SUB, AR_MUL, AR_DIV, AR_POW, AR_LDIV } Arith;
+
+static int    num_rank(Value v) { return v.kind == VAL_INT ? 0 : v.kind == VAL_FLOAT ? 1 : 2; }
+static double as_double(Value v){ return v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f : v.as.z.re; }
+static Cplx   as_cplx(Value v)  { return v.kind == VAL_COMPLEX ? v.as.z
+                                       : v.kind == VAL_FLOAT   ? (Cplx){ v.as.f, 0.0 }
+                                                               : (Cplx){ (double)v.as.i, 0.0 }; }
+
+/* Wrapping integer power by squaring: O(log e) even for huge exponents, and
+ * all arithmetic in uint64 so the documented wraparound is defined behavior
+ * (the old loop was UB on overflow and effectively hung for astronomical e). */
+static int64_t ipow(int64_t base, int64_t e)
+{
+    uint64_t r = 1, b = (uint64_t)base;
+    while (e > 0) {
+        if (e & 1) r *= b;
+        b *= b;
+        e >>= 1;
+    }
+    return (int64_t)r;
+}
+
+/* ---- PRNG: xoshiro256** seeded by splitmix64 (deterministic, reseed via rng()) ---- */
+static uint64_t splitmix64(uint64_t *x)
+{
+    uint64_t z = (*x += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+static void rng_seed(Interp *I, uint64_t seed)
+{
+    uint64_t sm = seed;
+    for (int i = 0; i < 4; i++) I->rng_s[i] = splitmix64(&sm);
+}
+static inline uint64_t rotl64(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }
+static uint64_t rng_next_u64(Interp *I)
+{
+    uint64_t *s = I->rng_s;
+    uint64_t result = rotl64(s[1] * 5, 7) * 9;
+    uint64_t t = s[1] << 17;
+    s[2] ^= s[0]; s[3] ^= s[1]; s[1] ^= s[2]; s[0] ^= s[3];
+    s[2] ^= t; s[3] = rotl64(s[3], 45);
+    return result;
+}
+static double rng_uniform(Interp *I)                      /* [0, 1) with 53 bits */
+{
+    return (double)(rng_next_u64(I) >> 11) * 0x1.0p-53;
+}
+static void rng_normal_pair(Interp *I, double *z0, double *z1)   /* Box-Muller */
+{
+    double u1 = rng_uniform(I), u2 = rng_uniform(I);
+    if (u1 < 1e-300) u1 = 1e-300;                         /* guard log(0) */
+    double r = sqrt(-2.0 * log(u1)), th = 6.283185307179586 * u2;   /* 2*pi */
+    *z0 = r * cos(th); *z1 = r * sin(th);
+}
+
+static Arith arith_of(enum TokenKind op)
+{
+    switch (op) {
+    case TOK_PLUS:                          return AR_ADD;
+    case TOK_MINUS:                         return AR_SUB;
+    case TOK_STAR:  case TOK_DOT_STAR:      return AR_MUL;
+    case TOK_SLASH: case TOK_DOT_SLASH:     return AR_DIV;
+    case TOK_CARET: case TOK_DOT_CARET:     return AR_POW;
+    case TOK_BACKSLASH: case TOK_DOT_BACKSLASH: return AR_LDIV;
+    default:                                return AR_ADD;   /* unreachable */
+    }
+}
+
+static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
+{
+    if (a.kind == VAL_STRING && b.kind == VAL_STRING) {
+        if (kind != AR_ADD)
+            runtime_error(I, "string arithmetic supports only + (concatenation)");
+        StrObj *x = as_str(a), *y = as_str(b);
+        char *buf = malloc((size_t)x->len + y->len);
+        if (!buf) runtime_error(I, "out of memory");
+        memcpy(buf, x->data, x->len);
+        memcpy(buf + x->len, y->data, y->len);
+        Value r = val_string(buf, x->len + y->len);
+        free(buf);
+        return r;
+    }
+    if (!is_num(a) || !is_num(b))
+        runtime_error(I, "arithmetic on non-numbers (%s, %s)", type_name(a.kind), type_name(b.kind));
+
+    if (kind == AR_LDIV) { Value t = a; a = b; b = t; kind = AR_DIV; }   /* a\b == b/a */
+
+    int rank = num_rank(a) > num_rank(b) ? num_rank(a) : num_rank(b);
+    if (kind == AR_DIV && rank < 1) rank = 1;                            /* int/int -> float */
+    if (kind == AR_POW) {
+        if (rank == 2) runtime_error(I, "complex exponentiation is not supported yet");
+        if (rank == 0 && b.as.i < 0) rank = 1;                          /* int^negint -> float */
+    }
+
+    switch (rank) {
+    case 0: {
+        int64_t x = a.as.i, y = b.as.i;
+        switch (kind) {
+        /* wraparound is documented; do it in uint64 so it is defined behavior */
+        case AR_ADD: return val_int((int64_t)((uint64_t)x + (uint64_t)y));
+        case AR_SUB: return val_int((int64_t)((uint64_t)x - (uint64_t)y));
+        case AR_MUL: return val_int((int64_t)((uint64_t)x * (uint64_t)y));
+        case AR_POW: return val_int(ipow(x, y));
+        default:     break;
+        }
+        break;
+    }
+    case 1: {
+        double x = as_double(a), y = as_double(b);
+        switch (kind) {
+        case AR_ADD: return val_float(x + y);
+        case AR_SUB: return val_float(x - y);
+        case AR_MUL: return val_float(x * y);
+        case AR_DIV: return val_float(x / y);
+        case AR_POW: return val_float(pow(x, y));
+        default:     break;
+        }
+        break;
+    }
+    case 2: {
+        Cplx x = as_cplx(a), y = as_cplx(b);
+        switch (kind) {
+        case AR_ADD: { Cplx r = c_add(x, y); return val_complex(r.re, r.im); }
+        case AR_SUB: { Cplx r = c_sub(x, y); return val_complex(r.re, r.im); }
+        case AR_MUL: { Cplx r = c_mul(x, y); return val_complex(r.re, r.im); }
+        case AR_DIV: { Cplx r = c_div(x, y); return val_complex(r.re, r.im); }
+        default:     break;
+        }
+        break;
+    }
+    }
+    runtime_error(I, "unsupported arithmetic");
+}
+
+static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    if (a.kind == VAL_STRING && b.kind == VAL_STRING) {
+        StrObj *x = as_str(a), *y = as_str(b);
+        uint32_t m = x->len < y->len ? x->len : y->len;
+        int c = memcmp(x->data, y->data, m);
+        if (c == 0) c = (x->len > y->len) - (x->len < y->len);   /* prefix: shorter sorts first */
+        switch (op) {
+        case TOK_EQ: return val_bool(c == 0); case TOK_NE: return val_bool(c != 0);
+        case TOK_LT: return val_bool(c <  0); case TOK_LE: return val_bool(c <= 0);
+        case TOK_GT: return val_bool(c >  0); case TOK_GE: return val_bool(c >= 0);
+        default: break;
+        }
+    }
+    if (!is_num(a) || !is_num(b))
+        runtime_error(I, "comparison on non-numbers (%s, %s)", type_name(a.kind), type_name(b.kind));
+
+    if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) {
+        if (op != TOK_EQ && op != TOK_NE)
+            runtime_error(I, "ordering comparison is undefined for Complex");
+        Cplx x = as_cplx(a), y = as_cplx(b);
+        bool eq = x.re == y.re && x.im == y.im;
+        return val_bool(op == TOK_EQ ? eq : !eq);
+    }
+    if (a.kind == VAL_INT && b.kind == VAL_INT) {
+        int64_t x = a.as.i, y = b.as.i;
+        switch (op) {
+        case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
+        case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
+        case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
+        default: break;
+        }
+    }
+    double x = as_double(a), y = as_double(b);
+    switch (op) {
+    case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
+    case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
+    case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
+    default: break;
+    }
+    runtime_error(I, "unsupported comparison");
+}
+
+/* ------------------------------------------------------------------ */
+/* array helpers                                                       */
+/* ------------------------------------------------------------------ */
+static EltType vk_elt(ValueKind k)
+{
+    return k == VAL_BOOL ? ELT_BOOL : k == VAL_INT ? ELT_INT : k == VAL_FLOAT ? ELT_FLOAT : k == VAL_STRING ? ELT_STRING : ELT_COMPLEX;
+}
+static EltType elt_max(EltType a, EltType b) { return a > b ? a : b; }   /* numeric tower only */
+
+/* pack n temp scalar Values (owned) into a fresh rows×cols array; releases temps.
+ * An all-Bool batch yields a logical array; bools never raise the numeric tower. */
+[[noreturn]] static void array_build_abort(Interp *I, Value *tmp, size_t done, jmp_buf saved);
+
+static Value pack_array(Value *tmp, size_t n, uint32_t rows, uint32_t cols)
+{
+    EltType e = ELT_INT;
+    bool all_bool = n > 0;
+    for (size_t k = 0; k < n; k++) {
+        if (tmp[k].kind == VAL_BOOL) continue;
+        all_bool = false;
+        e = elt_max(e, vk_elt(tmp[k].kind));
+    }
+    Value arr = val_array(all_bool ? ELT_BOOL : e, rows, cols);
+    for (size_t k = 0; k < n; k++) { arr_set(as_arr(arr), k, tmp[k]); value_release(tmp[k]); }
+    return arr;
+}
+
+static Value elementwise(Interp *I, Arith kind, Value a, Value b)
+{
+    bool aa = is_array(a), ba = is_array(b);
+    uint32_t rows, cols;
+    if (aa && ba) {
+        if (as_arr(a)->rows != as_arr(b)->rows || as_arr(a)->cols != as_arr(b)->cols)
+            runtime_error(I, "shape mismatch: %ux%u vs %ux%u",
+                          as_arr(a)->rows, as_arr(a)->cols, as_arr(b)->rows, as_arr(b)->cols);
+        rows = as_arr(a)->rows; cols = as_arr(a)->cols;
+    } else if (aa) { rows = as_arr(a)->rows; cols = as_arr(a)->cols; }
+    else           { rows = as_arr(b)->rows; cols = as_arr(b)->cols; }
+
+    size_t n = (size_t)rows * cols;
+    Value *tmp = n ? malloc(n * sizeof *tmp) : nullptr;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    volatile size_t done = 0;
+    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);   /* mixed-kind element raises */
+    for (size_t k = 0; k < n; k++) {
+        Value av = aa ? arr_get(as_arr(a), k) : a;
+        Value bv = ba ? arr_get(as_arr(b), k) : b;
+        tmp[k] = scalar_arith_k(I, kind, av, bv);
+        done = k + 1;
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value r = pack_array(tmp, n, rows, cols);
+    free(tmp);
+    return r;
+}
+
+/* broadcast shape for elementwise ops: array∘array (equal shapes) or array∘scalar */
+static void ew_dims(Interp *I, Value a, Value b, bool *aa, bool *ba, uint32_t *rows, uint32_t *cols)
+{
+    *aa = is_array(a); *ba = is_array(b);
+    if (*aa && *ba) {
+        if (as_arr(a)->rows != as_arr(b)->rows || as_arr(a)->cols != as_arr(b)->cols)
+            runtime_error(I, "shape mismatch: %ux%u vs %ux%u",
+                          as_arr(a)->rows, as_arr(a)->cols, as_arr(b)->rows, as_arr(b)->cols);
+        *rows = as_arr(a)->rows; *cols = as_arr(a)->cols;
+    } else if (*aa) { *rows = as_arr(a)->rows; *cols = as_arr(a)->cols; }
+    else            { *rows = as_arr(b)->rows; *cols = as_arr(b)->cols; }
+}
+
+/* elementwise comparison -> logical (Bool) array */
+static Value elementwise_cmp(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    bool aa, ba; uint32_t rows, cols;
+    ew_dims(I, a, b, &aa, &ba, &rows, &cols);
+    Value out = val_array(ELT_BOOL, rows, cols);    /* pre-setjmp: handler may release it */
+    ArrObj *o = as_arr(out);
+    size_t n = (size_t)rows * cols;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) { value_release(out);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1); }
+    for (size_t k = 0; k < n; k++) {
+        Value av = aa ? arr_get(as_arr(a), k) : a;
+        Value bv = ba ? arr_get(as_arr(b), k) : b;
+        arr_set(o, k, scalar_cmp(I, op, av, bv));
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    return out;
+}
+
+/* elementwise & | on logical arrays -> logical array */
+static Value elementwise_logical(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    bool aa, ba; uint32_t rows, cols;
+    ew_dims(I, a, b, &aa, &ba, &rows, &cols);
+    Value out = val_array(ELT_BOOL, rows, cols);
+    ArrObj *o = as_arr(out);
+    size_t n = (size_t)rows * cols;
+    for (size_t k = 0; k < n; k++) {
+        Value av = aa ? arr_get(as_arr(a), k) : a;
+        Value bv = ba ? arr_get(as_arr(b), k) : b;
+        if (av.kind != VAL_BOOL || bv.kind != VAL_BOOL) {
+            value_release(out);
+            runtime_error(I, "'%s' requires Bool operands", op == TOK_AMP ? "&" : "|");
+        }
+        arr_set(o, k, val_bool(op == TOK_AMP ? (av.as.b && bv.as.b) : (av.as.b || bv.as.b)));
+    }
+    return out;
+}
+
+static Value matmul(Interp *I, Value a, Value b)
+{
+    ArrObj *x = as_arr(a), *y = as_arr(b);
+    if (x->cols != y->rows)
+        runtime_error(I, "matmul inner dimensions disagree: %ux%u * %ux%u",
+                      x->rows, x->cols, y->rows, y->cols);
+    uint32_t m = x->rows, k = x->cols, nn = y->cols;
+    size_t cells = (size_t)m * nn;
+    Value *tmp = cells ? malloc(cells * sizeof *tmp) : nullptr;
+    for (uint32_t i = 0; i < m; i++)
+        for (uint32_t j = 0; j < nn; j++) {
+            Value acc = val_int(0);
+            for (uint32_t t = 0; t < k; t++) {
+                Value aik = arr_get(x, (size_t)i * k + t);
+                Value bkj = arr_get(y, (size_t)t * nn + j);
+                Value prod = scalar_arith_k(I, AR_MUL, aik, bkj);
+                Value sum  = scalar_arith_k(I, AR_ADD, acc, prod);
+                acc = sum;
+            }
+            tmp[(size_t)i * nn + j] = acc;
+        }
+    Value r = pack_array(tmp, cells, m, nn);
+    free(tmp);
+    return r;
+}
+
+static Value mldivide(Interp *I, Value A, Value B);
+static Value mrdivide(Interp *I, Value num, Value den);
+static Value mpow(Interp *I, Value base, Value e);
+static Value lstsq(Interp *I, Value A, Value B);   /* non-square \ : least squares via QR */
+
+static Value array_binop(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    switch (op) {
+    case TOK_STAR:
+        if (is_array(a) && is_array(b)) return matmul(I, a, b);
+        return elementwise(I, AR_MUL, a, b);                 /* scalar × array */
+    case TOK_DOT_STAR:      return elementwise(I, AR_MUL, a, b);
+
+    case TOK_BACKSLASH:                                       /* mldivide: solve A x = b */
+        if (is_array(a) && is_array(b)) return mldivide(I, a, b);
+        if (!is_array(a))               return elementwise(I, AR_LDIV, a, b);  /* scalar \ array */
+        runtime_error(I, "left division: array \\ scalar is not conformable (use .\\ for elementwise)");
+    case TOK_DOT_BACKSLASH: return elementwise(I, AR_LDIV, a, b);
+
+    case TOK_SLASH:                                           /* mrdivide: solve x A = b */
+        if (is_array(a) && is_array(b)) return mrdivide(I, a, b);
+        if (!is_array(b))               return elementwise(I, AR_DIV, a, b);   /* array / scalar */
+        runtime_error(I, "right division: scalar / array is not conformable (use ./ for elementwise)");
+    case TOK_DOT_SLASH:     return elementwise(I, AR_DIV, a, b);
+
+    case TOK_CARET:
+        if (is_array(a)) return mpow(I, a, b);
+        runtime_error(I, "'^' needs a matrix base; scalar ^ matrix is not supported");
+    case TOK_DOT_CARET:     return elementwise(I, AR_POW, a, b);
+
+    case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
+        return elementwise_cmp(I, op, a, b);
+    case TOK_AMP: case TOK_PIPE:
+        return elementwise_logical(I, op, a, b);
+
+    default:                                                 /* + and - */
+        return elementwise(I, arith_of(op), a, b);
+    }
+}
+
+Value transpose(Interp *I, Value v, bool conj)
+{
+    (void)I;
+    if (!is_array(v)) return value_retain(v);   /* transpose of a scalar is itself */
+    ArrObj *a = as_arr(v);
+    Value out = val_array(a->elt, a->cols, a->rows);
+    ArrObj *o = as_arr(out);
+    for (uint32_t i = 0; i < a->rows; i++)
+        for (uint32_t j = 0; j < a->cols; j++) {
+            Value e = arr_get(a, (size_t)i * a->cols + j);
+            if (conj && e.kind == VAL_COMPLEX) e.as.z.im = -e.as.z.im;
+            arr_set(o, (size_t)j * a->rows + i, e);
+        }
+    return out;
+}
+
+/* Solve A X = B for X (A square n×n, B n×m), Gaussian elimination with partial
+ * pivoting carried out in complex; returns Float when all inputs are real
+ * (real arithmetic in Cplx keeps imaginary parts exactly zero), else Complex. */
+static Value mldivide(Interp *I, Value A, Value B)
+{
+    ArrObj *a = as_arr(A), *b = as_arr(B);
+    uint32_t n = a->rows, m = b->cols;
+    if (a->cols != n)
+        return lstsq(I, A, B);          /* non-square: overdetermined least squares (QR) */
+    if (b->rows != n)
+        runtime_error(I, "left division dimensions disagree: %ux%u \\ %ux%u",
+                      a->rows, a->cols, b->rows, b->cols);
+
+    Cplx *LU = malloc((size_t)n * n * sizeof *LU);
+    Cplx *X  = malloc((size_t)n * m * sizeof *X);
+    if ((!LU && n) || (!X && n && m)) abort();
+    for (uint32_t i = 0; i < n; i++)
+        for (uint32_t j = 0; j < n; j++) LU[(size_t)i*n+j] = as_cplx(arr_get(a, (size_t)i*n+j));
+    for (uint32_t i = 0; i < n; i++)
+        for (uint32_t j = 0; j < m; j++) X[(size_t)i*m+j]  = as_cplx(arr_get(b, (size_t)i*m+j));
+
+    if (cozy_linalg()->solve(LU, X, n, m) != 0)
+        { free(LU); free(X); runtime_error(I, "left division: matrix is singular"); }
+
+    bool real_in = a->elt != ELT_COMPLEX && b->elt != ELT_COMPLEX;
+    Value out = val_array(real_in ? ELT_FLOAT : ELT_COMPLEX, n, m);
+    ArrObj *R = as_arr(out);
+    for (uint32_t i = 0; i < n; i++)
+        for (uint32_t j = 0; j < m; j++) {
+            Cplx z = X[(size_t)i*m+j];
+            if (real_in) ((double *)R->data)[(size_t)i*m+j] = z.re;
+            else         ((Cplx   *)R->data)[(size_t)i*m+j] = z;
+        }
+    free(LU); free(X);
+    return out;
+}
+
+/* B / A solves X A = B, i.e. X = (A' \ B')' with plain transposes. */
+static Value mrdivide(Interp *I, Value num, Value den)
+{
+    Value At = transpose(I, den, false);   /* pre-setjmp: handler releases them */
+    Value Bt = transpose(I, num, false);
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) { value_release(At); value_release(Bt);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1); }
+    Value Xt = mldivide(I, At, Bt);        /* may raise: shape mismatch, singular */
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value X  = transpose(I, Xt, false);
+    value_release(At); value_release(Bt); value_release(Xt);
+    return X;
+}
+
+static Value identity(uint32_t n)
+{
+    Value m = val_array(ELT_INT, n, n);
+    int64_t *d = (int64_t *)as_arr(m)->data;
+    for (uint32_t i = 0; i < n; i++) d[(size_t)i * n + i] = 1;
+    return m;
+}
+
+/* A^p for square A and integer p: exponentiation by squaring; p<0 inverts first
+ * (A^-1 = A \ I), p==0 is the identity. */
+static Value identity(uint32_t n);
+static Value mldivide(Interp *I, Value A, Value B);
+
+/* A^-1 as A \ I with the identity released even when mldivide raises. */
+static Value inv_via_solve(Interp *I, Value A, uint32_t n)
+{
+    Value id = identity(n);
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) { value_release(id);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1); }
+    Value r = mldivide(I, A, id);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    value_release(id);
+    return r;
+}
+
+static Value mpow(Interp *I, Value base, Value e)
+{
+    if (!is_array(base)) runtime_error(I, "matrix power: base must be a matrix");
+    ArrObj *b = as_arr(base);
+    if (b->rows != b->cols)
+        runtime_error(I, "matrix power requires a square matrix (got %ux%u)", b->rows, b->cols);
+    if (e.kind != VAL_INT)
+        runtime_error(I, "matrix power exponent must be an integer");
+    uint32_t n = b->rows;
+    int64_t p = e.as.i;
+
+    Value acc;
+    if (p < 0) { acc = inv_via_solve(I, base, n); p = -p; }
+    else       acc = value_retain(base);
+
+    Value result = identity(n);
+    while (p > 0) {
+        if (p & 1) { Value t = matmul(I, result, acc); value_release(result); result = t; }
+        p >>= 1;
+        if (p > 0) { Value t = matmul(I, acc, acc); value_release(acc); acc = t; }
+    }
+    value_release(acc);
+    return result;
+}
+
+/* ------------------------------------------------------------------ */
+/* literal decoding                                                    */
+/* ------------------------------------------------------------------ */
+int64_t parse_int_lit(const char *s, uint32_t len)
+{
+    if (len > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        int64_t v = 0;
+        for (uint32_t k = 2; k < len; k++) {
+            char c = s[k]; if (c == '_') continue;
+            int d = (c <= '9') ? c - '0' : (c | 0x20) - 'a' + 10;
+            v = v * 16 + d;
+        }
+        return v;
+    }
+    if (len > 2 && s[0] == '0' && (s[1] == 'b' || s[1] == 'B')) {
+        int64_t v = 0;
+        for (uint32_t k = 2; k < len; k++) { if (s[k] == '_') continue; v = v * 2 + (s[k] - '0'); }
+        return v;
+    }
+    int64_t v = 0;
+    for (uint32_t k = 0; k < len; k++) { if (s[k] == '_') continue; v = v * 10 + (s[k] - '0'); }
+    return v;
+}
+
+double parse_float_lit(const char *s, uint32_t len)
+{
+    char buf[64]; uint32_t j = 0;
+    for (uint32_t k = 0; k < len && j < sizeof buf - 1; k++)
+        if (s[k] != '_') buf[j++] = s[k];
+    buf[j] = '\0';
+    return strtod(buf, nullptr);
+}
+
+Value decode_string(const char *s, uint32_t len)
+{
+    /* s includes the surrounding quotes */
+    char *buf = malloc(len);                 /* decoded is never longer than raw */
+    uint32_t j = 0;
+    if (s[0] == '"') {
+        for (uint32_t k = 1; k < len - 1; k++) {
+            if (s[k] == '\\' && k + 1 < len - 1) {
+                char e = s[++k];
+                switch (e) {
+                case 'n': buf[j++] = '\n'; break;  case 't': buf[j++] = '\t'; break;
+                case 'r': buf[j++] = '\r'; break;  case '0': buf[j++] = '\0'; break;
+                case '\\': buf[j++] = '\\'; break; case '"': buf[j++] = '"';  break;
+                default:  buf[j++] = e;    break;
+                }
+            } else buf[j++] = s[k];
+        }
+    } else {                                  /* single-quoted raw, '' -> ' */
+        for (uint32_t k = 1; k < len - 1; k++) {
+            if (s[k] == '\'' && k + 1 < len - 1 && s[k+1] == '\'') { buf[j++] = '\''; k++; }
+            else buf[j++] = s[k];
+        }
+    }
+    Value v = val_string(buf, j);
+    free(buf);
+    return v;
+}
+
+/* ------------------------------------------------------------------ */
+/* evaluator                                                           */
+/* ------------------------------------------------------------------ */
+
+Value call_value(Interp *I, Value callee, Value *args, uint32_t n)
+{
+    if (callee.kind == VAL_CLOSURE)
+        return vm_run_closure(I, callee, args, n);   /* all closures are compiled */
+    if (callee.kind == VAL_BUILTIN) {
+        BuiltinObj *b = as_blt(callee);
+        if (n < b->min_arity || n > b->max_arity)
+            runtime_error(I, "%s: wrong number of arguments (%u)", b->name, n);
+        return b->fn(I, args, n);
+    }
+    runtime_error(I, "value of type %s is not callable", type_name(callee.kind));
+}
+
+static int64_t want_index(Interp *I, Value v, const char *which)
+{
+    if (v.kind != VAL_INT)
+        runtime_error(I, "%s index must be an Int, got %s", which, type_name(v.kind));
+    return v.as.i;
+}
+
+/* non-consuming: target and idx[0..argc) stay owned by the caller. Result +1. */
+/* Resolve one index argument to a list of 0-based positions within [0,dim).
+ * colon -> the whole dimension; scalar Int -> one position (sets *scalar);
+ * Int range/vector -> gather; logical vector -> the true positions. The result
+ * is malloc'd (caller frees). No malloc happens before a possible raise, so a
+ * failure here leaks nothing of its own. */
+static int64_t *resolve_index_dim(Interp *I, Value idx, bool colon, int64_t dim,
+                                  size_t *count, bool *scalar, const char *what)
+{
+    *scalar = false;
+    if (colon) {
+        int64_t *p = malloc(((size_t)(dim > 0 ? dim : 1)) * sizeof *p);
+        for (int64_t k = 0; k < dim; k++) p[k] = k;
+        *count = (size_t)dim;
+        return p;
+    }
+    if (is_array(idx)) {
+        ArrObj *ix = as_arr(idx);
+        size_t n = (size_t)ix->rows * ix->cols;
+        if (ix->elt == ELT_BOOL) {
+            if ((int64_t)n != dim)
+                runtime_error(I, "logical %s index has %zu element(s) but dimension is %lld",
+                              what, n, (long long)dim);
+            size_t cnt = 0;
+            for (size_t k = 0; k < n; k++) if (((unsigned char *)ix->data)[k]) cnt++;
+            int64_t *p = malloc((cnt ? cnt : 1) * sizeof *p);
+            size_t w = 0;
+            for (size_t k = 0; k < n; k++) if (((unsigned char *)ix->data)[k]) p[w++] = (int64_t)k;
+            *count = cnt;
+            return p;
+        }
+        if (ix->elt != ELT_INT)
+            runtime_error(I, "%s index array must be Int or logical, got %s",
+                          what, ix->elt == ELT_FLOAT ? "Float" : "Complex");
+        const int64_t *src = (const int64_t *)ix->data;
+        int64_t *p = malloc((n ? n : 1) * sizeof *p);
+        for (size_t k = 0; k < n; k++) {
+            int64_t v = src[k];
+            if (v < 1 || v > dim) { free(p);
+                runtime_error(I, "%s index %lld out of bounds (1..%lld)", what, (long long)v, (long long)dim); }
+            p[k] = v - 1;
+        }
+        *count = n;
+        return p;
+    }
+    int64_t v = want_index(I, idx, what);          /* scalar Int (may raise; nothing malloc'd yet) */
+    if (v < 1 || v > dim)
+        runtime_error(I, "%s index %lld out of bounds (1..%lld)", what, (long long)v, (long long)dim);
+    int64_t *p = malloc(sizeof *p);
+    p[0] = v - 1; *count = 1; *scalar = true;
+    return p;
+}
+
+/* Fast path for a plain scalar Int index: 0-based offset with bounds check,
+ * no allocation. Caller guarantees the index is neither a colon nor an array. */
+static int64_t scalar_ix(Interp *I, Value v, int64_t dim, const char *what)
+{
+    int64_t i = want_index(I, v, what);            /* raises on non-Int */
+    if (i < 1 || i > dim)
+        runtime_error(I, "%s index %lld out of bounds (1..%lld)", what, (long long)i, (long long)dim);
+    return i - 1;
+}
+
+Value do_index(Interp *I, Value target, Value *idx, uint32_t argc, uint8_t colonmask)
+{
+    if (target.kind == VAL_STRING) {                       /* byte indexing, array semantics */
+        StrObj *sv = as_str(target);
+        if (argc != 1)
+            runtime_error(I, "strings take one index (s[i] or s[a:b])");
+        if (colonmask & 1) return value_retain(target);    /* s[:] is the whole string */
+        size_t count = 0; bool scalar_ix = false;
+        int64_t *sel = resolve_index_dim(I, idx[0], false, (int64_t)sv->len, &count, &scalar_ix, "string");
+        char *buf = malloc(count ? count : 1);
+        if (!buf) { free(sel); runtime_error(I, "out of memory"); }
+        for (size_t k = 0; k < count; k++) buf[k] = sv->data[sel[k]];
+        free(sel);
+        Value r = val_string(buf, (uint32_t)count);
+        free(buf);
+        return r;
+    }
+    if (!is_array(target))
+        runtime_error(I, "value of type %s is not indexable", type_name(target.kind));
+    ArrObj *a = as_arr(target);
+
+    /* volatile: assigned after setjmp, read in the handler — without it -O2
+     * register-caches them and the handler frees stale values (found by LSan) */
+    int64_t *volatile sel0 = nullptr; int64_t *volatile sel1 = nullptr;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) { free(sel0); free(sel1);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1); }
+
+    Value result;
+    if (argc == 1) {
+        int64_t numel = (int64_t)a->rows * a->cols;
+        if (!(colonmask & 1) && !is_array(idx[0])) {          /* fast path: a[i] */
+            result = value_retain(arr_get(a, (size_t)scalar_ix(I, idx[0], numel, "")));
+        } else {
+        size_t cnt; bool scalar;
+        sel0 = resolve_index_dim(I, idx[0], colonmask & 1, numel, &cnt, &scalar, "");
+        if (scalar) { result = value_retain(arr_get(a, (size_t)sel0[0])); }
+        else {
+            uint32_t orows, ocols;
+            if (colonmask & 1)                         { orows = (uint32_t)cnt; ocols = cnt ? 1 : 0; }      /* a[:] -> column */
+            else if (is_array(idx[0]) && as_arr(idx[0])->elt == ELT_BOOL)                                   /* mask -> follow target */
+                { orows = a->rows == 1 ? (cnt ? 1 : 0) : (uint32_t)cnt; ocols = a->rows == 1 ? (uint32_t)cnt : (cnt ? 1 : 0); }
+            else if (is_array(idx[0]))                 { orows = as_arr(idx[0])->rows; ocols = as_arr(idx[0])->cols; } /* gather -> index shape */
+            else                                       { orows = 1; ocols = (uint32_t)cnt; }
+            result = val_array(a->elt, orows, ocols);
+            for (size_t k = 0; k < cnt; k++) arr_set(as_arr(result), k, arr_get(a, (size_t)sel0[k]));
+        }
+        }
+    } else if (argc == 2) {
+        if (!(colonmask & 1) && !is_array(idx[0]) && !(colonmask & 2) && !is_array(idx[1])) {   /* fast path: a[i, j] */
+            int64_t r0 = scalar_ix(I, idx[0], a->rows, "row");
+            int64_t c0 = scalar_ix(I, idx[1], a->cols, "column");
+            result = value_retain(arr_get(a, (size_t)r0 * a->cols + (size_t)c0));
+        } else {
+        size_t rc, cc; bool rs, cs;
+        sel0 = resolve_index_dim(I, idx[0], colonmask & 1, a->rows, &rc, &rs, "row");
+        sel1 = resolve_index_dim(I, idx[1], colonmask & 2, a->cols, &cc, &cs, "column");
+        if (rs && cs) { result = value_retain(arr_get(a, (size_t)sel0[0] * a->cols + (size_t)sel1[0])); }
+        else {
+            result = val_array(a->elt, (uint32_t)rc, (uint32_t)cc);
+            for (size_t r = 0; r < rc; r++)
+                for (size_t cl = 0; cl < cc; cl++)
+                    arr_set(as_arr(result), r * cc + cl, arr_get(a, (size_t)sel0[r] * a->cols + (size_t)sel1[cl]));
+        }
+        }
+    } else {
+        runtime_error(I, "arrays take 1 or 2 indices, got %u", argc);
+    }
+
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    free(sel0); free(sel1);
+    return result;
+}
+
+static int elt_rank(EltType e)
+{
+    switch (e) { case ELT_BOOL: return 0; case ELT_INT: return 1;
+                 case ELT_FLOAT: return 2; case ELT_COMPLEX: return 3;
+                 case ELT_STRING: return 4; /* never promotes with numerics */ }
+    return 0;
+}
+
+static EltType scalar_elt(Interp *I, Value v)
+{
+    switch (v.kind) {
+    case VAL_BOOL:    return ELT_BOOL;
+    case VAL_INT:     return ELT_INT;
+    case VAL_FLOAT:   return ELT_FLOAT;
+    case VAL_COMPLEX: return ELT_COMPLEX;
+    case VAL_STRING:  return ELT_STRING;
+    default: runtime_error(I, "cannot assign a value of type %s into an array", type_name(v.kind));
+    }
+}
+
+/* a[idx] = value, with copy-on-write. The result is the updated array. If the
+ * target array is uniquely owned (rc == 2: its name binding plus the operand-
+ * stack reference) and no element-type promotion is needed, it is mutated in
+ * place; otherwise a fresh array is built so aliases (b = a; b[i] = x) are
+ * unaffected. value may be a scalar (broadcast) or an array (element-wise). */
+Value do_index_set(Interp *I, Value target, Value *idx, uint32_t argc,
+                   uint8_t colonmask, Value value)
+{
+    if (!is_array(target))
+        runtime_error(I, "value of type %s is not indexable", type_name(target.kind));
+    ArrObj *a = as_arr(target);
+
+    /* volatile: assigned after setjmp, read in the handler — without it -O2
+     * register-caches them and the handler frees stale values (found by LSan) */
+    int64_t *volatile sel0 = nullptr; int64_t *volatile sel1 = nullptr;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) { free(sel0); free(sel1);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1); }
+
+    bool rhs_arr = is_array(value);
+    ArrObj *vr   = rhs_arr ? as_arr(value) : nullptr;
+    size_t  vcnt = rhs_arr ? (size_t)vr->rows * vr->cols : 1;
+    EltType velt = rhs_arr ? vr->elt : scalar_elt(I, value);
+    if ((a->elt == ELT_STRING) != (velt == ELT_STRING))
+        runtime_error(I, "cannot assign %s elements into a %s array",
+                      velt == ELT_STRING ? "String" : "numeric",
+                      a->elt == ELT_STRING ? "String" : "numeric");
+
+    /* resolve selectors and count the addressed positions */
+    size_t rc, cc; bool rs, cs;
+    if (argc == 1) {
+        sel0 = resolve_index_dim(I, idx[0], colonmask & 1, (int64_t)a->rows * a->cols, &rc, &rs, "");
+        cc = 1; (void)cs;
+    } else if (argc == 2) {
+        sel0 = resolve_index_dim(I, idx[0], colonmask & 1, a->rows, &rc, &rs, "row");
+        sel1 = resolve_index_dim(I, idx[1], colonmask & 2, a->cols, &cc, &cs, "column");
+    } else {
+        runtime_error(I, "arrays take 1 or 2 indices, got %u", argc);
+    }
+    size_t ntarget = (argc == 1) ? rc : rc * cc;
+
+    if (rhs_arr && vcnt != ntarget)
+        runtime_error(I, "assignment size mismatch: %zu position(s) but %zu value(s)", ntarget, vcnt);
+
+    /* element type of the result; promotion forces a fresh array */
+    EltType relt = elt_rank(velt) > elt_rank(a->elt) ? velt : a->elt;
+    bool unique  = (a->obj.rc == 2);
+
+    Value result; ArrObj *dst;
+    if (unique && relt == a->elt) {
+        result = value_retain(target);
+        dst = a;
+    } else {
+        result = val_array(relt, a->rows, a->cols);
+        dst = as_arr(result);
+        size_t tot = (size_t)a->rows * a->cols;
+        for (size_t k = 0; k < tot; k++) arr_set(dst, k, arr_get(a, k));   /* copy (coerced to relt) */
+    }
+
+    if (argc == 1) {
+        for (size_t k = 0; k < rc; k++)
+            arr_set(dst, (size_t)sel0[k], rhs_arr ? arr_get(vr, k) : value);
+    } else {
+        size_t k = 0;
+        for (size_t r = 0; r < rc; r++)
+            for (size_t cl = 0; cl < cc; cl++, k++)
+                arr_set(dst, (size_t)sel0[r] * a->cols + (size_t)sel1[cl],
+                        rhs_arr ? arr_get(vr, k) : value);
+    }
+
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    free(sel0); free(sel1);
+    return result;
+}
+
+static uint32_t elem_rows(Value v) { return is_array(v) ? as_arr(v)->rows : 1; }
+static uint32_t elem_cols(Value v) { return is_array(v) ? as_arr(v)->cols : 1; }
+static Value    elem_at(Value v, uint32_t i, uint32_t j)
+{
+    if (is_array(v)) return arr_get(as_arr(v), (size_t)i * as_arr(v)->cols + j);
+    return v;   /* scalar occupies (0,0) */
+}
+
+/* non-consuming: ev[0..sum(rowcounts)) stay owned by the caller; nrows rows,
+ * rowcounts[r] elements in row r (row-major in ev). Result +1. Frees its own C
+ * scratch before any raise and never touches ev. */
+Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcounts)
+{
+    if (nrows == 0) return val_array(ELT_INT, 0, 0);
+
+    uint32_t ntot = 0;
+    for (uint32_t r = 0; r < nrows; r++) ntot += (uint32_t)rowcounts[r];
+
+    bool saw_bool = false, saw_num = false, saw_str = false;
+    EltType numelt = ELT_INT;
+    for (uint32_t k = 0; k < ntot; k++) {
+        Value e = ev[k];
+        if (!is_num(e) && e.kind != VAL_BOOL && e.kind != VAL_STRING && !is_array(e))
+            runtime_error(I, "matrix elements must be numbers, strings, or matrices, got %s", type_name(e.kind));
+        EltType ee = is_array(e) ? as_arr(e)->elt : vk_elt(e.kind);
+        if      (ee == ELT_BOOL)   saw_bool = true;
+        else if (ee == ELT_STRING) saw_str = true;
+        else { saw_num = true; numelt = elt_max(numelt, ee); }
+    }
+    if (saw_str && (saw_num || saw_bool))
+        runtime_error(I, "cannot mix strings with numbers in a matrix");
+    if (saw_bool && saw_num)
+        runtime_error(I, "cannot mix Bool and numeric elements in a matrix");
+    EltType elt = saw_str ? ELT_STRING : saw_bool ? ELT_BOOL : numelt;
+
+    uint32_t *rowh = malloc(nrows * sizeof *rowh);
+    if (!rowh) abort();
+    uint32_t out_h = 0, out_w = 0, idx = 0;
+    bool have_w = false;
+    for (uint32_t r = 0; r < nrows; r++) {
+        uint32_t nc = (uint32_t)rowcounts[r];
+        uint32_t rh = 0, rw = 0;
+        for (uint32_t c = 0; c < nc; c++) {
+            Value e = ev[idx + c];
+            uint32_t er = elem_rows(e), ec = elem_cols(e);
+            if (c == 0) rh = er;
+            else if (er != rh) {
+                free(rowh);
+                runtime_error(I, "row %u: elements have mismatched heights (%u vs %u)", r + 1, rh, er);
+            }
+            rw += ec;
+        }
+        rowh[r] = rh;
+        if (nc != 0) {
+            if (!have_w) { out_w = rw; have_w = true; }
+            else if (rw != out_w) {
+                free(rowh);
+                runtime_error(I, "row %u has width %u, expected %u", r + 1, rw, out_w);
+            }
+        }
+        out_h += rh;
+        idx += nc;
+    }
+
+    Value result = val_array(elt, out_h, out_w);
+    ArrObj *R = as_arr(result);
+    idx = 0;
+    uint32_t out_row = 0;
+    for (uint32_t r = 0; r < nrows; r++) {
+        uint32_t nc = (uint32_t)rowcounts[r];
+        uint32_t out_col = 0;
+        for (uint32_t c = 0; c < nc; c++) {
+            Value e = ev[idx + c];
+            uint32_t er = elem_rows(e), ec = elem_cols(e);
+            for (uint32_t i = 0; i < er; i++)
+                for (uint32_t j = 0; j < ec; j++)
+                    arr_set(R, (size_t)(out_row + i) * out_w + (out_col + j), elem_at(e, i, j));
+            out_col += ec;
+        }
+        out_row += rowh[r];
+        idx += nc;
+    }
+    free(rowh);
+    return result;
+}
+
+Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; result is +1 */
+{
+    if (!is_num(sv) || !is_num(ev) || !is_num(stv))
+        runtime_error(I, "range bounds must be numbers");
+
+    bool all_int = sv.kind == VAL_INT && ev.kind == VAL_INT && stv.kind == VAL_INT;
+    Value out;
+    const int64_t RANGE_MAX = 100000000;               /* 1e8 elements, ~800 MB */
+    if (all_int) {
+        int64_t s = sv.as.i, st = stv.as.i, e = ev.as.i;
+        if (st == 0) runtime_error(I, "range step cannot be zero");
+        uint64_t count = 0;
+        /* span and count stay in uint64 throughout: extreme bounds overflow int64 */
+        if (st > 0 && e >= s)      count = ((uint64_t)e - (uint64_t)s) / (uint64_t)st + 1;
+        else if (st < 0 && e <= s) count = ((uint64_t)s - (uint64_t)e) / (uint64_t)-st + 1;
+        if (count > (uint64_t)RANGE_MAX)
+            runtime_error(I, "range too large: %llu elements (limit %lld)",
+                          (unsigned long long)count, (long long)RANGE_MAX);
+        out = val_array(ELT_INT, 1, (uint32_t)count);
+        for (uint64_t k = 0; k < count; k++)
+            ((int64_t *)as_arr(out)->data)[k] = (int64_t)((uint64_t)s + k * (uint64_t)st);
+    } else {
+        double s = as_double(sv), st = as_double(stv), e = as_double(ev);
+        if (st == 0.0) runtime_error(I, "range step cannot be zero");
+        int64_t count = 0;
+        double span = (e - s) / st;
+        if (span >= 0) {                               /* NaN span -> empty range */
+            if (span > (double)RANGE_MAX)              /* check before the cast: double->int64 */
+                runtime_error(I, "range too large: about %.3g elements (limit %lld)",   /* out of range is UB */
+                              span, (long long)RANGE_MAX);
+            count = (int64_t)(span + 1e-9) + 1;
+        }
+        out = val_array(ELT_FLOAT, 1, (uint32_t)count);
+        for (int64_t k = 0; k < count; k++) ((double *)as_arr(out)->data)[k] = s + (double)k * st;
+    }
+    return out;
+}
+
+Value apply_binop(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    if (is_array(a) || is_array(b)) return array_binop(I, op, a, b);
+    switch (op) {
+    case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
+        return scalar_cmp(I, op, a, b);
+    case TOK_AMP: case TOK_PIPE:
+        if (a.kind != VAL_BOOL || b.kind != VAL_BOOL)
+            runtime_error(I, "'%s' requires Bool operands", op == TOK_AMP ? "&" : "|");
+        return val_bool(op == TOK_AMP ? (a.as.b && b.as.b) : (a.as.b || b.as.b));
+    default:
+        return scalar_arith_k(I, arith_of(op), a, b);
+    }
+}
+
+Value apply_unary(Interp *I, enum TokenKind op, Value v)   /* non-consuming; result is +1 */
+{
+    switch (op) {
+    case TOK_PLUS:
+        if (!is_num(v) && !is_array(v)) runtime_error(I, "unary '+' on %s", type_name(v.kind));
+        return value_retain(v);   /* already owned by caller; hand back a fresh ref */
+    case TOK_MINUS: {
+        Value z = val_int(0);
+        if (is_array(v)) return elementwise(I, AR_SUB, z, v);
+        if (is_num(v))   return scalar_arith_k(I, AR_SUB, z, v);
+        runtime_error(I, "unary '-' on %s", type_name(v.kind));
+    }
+    case TOK_BANG: case TOK_TILDE:
+        if (v.kind == VAL_BOOL) return val_bool(!v.as.b);
+        if (is_array(v) && as_arr(v)->elt == ELT_BOOL) {
+            ArrObj *a = as_arr(v);
+            Value out = val_array(ELT_BOOL, a->rows, a->cols);
+            ArrObj *o = as_arr(out);
+            size_t nn = (size_t)a->rows * a->cols;
+            for (size_t k = 0; k < nn; k++)
+                ((unsigned char *)o->data)[k] = !((unsigned char *)a->data)[k];
+            return out;
+        }
+        runtime_error(I, "logical-not requires Bool, got %s",
+                      is_array(v) ? "a numeric array" : type_name(v.kind));
+    default:
+        runtime_error(I, "bad unary operator");
+    }
+}
+
+/* Does this subtree reference '@'? Used to decide pipe semantics. Stops at a
+ * nested '|>' RHS, which rebinds '@' to its own scope. */
+/* x |> rhs : evaluate rhs with '@' bound to x.
+ *   - bare callable (x |> f, x |> fn..)  ==>  f(x)
+ *   - rhs mentions '@'                    ==>  '@' is x wherever it appears
+ *   - rhs ignores '@'                     ==>  error (the piped value is dropped) */
+/* ------------------------------------------------------------------ */
+/* builtins                                                            */
+/* ------------------------------------------------------------------ */
+/* Shared error-path cleanup for builders holding a malloc'd Value scratch
+ * array: on unwind, release the `done` already-built elements, free the
+ * buffer, restore the saved jmp target, and re-raise. Never returns. */
+[[noreturn]] static void array_build_abort(Interp *I, Value *tmp, size_t done, jmp_buf saved)
+{
+    for (size_t k = 0; k < done; k++) value_release(tmp[k]);
+    free(tmp);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    longjmp(I->jmp, 1);
+}
+
+static Value map_unary(Interp *I, Value v, Value (*f)(Interp *, Value))
+{
+    if (is_array(v)) {
+        ArrObj *a = as_arr(v);
+        size_t nn = (size_t)a->rows * a->cols;
+        Value *tmp = nn ? malloc(nn * sizeof *tmp) : nullptr;
+        jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+        volatile size_t done = 0;
+        if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);   /* an element raised */
+        for (size_t k = 0; k < nn; k++) { Value e = arr_get(a, k); tmp[k] = f(I, e); done = k + 1; }
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        Value r = pack_array(tmp, nn, a->rows, a->cols);
+        free(tmp);
+        return r;
+    }
+    return f(I, v);
+}
+
+static void print_raw(Value v)
+{
+    if (v.kind == VAL_STRING) { StrObj *s = as_str(v); fwrite(s->data, 1, s->len, vout()); }
+    else value_print(vout(), v);
+}
+static void print_raw_to(FILE *f, Value v)
+{
+    if (v.kind == VAL_STRING) { StrObj *s = as_str(v); fwrite(s->data, 1, s->len, f); }
+    else value_print(f, v);
+}
+
+/* A placeholder spec: {:[-][width][.prec][f|e|g]} — all parts optional. */
+typedef struct { int width; bool left; int prec; char conv; } HoleSpec;
+
+/* If t[i..] starts a placeholder, parse it: fill *hs, return its total length.
+ * Return 0 if not a placeholder, -1 if it opens like one but is malformed. */
+static int parse_hole(const char *t, uint32_t len, uint32_t i, HoleSpec *hs)
+{
+    if (t[i] != '{') return 0;
+    if (i + 1 < len && t[i+1] == '{') return 0;            /* '{{' escape, not a hole */
+    uint32_t j = i + 1;
+    *hs = (HoleSpec){ .width = 0, .left = false, .prec = -1, .conv = 0 };
+    if (j < len && t[j] == '}') return 2;                  /* plain {} */
+    if (j >= len || t[j] != ':') return -1;                /* '{x' — not a valid hole */
+    j++;
+    if (j < len && t[j] == '-') { hs->left = true; j++; }
+    while (j < len && t[j] >= '0' && t[j] <= '9') { hs->width = hs->width * 10 + (t[j] - '0'); j++; }
+    if (j < len && t[j] == '.') {
+        j++; hs->prec = 0;
+        while (j < len && t[j] >= '0' && t[j] <= '9') { hs->prec = hs->prec * 10 + (t[j] - '0'); j++; }
+    }
+    if (j < len && (t[j] == 'f' || t[j] == 'e' || t[j] == 'g')) { hs->conv = t[j]; j++; }
+    if (j < len && t[j] == '}') return (int)(j - i + 1);
+    return -1;
+}
+
+/* Emit one value under a spec: temporary format override, optional width pad. */
+static void print_hole(Interp *I, Value v, const HoleSpec *hs)
+{
+    NumFmtStyle ss; int sp; bool st;
+    value_format_get(&ss, &sp, &st);
+    if (hs->conv || hs->prec >= 0) {
+        NumFmtStyle style = hs->conv == 'f' ? NFMT_F : hs->conv == 'e' ? NFMT_E
+                          : hs->conv == 'g' ? NFMT_G : ss;
+        value_format_set(style, hs->prec >= 0 ? hs->prec : sp);   /* trailing on */
+    }
+    if (hs->width > 0) {                                   /* render, then justify */
+        char *buf = nullptr; size_t sz = 0;
+        FILE *ms = open_memstream(&buf, &sz);
+        if (!ms) { value_format_restore(ss, sp, st); runtime_error(I, "print: out of memory"); }
+        print_raw_to(ms, v);
+        fclose(ms);
+        fprintf(vout(), "%*s", hs->left ? -hs->width : hs->width, buf ? buf : "");
+        free(buf);
+    } else {
+        print_raw(v);
+    }
+    value_format_restore(ss, sp, st);
+}
+
+static Value bi_print(Interp *I, Value *args, uint32_t n)
+{
+    if (n >= 1 && args[0].kind == VAL_STRING && memchr(as_str(args[0])->data, '{', as_str(args[0])->len)) {
+        StrObj *t = as_str(args[0]);                    /* template mode: "a {} b {:.3f}" */
+        uint32_t holes = 0;                             /* validate before any output */
+        HoleSpec hs;
+        for (uint32_t i = 0; i < t->len; i++) {
+            if (t->data[i] == '{' && i + 1 < t->len && t->data[i+1] == '{') { i++; continue; }
+            if (t->data[i] == '}' && i + 1 < t->len && t->data[i+1] == '}') { i++; continue; }
+            int hl = parse_hole(t->data, t->len, i, &hs);
+            if (hl < 0) runtime_error(I, "print: malformed placeholder (use {}, {:.3f}, {:8}, {:e}, ...)");
+            if (hl > 0) { holes++; i += (uint32_t)hl - 1; }
+        }
+        if (holes > n - 1) runtime_error(I, "print: %u {} placeholder(s) but only %u argument(s)", holes, n - 1);
+        if (holes < n - 1) runtime_error(I, "print: %u argument(s) without a {} placeholder", (n - 1) - holes);
+        uint32_t next = 1;
+        for (uint32_t i = 0; i < t->len; i++) {
+            char ch = t->data[i];
+            if (ch == '{' && i + 1 < t->len && t->data[i+1] == '{') { fputc('{', vout()); i++; continue; }
+            if (ch == '}' && i + 1 < t->len && t->data[i+1] == '}') { fputc('}', vout()); i++; continue; }
+            int hl = parse_hole(t->data, t->len, i, &hs);
+            if (hl > 0) { print_hole(I, args[next++], &hs); i += (uint32_t)hl - 1; continue; }
+            fputc(ch, vout());
+        }
+        fputc('\n', vout());
+        return val_null();
+    }
+    for (uint32_t i = 0; i < n; i++) { if (i) fputc(' ', vout()); print_raw(args[i]); }
+    fputc('\n', vout());
+    return val_null();
+}
+
+/* ---- axis-aware reductions (sum/prod/mean/any/all/min/max with a dim) ---- */
+static Value sc_min(Interp *I, Value a, Value b);   /* defined later */
+static Value sc_max(Interp *I, Value a, Value b);
+static Value numify(Value e);
+static bool  elt_nonzero(Value e);
+#define DIM_MAX 100000000LL                               /* 1e8 elements per array */
+static int64_t as_count(Interp *I, Value v, const char *name);
+static int64_t as_dim(Interp *I, Value v, const char *name);
+static void check_cells(Interp *I, int64_t r, int64_t c, const char *name);
+
+static Value fold_add(Interp *I, Value a, Value x) { return scalar_arith_k(I, AR_ADD, a, numify(x)); }
+static Value fold_mul(Interp *I, Value a, Value x) { return scalar_arith_k(I, AR_MUL, a, numify(x)); }
+static Value fold_min(Interp *I, Value a, Value x) { return sc_min(I, a, numify(x)); }
+static Value fold_max(Interp *I, Value a, Value x) { return sc_max(I, a, numify(x)); }
+static Value fold_any(Interp *I, Value a, Value x) { (void)I; return val_bool(a.as.b || elt_nonzero(x)); }
+static Value fold_all(Interp *I, Value a, Value x) { (void)I; return val_bool(a.as.b && elt_nonzero(x)); }
+
+/* Reduce `a` along dim (1 = down columns -> 1xC, 2 = across rows -> Rx1).
+ * If `init` is Null, each strip is seeded from its first element (for min/max). */
+static Value reduce_dim(Interp *I, ArrObj *a, int dim, Value init,
+                        Value (*fold)(Interp *, Value, Value))
+{
+    if (a->elt == ELT_STRING) runtime_error(I, "reduction along a dimension is undefined for strings");
+    uint32_t R = a->rows, C = a->cols;
+    bool seed = init.kind == VAL_NULL;
+    if (seed && ((dim == 1 && R == 0) || (dim == 2 && C == 0)))
+        runtime_error(I, "reduction over an empty dimension");
+    uint32_t outn = (dim == 1) ? C : R;
+    Value *tmp = malloc(sizeof(Value) * (outn ? outn : 1));
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    volatile size_t done = 0;
+    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);   /* a fold raised */
+    if (dim == 1) {                                   /* one result per column */
+        for (uint32_t c = 0; c < C; c++) {
+            Value acc; uint32_t r0 = 0;
+            if (seed) { acc = numify(arr_get(a, c)); r0 = 1; } else acc = init;
+            for (uint32_t r = r0; r < R; r++) acc = fold(I, acc, arr_get(a, (size_t)r * C + c));
+            tmp[c] = acc; done = c + 1;
+        }
+    } else {                                          /* one result per row */
+        for (uint32_t r = 0; r < R; r++) {
+            Value acc; uint32_t c0 = 0;
+            if (seed) { acc = numify(arr_get(a, (size_t)r * C)); c0 = 1; } else acc = init;
+            for (uint32_t c = c0; c < C; c++) acc = fold(I, acc, arr_get(a, (size_t)r * C + c));
+            tmp[r] = acc; done = r + 1;
+        }
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value out = (dim == 1) ? pack_array(tmp, C, 1, C) : pack_array(tmp, R, R, 1);
+    free(tmp);
+    return out;
+}
+
+static int dim_arg(Interp *I, Value v, const char *name)
+{
+    int64_t d = as_count(I, v, name);
+    if (d != 1 && d != 2) runtime_error(I, "%s: dim must be 1 (columns) or 2 (rows)", name);
+    return (int)d;
+}
+
+static Value bi_sum(Interp *I, Value *args, uint32_t n)
+{
+    Value a = args[0];
+    if (n == 2) {
+        if (!is_array(a)) runtime_error(I, "sum: the dim form needs an array");
+        return reduce_dim(I, as_arr(a), dim_arg(I, args[1], "sum"), val_int(0), fold_add);
+    }
+    if (is_num(a)) return value_retain(a);
+    if (!is_array(a)) runtime_error(I, "sum: expected Array, got %s", type_name(a.kind));
+    ArrObj *arr = as_arr(a);
+    size_t nn = (size_t)arr->rows * arr->cols;
+    if (arr->elt == ELT_BOOL) {                       /* sum of a logical array = count of trues */
+        int64_t cnt = 0;
+        for (size_t k = 0; k < nn; k++) cnt += ((unsigned char *)arr->data)[k] != 0;
+        return val_int(cnt);
+    }
+    Value acc = val_int(0);
+    for (size_t k = 0; k < nn; k++) {
+        Value e = arr_get(arr, k);
+        Value s = scalar_arith_k(I, AR_ADD, acc, e);
+        acc = s;
+    }
+    return acc;
+}
+
+static Value bi_size(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n;
+    uint32_t rows = 1, cols = 1;
+    if (is_array(args[0])) { rows = as_arr(args[0])->rows; cols = as_arr(args[0])->cols; }
+    Value out = val_array(ELT_INT, 1, 2);
+    ((int64_t *)as_arr(out)->data)[0] = rows;
+    ((int64_t *)as_arr(out)->data)[1] = cols;
+    return out;
+}
+
+static Value bi_map(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value f = args[0], a = args[1];
+    if (!is_array(a)) runtime_error(I, "map: second argument must be an Array");
+    ArrObj *arr = as_arr(a);
+    size_t nn = (size_t)arr->rows * arr->cols;
+    Value *tmp = nn ? malloc(nn * sizeof *tmp) : nullptr;
+
+    /* If an element call raises, free the partial result and re-raise — array
+     * elements are immediate scalars, so only the computed results leak. */
+    jmp_buf saved;
+    memcpy(saved, I->jmp, sizeof(jmp_buf));
+    volatile size_t done = 0;
+    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);
+    for (size_t k = 0; k < nn; k++) {
+        Value e = arr_get(arr, k);            /* borrowed from arr (see arr_get) */
+        Value one[1] = { e };
+        Value mapped = call_value(I, f, one, 1);
+        tmp[k] = mapped;
+        done = k + 1;
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value r = pack_array(tmp, nn, arr->rows, arr->cols);
+    free(tmp);
+    return r;
+}
+
+static Value abs_scalar(Interp *I, Value v)
+{
+    switch (v.kind) {
+    case VAL_INT:     return val_int(v.as.i < 0 ? -v.as.i : v.as.i);
+    case VAL_FLOAT:   return val_float(fabs(v.as.f));
+    case VAL_COMPLEX: return val_float(hypot(v.as.z.re, v.as.z.im));
+    default:          runtime_error(I, "abs: expected a number, got %s", type_name(v.kind));
+    }
+}
+
+static Value sqrt_scalar(Interp *I, Value v)
+{
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT) {
+        double d = as_double(v);
+        if (d >= 0) return val_float(sqrt(d));
+        return val_complex(0.0, sqrt(-d));        /* tower: sqrt of a negative real is complex */
+    }
+    if (v.kind == VAL_COMPLEX) {
+        double x = v.as.z.re, y = v.as.z.im, m = hypot(x, y);
+        double re = sqrt((m + x) / 2.0);
+        double im = sqrt((m - x) / 2.0);
+        if (y < 0) im = -im;
+        return val_complex(re, im);
+    }
+    runtime_error(I, "sqrt: expected a number, got %s", type_name(v.kind));
+}
+
+static Value bi_abs(Interp *I, Value *args, uint32_t n)  { (void)n; return map_unary(I, args[0], abs_scalar); }
+static Value bi_sqrt(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sqrt_scalar); }
+
+static Value fill_array(Interp *I, Value *args, double fill)
+{
+    if (args[0].kind != VAL_INT || args[1].kind != VAL_INT)
+        runtime_error(I, "dimensions must be Int");
+    int64_t r = args[0].as.i, c = args[1].as.i;
+    if (r < 0 || c < 0) runtime_error(I, "dimensions must be non-negative");
+    if (r > DIM_MAX || c > DIM_MAX) runtime_error(I, "dimension too large (limit %lld)", (long long)DIM_MAX);
+    check_cells(I, r, c, "zeros/ones");
+    Value out = val_array(ELT_FLOAT, (uint32_t)r, (uint32_t)c);
+    size_t nn = (size_t)r * c;
+    for (size_t k = 0; k < nn; k++) ((double *)as_arr(out)->data)[k] = fill;
+    return out;
+}
+
+static Value bi_zeros(Interp *I, Value *args, uint32_t n) { (void)n; return fill_array(I, args, 0.0); }
+static Value bi_ones(Interp *I, Value *args, uint32_t n)  { (void)n; return fill_array(I, args, 1.0); }
+
+static Value bi_any(Interp *I, Value *args, uint32_t n)
+{
+    Value a = args[0];
+    if (n == 2) {
+        if (!is_array(a)) runtime_error(I, "any: the dim form needs an array");
+        return reduce_dim(I, as_arr(a), dim_arg(I, args[1], "any"), val_bool(false), fold_any);
+    }
+    if (a.kind == VAL_BOOL) return val_bool(a.as.b);
+    if (is_array(a) && as_arr(a)->elt == ELT_BOOL) {
+        ArrObj *x = as_arr(a); size_t t = (size_t)x->rows * x->cols;
+        for (size_t k = 0; k < t; k++) if (((unsigned char *)x->data)[k]) return val_bool(true);
+        return val_bool(false);
+    }
+    runtime_error(I, "any: expected a Bool or logical array, got %s", type_name(a.kind));
+}
+
+static Value bi_all(Interp *I, Value *args, uint32_t n)
+{
+    Value a = args[0];
+    if (n == 2) {
+        if (!is_array(a)) runtime_error(I, "all: the dim form needs an array");
+        return reduce_dim(I, as_arr(a), dim_arg(I, args[1], "all"), val_bool(true), fold_all);
+    }
+    if (a.kind == VAL_BOOL) return val_bool(a.as.b);
+    if (is_array(a) && as_arr(a)->elt == ELT_BOOL) {
+        ArrObj *x = as_arr(a); size_t t = (size_t)x->rows * x->cols;
+        for (size_t k = 0; k < t; k++) if (!((unsigned char *)x->data)[k]) return val_bool(false);
+        return val_bool(true);
+    }
+    runtime_error(I, "all: expected a Bool or logical array, got %s", type_name(a.kind));
+}
+
+typedef struct { const char *name, *sig, *desc, *cat, *ex; } BuiltinDoc;
+
+static const BuiltinDoc builtin_docs[] = {
+    /* core ------------------------------------------------------------ */
+    { "print", "print(...) | print(tmpl, ...)", "print values; template fills {} in order; {:[-][w][.p][f|e|g]} formats a hole ({{ }} literal)", "core" , "print(\"x = {}, root = {:.3f}\", 5, sqrt(2))   % x = 5, root = 1.414" },
+    { "upper",     "upper(s)",           "uppercase (ASCII bytes)", "string" , "upper(\"neutrino\")               %= \"NEUTRINO\"" },
+    { "lower",     "lower(s)",           "lowercase (ASCII bytes)", "string" , "lower(\"Hi There\")               %= \"hi there\"" },
+    { "trim",      "trim(s)",            "strip leading and trailing whitespace", "string" , "trim(\"  x  \")                   %= \"x\"" },
+    { "contains",  "contains(s, sub)",   "true if sub occurs in s", "string" , "contains(\"neutrino\", \"trin\")   %= true" },
+    { "startswith","startswith(s, p)",   "true if s begins with p", "string" , "startswith(\"neutrino\", \"neu\")  %= true" },
+    { "endswith",  "endswith(s, p)",     "true if s ends with p", "string" , "endswith(\"data.csv\", \".csv\")   %= true" },
+    { "strrep",    "strrep(s, old, new)","replace every occurrence of old with new", "string" , "strrep(\"a-b-c\", \"-\", \"+\")     %= \"a+b+c\"" },
+    { "str",       "str(x)",             "the display text of any value, as a string", "string" , "str(1.5) + str(true)             %= \"1.5true\"" },
+    { "num",       "num(s)",             "parse a string as a number (Int if exact, else Float)", "string" , "num(\"42\") + num(\"2.5\")         %= 44.5" },
+    { "fmt",       "fmt(tmpl, ...)",     "print's template, returned as a string instead of printed", "string" , "fmt(\"x = {:.2f}\", 3.14159)      %= \"x = 3.14\"" },
+    { "fields","fields(r)",         "the record's field names, as a string column", "core" , "fields({yr = 1, cpi = 2})'        %= [\"yr\", \"cpi\"]" },
+    { "error",  "error(msg) | error(tmpl, ...)", "raise a runtime error (fmt-style template)", "core" , "error(\"p must be in (0,1), got {}\", 1.5)   % raises that message" },
+    { "assert", "assert(cond) | assert(cond, tmpl, ...)", "error unless cond is true", "core" , "assert(2 > 1)                     % passes silently" },
+    { "strsplit","strsplit(s, sep)", "split a string on a separator, giving a string row vector", "string" , "strsplit(\"a-b-c\", \"-\")          %= [\"a\", \"b\", \"c\"]" },
+    { "strjoin", "strjoin(a, sep)",  "join a string array with a separator", "string" , "strjoin([\"x\", \"y\", \"z\"], \", \")  %= \"x, y, z\"" },
+    { "version", "version",       "the interpreter version, as a string", "core" , "version                           % the version, e.g. \"1.10.0\"" },
+    { "buildinfo", "buildinfo()", "build introspection -> {backend, version, built}; backend names the linear-algebra kernels", "core" , "buildinfo().backend               % which kernels answered, e.g. \"tier0\"" },
+    { "now",   "now",             "current local date and time: {y, m, d, h, mi, s}", "core" , "now().y                           % this year\nlet t = now                       % bare now echoes the record" },
+    { "whov",  "whov | whov(\"sorted\")", "your variables only (shorthand for who(\"vars\"))", "core" , "whov                              % scalars, arrays, strings" },
+    { "whof",  "whof | whof(\"sorted\")", "your functions only (shorthand for who(\"functions\"))", "core" , "whof(\"sorted\")                    % functions, alphabetical" },
+    { "whor",  "whor | whor(\"sorted\")", "your records only (shorthand for who(\"records\"))", "core" , "whor                              % records, insertion order" },
+    { "whos",  "whos",            "the whole workspace, sorted by name (who(\"sorted\"))", "core" , "whos                              % everything, alphabetical" },
+    { "exit",  "exit | exit(code)", "end the session (also: quit)", "repl" , "exit                              % goodbye" },
+    { "manual", "manual [doc]",  "page rendered documentation: manual, manual book|packages|changelog|lessons|design|readme", "repl" , "manual packages                  % the packages guide, formatted and paged" },
+    { "pretty", "pretty on|off", "aligned multi-line matrix display (default on in the REPL)", "repl" , "pretty off                        % single-line matrices" },
+    { "more",   "more on|off",   "page long output through $PAGER", "repl" , "more on                           % long results go through less" },
+    { "who",   "who | who(\"functions\", \"sorted\")", "list the workspace; filter by \"records\"/\"functions\"/\"vars\", add \"sorted\" for name order", "core" , "who(\"functions\")                  % only your fn bindings\nwho(\"sorted\")                     % everything, alphabetical" },
+    { "help",  "help / help(f)",    "help lists every builtin; help(f) describes one", "core" , "help(sum)                         % details and examples for one builtin" },
+    { "system","system(cmd)",       "run a shell command string; return its exit status", "core" , "system(\"date\")                    % run a shell command, returns its exit status" },
+    { "dis",   "dis(f)",            "disassemble a function's bytecode (compiler/VM introspection)", "core" , "dis(fn x -> x + 1)                % prints the compiled bytecode" },
+    { "fzero",   "fzero(f, a, b)",      "root of f in [a, b] (Brent; f(a), f(b) must differ in sign)", "solve" , "format(6); fzero(cos, 1, 2)       %= 1.57080\nfzero(fn x -> x^3 - 2*x - 5, 2, 3)" },
+    { "fminbnd", "fminbnd(f, a, b)",    "minimum of f on [a, b] (Brent) -> {x, fx}", "solve" , "fminbnd(fn x -> (x - 2)^2, 0, 5).x  %= 2" },
+    { "integral","integral(f, a, b[, tol])", "definite integral (adaptive Simpson, finite limits; default tol 1e-10)", "solve" , "format(6); integral(fn x -> x^2, 0, 1)   %= 0.333333" },
+    { "readcsv", "readcsv(file[, opts])", "numeric CSV -> Float matrix; empty cells are nan; opts: {delim, skip}", "io" , "readcsv(\"data.csv\")               % numeric matrix; empty cells become nan\nreadcsv(\"d.csv\", {delim = \";\", skip = 1})" },
+    { "writecsv","writecsv(file, A[, opts])", "matrix -> CSV, full precision (round-trips); opts: {delim}", "io" , "writecsv(\"out.csv\", [1, 2; 3, 4]) % round-trips at full precision" },
+    { "readtable","readtable(file[, opts])", "CSV with a header -> record of column vectors named from the header", "io" , "let d = readtable(\"macro.csv\")    % record of columns: d.year, d.cpi, ..." },
+    { "plot",  "plot(y) | plot(x, y) | plot(x, Y, opts)", "line plot via gnuplot; Y columns are series; opts: style string or {title, xlabel, ylabel, style, logx, logy, grid, xrange, yrange, label, label1..labelN}", "plot" , "plot(x, map(sin, x), {title = \"sin\", grid = true})\nplot(x, Y, {label1 = \"GDP\", label2 = \"CPI\"})   % matrix columns as series" },
+    { "hist",  "hist(y[, nbins][, opts])", "histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend)", "plot" , "hist(randn(1, 10000), 30)\nhist(u, 20, {yrange = [0, 6000]})   % anchor the axis" },
+        { "format","format / format(n) / format(mode, digits)", "number display: format(n) sets SIGNIFICANT digits; format(\"fixed\", d) / format(\"sci\", d) / format(\"auto\", d) set the mode and digits explicitly; format() shows the current setting", "core" , "format(\"fixed\", 2); 87.40 * 1.15    %= 100.51\nformat(\"default\")                 % back to the terse startup style" },
+    { "size",  "size(x)",           "[rows, cols] of x (a scalar is 1x1)", "core" , "size([1, 2, 3; 4, 5, 6])          %= [2, 3]" },
+    { "length","length(x)",         "longest dimension of x (0 if empty)", "core" , "length([4, 5, 6])                 %= 3" },
+    { "numel", "numel(x)",          "number of elements (rows*cols)", "core" , "numel([1, 2; 3, 4])               %= 4" },
+    /* constructors ---------------------------------------------------- */
+    { "zeros", "zeros(r, c)",        "r-by-c matrix of zeros", "make" , "zeros(2, 3)                       %= [0, 0, 0; 0, 0, 0]" },
+    { "ones",  "ones(r, c)",         "r-by-c matrix of ones", "make" , "ones(1, 4)                        %= [1, 1, 1, 1]" },
+    { "eye",   "eye(n)",             "n-by-n identity matrix", "make" , "eye(2)                            %= [1, 0; 0, 1]" },
+    { "diag",  "diag(x)",            "vector -> diagonal matrix; matrix -> its diagonal as a column", "make" , "diag([1, 2, 3])                   % 3x3 with the vector on the diagonal\ndiag([1, 2; 3, 4])                %= [1; 4]" },
+    { "linspace","linspace(a, b, n)","row of n points evenly spaced from a to b inclusive", "make" , "linspace(0, 1, 5)                 %= [0, 0.25, 0.5, 0.75, 1]" },
+    { "reshape","reshape(A, r, c)",  "reinterpret A's elements as r-by-c (row-major), element count must match", "make" , "reshape([1, 2, 3, 4, 5, 6], 2, 3) %= [1, 2, 3; 4, 5, 6]" },
+    { "repmat","repmat(A, m, n)",    "tile A into an m-by-n grid of copies", "make" , "repmat([1, 2], 2, 2)              %= [1, 2, 1, 2; 1, 2, 1, 2]" },
+    /* reductions ------------------------------------------------------ */
+    { "sum",   "sum(A) | sum(A, dim)", "sum of all elements, or along dim (1 = columns, 2 = rows)", "reduce" , "sum([1, 2, 3])                    %= 6\nsum([1, 2; 3, 4], 1)              %= [4, 6]" },
+    { "prod",  "prod(A) | prod(A, dim)","product of all elements, or along dim", "reduce" , "prod([1, 2, 3, 4])                %= 24" },
+    { "save",  "save(\"file.nu\")",  "write all variables and functions as reloadable source (restore with load)", "core" , "save(\"ws.nu\")                    % then later: load(\"ws.nu\")" },
+    { "body",  "body(f)",           "print the source of a user-defined function", "core" , "let cube = fn x -> x^3; body(cube)   %= fn x -> x^3" },
+    { "pi",    "pi",   "3.14159..., the circle constant", "const" , "cos(pi)                           %= -1" },
+    { "e",     "e",    "2.71828..., Euler's number", "const" , "log(e)                            %= 1" },
+    { "eulergamma", "eulergamma", "0.57722..., the Euler-Mascheroni constant", "const" , "eulergamma < 0.58                 %= true" },
+    { "phi",   "phi",  "1.61803..., the golden ratio", "const" , "abs(phi ^ 2 - phi - 1) < 1e-12    %= true" },
+    { "eps",   "eps",  "machine epsilon for Float (2^-52)", "const" , "1 + eps > 1                       %= true" },
+    { "inf",   "inf",  "positive infinity (Float)", "const" , "inf > 1e308                       %= true" },
+    { "nan",   "nan",  "not-a-number (Float); nan never equals anything, itself included", "const" , "nan == nan                        %= false" },
+    { "pwd",   "pwd",                "the current working directory, as a string", "io" , "length(pwd()) > 0                 %= true" },
+    { "cd",    "cd(\"dir\") | cd",     "change the working directory (persists, unlike !cd); bare cd goes home", "io" , "cd(\"packages\")                    % ...then load(\"dist.nu\") works\ncd(\"..\")                          % back up" },
+    { "ls",    "ls | ls(\"dir\") | ls(\"*.nu\")", "directory listing as a string array (globs supported)", "io" , "numel(ls(\"packages\")) >= 5        %= true" },
+    { "load",  "load(\"file.nu\")",  "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core" , "load(\"tests/data/mathlib.nu\"); cube(3)   %= 27\nload(\"mylib.nu\"); mylib.f(2)     % record-of-closures as a namespace" },
+    { "eval",  "eval(\"code\")", "run a string as Neutrino code in this session; returns the last value", "core" , "eval(\"2 + 2\")                      % 4" },
+    { "names", "names() | names(\"vars\"|\"funcs\")", "your workspace names as a sorted string column (the programmatic who)", "core" , "let a = 1; names(\"vars\")           % [\"a\"]" },
+    { "input", "input(\"prompt\")", "read one line from the keyboard as a string (window.prompt in the browser)", "io" , "let name = input(\"who? \")          % interactive" },
+    { "pause", "pause() | pause(\"msg\")", "wait for the user before continuing (alert in the browser)", "io" , "pause()                            % interactive" },
+    { "clear", "clear() | clear(\"a\", ...)", "remove all user variables, or the named ones; clearing a shadow restores the standard-library original", "core" , "let junk = 42; clear(\"junk\")   % junk is gone\nclear                             % bare: everything user-defined" },
+    { "keep",  "keep(\"a\", \"b\", ...)", "remove all user variables except the named ones (the complement of clear)", "core" , "let a = 1; let b = 2; keep(\"a\")     % b is gone, a survives" },
+    { "mem",   "mem",               "print workspace size (variables) and peak process memory", "core" , "mem                               % e.g.  workspace: 3 variables, 2.1 MB" },
+    { "tic",   "tic",               "start the wall-clock timer (monotonic)", "core" , "tic                               % starts the timer" },
+    { "toc",   "toc",               "seconds elapsed since tic", "core" , "tic; let s = sum(1:1000000); toc() < 60   %= true" },
+    { "unique","unique(A)",         "sorted distinct elements; vectors keep orientation, matrices flatten to a row", "array" , "unique([3, 1, 2, 3, 1])           %= [1, 2, 3]" },
+    { "cov",   "cov(X[, w]) | cov(x, y[, w])", "covariance matrix of X's columns (rows = observations), or scalar cov of two vectors; w as in var", "reduce" , "cov([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])   %= 2" },
+    { "corr",  "corr(X) | corr(x, y)", "Pearson correlation matrix of X's columns, or scalar correlation of two vectors", "reduce" , "format(6); corr([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])   %= 0.800000" },
+    { "var",   "var(A) | var(A, w) | var(A, w, dim)", "variance; w = 0 divides by N-1 (default), w = 1 by N", "reduce" , "var([2, 7, 4, 9, 3])              %= 8.5\nvar([2, 7, 4, 9, 3], 1)           %= 6.8" },
+    { "std",   "std(A) | std(A, w) | std(A, w, dim)", "standard deviation (sqrt of var, same normalization)", "reduce" , "format(6); std([2, 7, 4, 9, 3])   %= 2.91548" },
+    { "median","median(A) | median(A, dim)", "median of all elements, or along dim", "reduce" , "median([1, 2, 3, 4])              %= 2.5" },
+    { "quantile","quantile(x, p)",   "quantile(s) of the data at probability p (scalar or vector); linear interpolation", "reduce" , "quantile([2, 7, 4, 9, 3], 0.5)    %= 4\nquantile(x, [0.05, 0.95])         % a vector of probabilities works too" },
+    { "mean",  "mean(A) | mean(A, dim)","mean of all elements, or along dim", "reduce" , "mean([2, 4, 9])                   %= 5" },
+    { "min",   "min(A) | min(a, b) | min(A, [], dim)", "smallest element; elementwise min; or min along dim", "reduce" , "min([3, 1, 4])                    %= 1\nmin([1, 5; 7, 2], [], 2)          %= [1; 2]" },
+    { "max",   "max(A) | max(a, b) | max(A, [], dim)", "largest element; elementwise max; or max along dim", "reduce" , "max([3, 1, 4])                    %= 4" },
+    { "any",   "any(mask) | any(mask, dim)", "true if any element is nonzero/true (overall or along dim)", "reduce" , "any([0, 0, 2] > 1)                %= true" },
+    { "all",   "all(mask) | all(mask, dim)", "true if every element is nonzero/true (overall or along dim)", "reduce" , "all([1, 2, 3] > 0)                %= true" },
+    /* array shaping --------------------------------------------------- */
+    { "sort",  "sort(A)",            "ascending sort: a vector as a whole, a matrix by column", "array" , "sort([3, 1, 2])                   %= [1, 2, 3]" },
+    { "find",  "find(mask)",         "1-based positions of nonzero/true elements (row-major)", "array" , "find([0, 5, 0, 7] > 1)            %= [2, 4]" },
+    { "pick",  "pick(mask, a, b)",   "elementwise select: a where the mask is true, else b", "array" , "pick([1, 0, 1] > 0, [9, 9, 9], [0, 0, 0])   %= [9, 0, 9]" },
+    { "cumsum","cumsum(A)",          "cumulative sum along a vector, or down each column", "array" , "cumsum([1, 2, 3, 4])              %= [1, 3, 6, 10]" },
+    { "cumprod","cumprod(A)",        "cumulative product along a vector, or down each column", "array" , "cumprod([1, 2, 3, 4])             %= [1, 2, 6, 24]" },
+    { "diff",  "diff(A)",            "consecutive differences along a vector, or down each column", "array" , "diff([1, 4, 9, 16])               %= [3, 5, 7]" },
+    { "flipud","flipud(A)",          "reverse row order (flip up-down)", "array" , "flipud([1; 2; 3])                 %= [3; 2; 1]" },
+    { "fliplr","fliplr(A)",          "reverse column order (flip left-right)", "array" , "fliplr([1, 2, 3])                 %= [3, 2, 1]" },
+    /* elementwise math ------------------------------------------------ */
+    { "abs",   "abs(x)",             "absolute value, or complex magnitude", "math" , "abs(-3.5)                         %= 3.5\nabs(3 + 4i)                       %= 5" },
+    { "sqrt",  "sqrt(x)",            "square root (complex result for negative reals)", "math" , "format(6); sqrt(2)                %= 1.41421\nsqrt(-4)                          %= 2i" },
+    { "cbrt",  "cbrt(x)",            "real cube root", "math" , "cbrt(27)                          %= 3" },
+    { "exp",   "exp(x)",             "e raised to the x (complex-aware)", "math" , "format(6); exp(1)                 %= 2.71828" },
+    { "log",   "log(x)",             "natural logarithm (complex for negatives)", "math" , "log(exp(2))                       %= 2" },
+    { "ln",    "ln(x)",              "natural logarithm (alias for log)", "math" , "ln(exp(2))                        %= 2" },
+    { "log10", "log10(x)",           "base-10 logarithm (complex for negatives)", "math" , "log10(1000)                       %= 3" },
+    { "log2",  "log2(x)",            "base-2 logarithm (complex for negatives)", "math" , "log2(8)                           %= 3" },
+    { "sign",  "sign(x)",            "-1 / 0 / +1 by sign; z/|z| for complex", "math" , "sign(-3.2)                        %= -1" },
+    { "floor", "floor(x)",           "round toward -infinity (componentwise on complex)", "math" , "floor(2.7)                        %= 2" },
+    { "ceil",  "ceil(x)",            "round toward +infinity (componentwise on complex)", "math" , "ceil(2.1)                         %= 3" },
+    { "round", "round(x)",           "round to nearest (componentwise on complex)", "math" , "round(2.5)                        %= 3" },
+    { "trunc", "trunc(x)",           "round toward zero", "math" , "trunc(-2.7)                       %= -2" },
+    { "hypot", "hypot(a, b)",        "sqrt(a^2 + b^2) without overflow (elementwise)", "math" , "hypot(3, 4)                       %= 5" },
+    { "mod",   "mod(a, b)",          "modulo, result takes the sign of b (elementwise)", "math" , "mod(-7, 3)                        %= 2" },
+    { "rem",   "rem(a, b)",          "remainder, result takes the sign of a (elementwise)", "math" , "rem(-7, 3)                        %= -1" },
+    { "gamma", "gamma(x)",           "gamma function (real, elementwise)", "math" , "gamma(5)                          %= 24" },
+    { "erf",   "erf(x)",             "error function (real, elementwise)", "math" , "format(6); erf(0.5)               %= 0.520500" },
+    { "erfc",  "erfc(x)",            "complementary error function 1 - erf(x)", "math" , "format(6); erfc(0.5)              %= 0.479500" },
+    { "beta",  "beta(a, b)",         "beta function (a, b > 0, elementwise)", "math" , "format(6); beta(2, 3)             %= 0.0833333" },
+    { "lbeta", "lbeta(a, b)",        "log of the beta function", "math" , "format(6); lbeta(5, 7)            %= -7.74500" },
+    { "gammainc","gammainc(x, a)",   "regularized lower incomplete gamma P(a, x) (the chi^2 CDF)", "math" , "format(6); gammainc(1, 1)         %= 0.632121   % = 1 - exp(-1)" },
+    { "betainc","betainc(x, a, b)",  "regularized incomplete beta I_x(a, b) (Student-t / F CDFs)", "math" , "format(6); betainc(0.3, 2, 5)     %= 0.579825" },
+    { "norminv","norminv(p)",        "standard normal quantile (inverse CDF)", "math" , "format(6); norminv(0.975)         %= 1.95996" },
+    { "digamma","digamma(x)",        "digamma psi(x) = d/dx log gamma(x)", "math" , "format(6); digamma(1)             %= -0.577216" },
+    { "besselj","besselj(n, x)",     "Bessel function of the first kind, integer order n", "math" , "format(6); besselj(0, 2.4)        %= 0.00250768" },
+    { "bessely","bessely(n, x)",     "Bessel function of the second kind, integer order n (x > 0)", "math" , "format(6); bessely(0, 1)          %= 0.0882570" },
+    { "kron",  "kron(A, B)",         "Kronecker product: (m x n) kron (p x q) -> (mp x nq)", "linalg" , "kron(eye(2), [0, 1; 1, 0])        % block-diagonal swap matrices" },
+    { "lgamma","lgamma(x)",          "log of |gamma(x)| (real, elementwise)", "math" , "format(6); lgamma(10)             %= 12.8018" },
+    /* trig ------------------------------------------------------------ */
+    { "sin",   "sin(x)",  "sine (complex-aware, elementwise)", "trig" , "format(6); sin(1)                 %= 0.841471" },
+    { "cos",   "cos(x)",  "cosine (complex-aware, elementwise)", "trig" , "cos(0)                            %= 1" },
+    { "tan",   "tan(x)",  "tangent (complex-aware, elementwise)", "trig" , "format(6); tan(1)                 %= 1.55741" },
+    { "asin",  "asin(x)", "arcsine (complex outside [-1, 1])", "trig" , "format(6); asin(1)                %= 1.57080" },
+    { "acos",  "acos(x)", "arccosine (complex outside [-1, 1])", "trig" , "acos(1)                           %= 0" },
+    { "atan",  "atan(x)", "arctangent (complex-aware)", "trig" , "format(6); atan(1)                %= 0.785398" },
+    { "atan2", "atan2(y, x)", "two-argument arctangent (elementwise)", "trig" , "format(6); atan2(1, 1)            %= 0.785398" },
+    { "sinh",  "sinh(x)", "hyperbolic sine (complex-aware)", "trig" , "format(6); sinh(1)                %= 1.17520" },
+    { "cosh",  "cosh(x)", "hyperbolic cosine (complex-aware)", "trig" , "format(6); cosh(1)                %= 1.54308" },
+    { "tanh",  "tanh(x)", "hyperbolic tangent (complex-aware)", "trig" , "format(6); tanh(1)                %= 0.761594" },
+    { "asinh", "asinh(x)","inverse hyperbolic sine (complex-aware)", "trig" , "format(6); asinh(1)               %= 0.881374" },
+    { "acosh", "acosh(x)","inverse hyperbolic cosine (complex below 1)", "trig" , "acosh(1)                          %= 0" },
+    { "atanh", "atanh(x)","inverse hyperbolic tangent (complex outside (-1, 1))", "trig" , "format(6); atanh(0.5)             %= 0.549306" },
+    /* complex --------------------------------------------------------- */
+    { "real",  "real(z)", "real part (elementwise)", "complex" , "real(3 + 4i)                      %= 3" },
+    { "imag",  "imag(z)", "imaginary part (elementwise)", "complex" , "imag(3 + 4i)                      %= 4" },
+    { "conj",  "conj(z)", "complex conjugate (elementwise)", "complex" , "conj(3 + 4i)                      %= 3-4i" },
+    { "angle", "angle(z)","argument atan2(im, re) (elementwise)", "complex" , "format(6); angle(1i)              %= 1.57080" },
+    { "arg",   "arg(z)",  "argument atan2(im, re) (alias for angle)", "complex" , "format(6); arg(1i)                %= 1.57080" },
+    /* linear algebra -------------------------------------------------- */
+    { "dot",   "dot(a, b)",          "inner product of two vectors", "linalg" , "dot([1, 2, 3], [4, 5, 6])         %= 32" },
+    { "norm",  "norm(x) | norm(x, p)","vector p-norm (p = 1 or 2, default 2); matrix Frobenius norm", "linalg" , "norm([3, 4])                      %= 5" },
+    { "trace", "trace(A)",           "sum of the diagonal", "linalg" , "trace([1, 2; 3, 4])               %= 5" },
+    { "det",   "det(A)",             "determinant via LU", "linalg" , "det([1, 2; 3, 4])                 %= -2" },
+    { "inv",   "inv(A)",             "matrix inverse (solves A \\ I)", "linalg" , "inv([2, 0; 0, 4])                 %= [0.5, 0; 0, 0.25]" },
+    { "lu",    "lu(A)",              "LU with partial pivoting -> {L, U, p}, so P*A = L*U", "linalg" , "let f = lu([4, 3; 6, 3]); f.L * f.U   % equals P*A" },
+    { "qr",    "qr(A)",              "Householder QR -> {Q, R} (real or complex)", "linalg" , "let f = qr([1, 2; 3, 4]); f.Q * f.R   % reconstructs A" },
+    { "chol",  "chol(A)",            "Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD)", "linalg" , "chol([4, 2; 2, 3])                % lower L with L*L' = A" },
+    { "eig",   "eig(A)",             "eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex)", "linalg" , "eig([2, 0; 0, 5]).values          %= [2; 5]" },
+    { "svd",   "svd(A)",             "thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending)", "linalg" , "svd([3, 0; 0, 4]).S               %= [4; 3]" },
+    /* random ---------------------------------------------------------- */
+    { "rng",   "rng(seed)",          "reseed the generator (xoshiro256**); same seed, same stream", "random" , "rng(42)                           % reseed: same seed, same stream" },
+    { "rand",  "rand() | rand(n) | rand(r, c)", "uniform draws on [0, 1)", "random" , "rng(1); format(6); rand()         %= 0.702922\nrand(2, 2)                        % a 2x2 of uniforms" },
+    { "randn", "randn() | randn(n) | randn(r, c)", "standard-normal draws", "random" , "rng(1); let z = randn(1, 5); numel(z)   %= 5" },
+    { "randi", "randi(imax[, r, c]) | randi([lo, hi], ...)", "uniform random integers", "random" , "rng(1); let k = randi(10); (k >= 1) && (k <= 10)   %= true" },
+    /* predicates ------------------------------------------------------ */
+    { "isnan",    "isnan(x)",    "elementwise test for NaN -> logical", "test" , "isnan(0 / 0)                      %= true" },
+    { "isinf",    "isinf(x)",    "elementwise test for +/-Inf -> logical", "test" , "isinf(1 / 0)                      %= true" },
+    { "isfinite", "isfinite(x)", "elementwise test for a finite value -> logical", "test" , "isfinite(1.5)                     %= true" },
+    /* higher-order ---------------------------------------------------- */
+    { "map",   "map(f, A)",          "apply f to each element of A, returning an array of results", "hof" , "map(fn x -> x * 10, [1, 2, 3])    %= [10, 20, 30]\nmap((_ ^ 2), [1, 2, 3])           %= [1, 4, 9]" },
+    };
+static const size_t n_builtin_docs = sizeof builtin_docs / sizeof *builtin_docs;
+
+static const BuiltinDoc *builtin_info(const char *name)
+{
+    for (size_t i = 0; i < n_builtin_docs; i++)
+        if (strcmp(builtin_docs[i].name, name) == 0) return &builtin_docs[i];
+    return nullptr;
+}
+
+static Value bi_format(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 0) { fprintf(vout(), "format: %s\n", value_format_desc()); return val_null(); }
+    Value a = args[0];
+    if (a.kind == VAL_STRING) {
+        StrObj *s = as_str(a);
+        char name[32];
+        if (s->len >= sizeof name)
+            runtime_error(I, "format: unknown mode");
+        memcpy(name, s->data, s->len); name[s->len] = '\0';
+        if (n == 2) {
+            /* format("fixed"|"sci"|"auto", digits): the systematic form */
+            if (args[1].kind != VAL_INT)
+                runtime_error(I, "format: digits must be an integer");
+            int64_t d = args[1].as.i;
+            if (d < 0 || d > 17) runtime_error(I, "format: digits must be 0..17");
+            NumFmtStyle st;
+            if      (strcmp(name, "fixed") == 0) st = NFMT_F;
+            else if (strcmp(name, "sci") == 0 || strcmp(name, "scientific") == 0) st = NFMT_E;
+            else if (strcmp(name, "auto") == 0 || strcmp(name, "sig") == 0) st = NFMT_G;
+            else runtime_error(I, "format: two-argument form takes \"fixed\", \"sci\", or \"auto\"");
+            value_format_set(st, (int)d);
+            return val_null();
+        }
+        if (!value_format_by_name(name))
+            runtime_error(I, "format: unknown mode (try fixed/sci/auto with digits; or short, long, short f, long f, short e, long e, default)");
+    } else if (a.kind == VAL_INT) {
+        if (n == 2) runtime_error(I, "format: mode comes first — format(\"fixed\", 2)");
+        if (a.as.i < 1 || a.as.i > 17) runtime_error(I, "format: digit count must be 1..17");
+        value_format_set(NFMT_G, (int)a.as.i);
+    } else {
+        runtime_error(I, "format: expected a mode string or a digit count, got %s", type_name(a.kind));
+    }
+    return val_null();
+}
+
+static Value bi_dis(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value v = args[0];
+    if (v.kind == VAL_BUILTIN) { fprintf(vout(), "<builtin %s: native code, no bytecode>\n", as_blt(v)->name); return val_null(); }
+    if (v.kind != VAL_CLOSURE) runtime_error(I, "dis: expected a function, got %s", type_name(v.kind));
+    chunk_disassemble(vout(), as_clo(v)->chunk, "fn");
+    return val_null();
+}
+
+/* ------------------------------------------------------------------ */
+/* load("file.nu"): run a file of definitions in the current session   */
+/* ------------------------------------------------------------------ */
+
+/* Loaded (arena, source) pairs must outlive the call: identifiers in the
+ * globals point into the loaded source text. Session lifetime, freed at
+ * exit (atexit) so sanitizer runs stay clean. */
+static struct { Arena **arenas; char **srcs; size_t len, cap; } g_loaded;
+static int g_load_depth;
+
+static void load_keep_free(void)
+{
+    for (size_t i = 0; i < g_loaded.len; i++) {
+        arena_free(g_loaded.arenas[i]);
+        free(g_loaded.srcs[i]);
+    }
+    free(g_loaded.arenas); free(g_loaded.srcs);
+    g_loaded.arenas = nullptr; g_loaded.srcs = nullptr;
+    g_loaded.len = g_loaded.cap = 0;
+}
+
+static void load_keep_push(Arena *a, char *src)
+{
+    if (g_loaded.len == 0 && g_loaded.cap == 0) atexit(load_keep_free);
+    if (g_loaded.len == g_loaded.cap) {
+        g_loaded.cap = g_loaded.cap ? g_loaded.cap * 2 : 8;
+        g_loaded.arenas = realloc(g_loaded.arenas, g_loaded.cap * sizeof *g_loaded.arenas);
+        g_loaded.srcs   = realloc(g_loaded.srcs,   g_loaded.cap * sizeof *g_loaded.srcs);
+        if (!g_loaded.arenas || !g_loaded.srcs) abort();
+    }
+    g_loaded.arenas[g_loaded.len] = a; g_loaded.srcs[g_loaded.len] = src; g_loaded.len++;
+}
+
+Value vm_eval_program(Interp *I, AstNode *block, EnvObj *globals, bool echo);
+
+/* body(f): print the source text of a user-defined function. */
+static Value bi_body(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value f = args[0];
+    if (f.kind == VAL_BUILTIN)
+        runtime_error(I, "body: '%s' is a builtin (see help(%s))",
+                      as_blt(f)->name, as_blt(f)->name);
+    if (f.kind != VAL_CLOSURE)
+        runtime_error(I, "body: expected a function, got %s", type_name(f.kind));
+    CloObj *c = as_clo(f);
+    if (!c->chunk->src)
+        runtime_error(I, "body: no source recorded for this function (a pipe section?)");
+    fprintf(vout(), "%.*s\n", (int)c->chunk->srclen, c->chunk->src);
+    return val_null();
+}
+
+/* ---- save("file.nu"): serialize user globals as reloadable source ---- */
+
+static bool ident_ok(const char *s, uint32_t len)
+{
+    if (len == 0 || (!((s[0] >= 'a' && s[0] <= 'z') || (s[0] >= 'A' && s[0] <= 'Z') || s[0] == '_')))
+        return false;
+    for (uint32_t i = 1; i < len; i++) {
+        char ch = s[i];
+        if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_'))
+            return false;
+    }
+    return true;
+}
+
+static void save_double(FILE *f, double d)
+{
+    if (isnan(d))          fputs("(0/0)", f);
+    else if (isinf(d))     fputs(d > 0 ? "(1/0)" : "(-1/0)", f);
+    else                   fprintf(f, "%.17g", d);
+}
+
+static void save_value(Interp *I, FILE *f, Value v, const char *name)
+{
+    switch (v.kind) {
+    case VAL_NULL:  fputs("null", f); return;
+    case VAL_BOOL:  fputs(v.as.b ? "true" : "false", f); return;
+    case VAL_INT:   fprintf(f, "%lld", (long long)v.as.i); return;
+    case VAL_FLOAT: save_double(f, v.as.f); return;
+    case VAL_COMPLEX:
+        fputc('(', f); save_double(f, v.as.z.re);
+        fputs(" + ", f); save_double(f, v.as.z.im); fputs(" * 1i)", f);
+        return;
+    case VAL_STRING: {
+        StrObj *s = as_str(v);
+        fputc('"', f);
+        for (uint32_t i = 0; i < s->len; i++) {
+            char c = s->data[i];
+            if (c == '"' || c == '\\') { fputc('\\', f); fputc(c, f); }
+            else if (c == '\n') fputs("\\n", f);
+            else if (c == '\t') fputs("\\t", f);
+            else fputc(c, f);
+        }
+        fputc('"', f);
+        return;
+    }
+    case VAL_ARRAY: {
+        ArrObj *a = as_arr(v);
+        if ((size_t)a->rows * a->cols == 0) { fprintf(f, "zeros(%u, %u)", a->rows, a->cols); return; }
+        fputc('[', f);
+        for (uint32_t r = 0; r < a->rows; r++) {
+            if (r) fputs("; ", f);
+            for (uint32_t c = 0; c < a->cols; c++) {
+                if (c) fputs(", ", f);
+                save_value(I, f, arr_get(a, (size_t)r * a->cols + c), name);
+            }
+        }
+        fputc(']', f);
+        return;
+    }
+    case VAL_RECORD: {
+        RecObj *r = as_rec(v);
+        fputc('{', f);
+        for (uint32_t i = 0; i < r->count; i++) {
+            if (!ident_ok(r->keys[i], r->keylens[i]))
+                runtime_error(I, "save: '%s' has a record key that is not an identifier", name);
+            if (i) fputs(", ", f);
+            fprintf(f, "%.*s = ", (int)r->keylens[i], r->keys[i]);
+            save_value(I, f, r->vals[i], name);
+        }
+        fputc('}', f);
+        return;
+    }
+    case VAL_CLOSURE: {
+        CloObj *c = as_clo(v);
+        if (c->nupvalues > 0)
+            runtime_error(I, "save: '%s' captures variables; rebind it without captures (or clear it) before saving", name);
+        if (!c->chunk->src)
+            runtime_error(I, "save: '%s' has no recorded source (a pipe section?); rebind it as an explicit fn", name);
+        fprintf(f, "%.*s", (int)c->chunk->srclen, c->chunk->src);
+        return;
+    }
+    default:
+        runtime_error(I, "save: cannot serialize '%s' (%s)", name, type_name(v.kind));
+    }
+}
+
+static Value bi_save(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_STRING)
+        runtime_error(I, "save: expected a file name string, e.g. save(\"ws.nu\")");
+    StrObj *ps = as_str(args[0]);
+    char path[1024];
+    if (ps->len >= sizeof path) runtime_error(I, "save: file name too long");
+    memcpy(path, ps->data, ps->len); path[ps->len] = '\0';
+
+    /* Serialize into memory first: an error mid-save must not leave a
+     * truncated workspace file on disk (or clobber a good one). */
+    char *buf = nullptr; size_t buflen = 0;
+    FILE *f = open_memstream(&buf, &buflen);
+    if (!f) runtime_error(I, "save: out of memory");
+    jmp_buf jsaved; memcpy(jsaved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {                          /* serialization error: free, re-raise */
+        fclose(f); free(buf);
+        memcpy(I->jmp, jsaved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
+    }
+    fputs("# neutrino workspace (reload with load)\n", f);
+    EnvObj *g = I->globals;
+    uint32_t saved = 0;
+    for (uint32_t i = g ? g->n_protected : 0; g && i < g->count; i++) {
+        fprintf(f, "let %.*s = ", (int)g->namelens[i], g->names[i]);
+        char nm[128];
+        snprintf(nm, sizeof nm, "%.*s", (int)g->namelens[i], g->names[i]);
+        save_value(I, f, g->vals[i], nm);
+        fputc('\n', f);
+        saved++;
+    }
+    memcpy(I->jmp, jsaved, sizeof(jmp_buf));
+    fclose(f);                                     /* finalizes buf */
+    FILE *out = fopen(path, "w");
+    if (!out) { free(buf); runtime_error(I, "save: cannot write '%s'", path); }
+    fwrite(buf, 1, buflen, out);
+    fclose(out); free(buf);
+    (void)saved;                                   /* silent on success, like clear */
+    return val_null();
+}
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+/* eval("code"): parse and run a string in the current session; the value
+ * of the last statement is returned. The parsed program's arena and
+ * source are retained for the session (function values may reference
+ * them), exactly as load does. */
+static Value bi_eval_str(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_STRING)
+        runtime_error(I, "eval: expected a code string");
+    StrObj *ps = as_str(args[0]);
+    char *src = malloc((size_t)ps->len + 1);
+    if (!src) runtime_error(I, "eval: out of memory");
+    memcpy(src, ps->data, ps->len); src[ps->len] = '\0';
+
+    Arena *a = arena_new();
+    Parser p;
+    parser_init(&p, src, a);
+    AstNode *prog = parser_parse(&p);
+    if (p.had_error) {
+        char msg[256];
+        snprintf(msg, sizeof msg, "%s", p.err_msg);
+        uint32_t el = p.err_tok.line, ec = p.err_tok.col;
+        arena_free(a); free(src);
+        runtime_error(I, "eval: parse error at %u:%u: %s", el, ec, msg);
+    }
+    load_keep_push(a, src);
+    Value r = vm_eval_program(I, prog, I->globals, /*echo=*/false);
+    if (I->had_error) {
+        char saved[256];
+        snprintf(saved, sizeof saved, "%s", I->err);
+        value_release(r);
+        runtime_error(I, "eval: %s", saved);
+    }
+    return r;
+}
+
+/* names() / names("vars") / names("funcs"): the user region's names as a
+ * sorted string column — the programmatic sibling of the who family,
+ * whose printed tables stay exactly as they are. */
+static int names_cmp(const void *pa, const void *pb)
+{
+    const char *const *x = pa; const char *const *y = pb;
+    return strcmp(*x, *y);
+}
+static Value bi_names(Interp *I, Value *args, uint32_t n)
+{
+    int want = 0;                                  /* 0 all, 1 vars, 2 funcs */
+    if (n == 1) {
+        if (args[0].kind != VAL_STRING)
+            runtime_error(I, "names: expected \"vars\", \"funcs\", or no argument");
+        StrObj *s0 = as_str(args[0]);
+        if (s0->len == 4 && memcmp(s0->data, "vars", 4) == 0) want = 1;
+        else if (s0->len == 5 && memcmp(s0->data, "funcs", 5) == 0) want = 2;
+        else if (s0->len == 3 && memcmp(s0->data, "all", 3) == 0) want = 0;
+        else runtime_error(I, "names: unknown selector (use \"vars\", \"funcs\", or \"all\")");
+    }
+    EnvObj *g = I->globals;
+    uint32_t cnt = 0;
+    char *tmp[4096];
+    for (uint32_t i = g->n_protected; i < g->count && cnt < 4096; i++) {
+        bool is_fn = (g->vals[i].kind == VAL_CLOSURE || g->vals[i].kind == VAL_BUILTIN);
+        if ((want == 1 && is_fn) || (want == 2 && !is_fn)) continue;
+        char *nm = malloc(g->namelens[i] + 1);
+        memcpy(nm, g->names[i], g->namelens[i]); nm[g->namelens[i]] = '\0';
+        tmp[cnt++] = nm;
+    }
+    qsort(tmp, cnt, sizeof tmp[0], names_cmp);
+    Value out = val_array(ELT_STRING, cnt, cnt ? 1 : 0);
+    for (uint32_t i = 0; i < cnt; i++) {
+        Value sv = val_string(tmp[i], (uint32_t)strlen(tmp[i]));
+        arr_set(as_arr(out), i, sv);
+        value_release(sv);
+        free(tmp[i]);
+    }
+    return out;
+}
+
+/* input("prompt"): print the prompt, read one line from the keyboard,
+ * return it as a string (newline stripped). In the browser this is
+ * window.prompt. */
+static Value bi_input(Interp *I, Value *args, uint32_t n)
+{
+    const char *prompt = ""; uint32_t plen = 0;
+    if (n == 1) {
+        if (args[0].kind != VAL_STRING) runtime_error(I, "input: expected a prompt string");
+        StrObj *s0 = as_str(args[0]); prompt = s0->data; plen = s0->len;
+    }
+#ifdef __EMSCRIPTEN__
+    char cp[256];
+    snprintf(cp, sizeof cp, "%.*s", (int)plen, prompt);
+    char *ans = (char *)(intptr_t)EM_ASM_INT({
+        var r = window.prompt(UTF8ToString($0));
+        if (r === null) r = "";
+        var len = lengthBytesUTF8(r) + 1;
+        var b = _malloc(len);
+        stringToUTF8(r, b, len);
+        return b;
+    }, cp);
+    Value v = val_string(ans, (uint32_t)strlen(ans));
+    free(ans);
+    return v;
+#else
+    if (plen) { fwrite(prompt, 1, plen, stdout); fflush(stdout); }
+    char *line = NULL; size_t cap = 0;
+    ssize_t got = getline(&line, &cap, stdin);
+    if (got < 0) { free(line); return val_string("", 0); }
+    while (got > 0 && (line[got - 1] == '\n' || line[got - 1] == '\r')) got--;
+    Value v = val_string(line, (uint32_t)got);
+    free(line);
+    return v;
+#endif
+}
+
+/* pause() / pause("message"): wait for the user before continuing. */
+static Value bi_pause(Interp *I, Value *args, uint32_t n)
+{
+    (void)I;
+    const char *msg = "pause: press Enter to continue..."; uint32_t mlen = (uint32_t)strlen(msg);
+    if (n == 1 && args[0].kind == VAL_STRING) {
+        StrObj *s0 = as_str(args[0]); msg = s0->data; mlen = s0->len;
+    }
+#ifdef __EMSCRIPTEN__
+    /* Real waiting in the browser: wasm_api streams pending output to the
+     * page (so the terminal paints), then Asyncify-yields until the page's
+     * Enter latch fires. See nu_wasm_pause. */
+    extern void nu_wasm_pause(const char *, uint32_t);
+    nu_wasm_pause(msg, mlen);
+#else
+    fwrite(msg, 1, mlen, stdout); fflush(stdout);
+    int c;
+    while ((c = getchar()) != EOF && c != '\n') { }
+#endif
+    return val_null();
+}
+
+/* ---- load groups: which names each load()ed file defined -------------
+ * who collapses each package to one summary line so the workspace stays
+ * readable (108 lines after the demo tour, measured); who("finance")
+ * opens a shelf. Registered by bi_load via snapshot-diff; nested loads
+ * claim their own names first, so the outer file gets only its own. */
+typedef struct { char *path; char *shortn; char **names; uint32_t *lens; size_t n; } LoadGroup;
+static LoadGroup g_lg[64];
+static size_t    g_nlg;
+
+static bool lg_has(const LoadGroup *g, const char *nm, uint32_t len)
+{
+    for (size_t i = 0; i < g->n; i++)
+        if (g->lens[i] == len && !memcmp(g->names[i], nm, len)) return true;
+    return false;
+}
+static bool lg_claimed_from(size_t from, const char *nm, uint32_t len)
+{
+    for (size_t gi = from; gi < g_nlg; gi++)
+        if (lg_has(&g_lg[gi], nm, len)) return true;
+    return false;
+}
+static int lg_find(const char *sel, uint32_t slen)
+{
+    for (size_t gi = 0; gi < g_nlg; gi++) {
+        if (strlen(g_lg[gi].path)   == slen && !memcmp(g_lg[gi].path,   sel, slen)) return (int)gi;
+        if (strlen(g_lg[gi].shortn) == slen && !memcmp(g_lg[gi].shortn, sel, slen)) return (int)gi;
+    }
+    return -1;
+}
+static void lg_free(LoadGroup *g)
+{
+    for (size_t i = 0; i < g->n; i++) free(g->names[i]);
+    free(g->names); free(g->lens); free(g->path); free(g->shortn);
+}
+static size_t lg_live(Interp *I, const LoadGroup *g)   /* members still bound */
+{
+    EnvObj *e = I->globals; size_t live = 0;
+    for (uint32_t i = e->n_protected; i < e->count; i++)
+        if (lg_has(g, e->names[i], e->namelens[i])) live++;
+    return live;
+}
+
+static Value bi_load(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_STRING)
+        runtime_error(I, "load: expected a file name string, e.g. load(\"stats.nu\")");
+    StrObj *ps = as_str(args[0]);
+    char path[1024];
+    if (ps->len >= sizeof path) runtime_error(I, "load: file name too long");
+    memcpy(path, ps->data, ps->len); path[ps->len] = '\0';
+
+    if (g_load_depth >= 16)
+        runtime_error(I, "load: nesting too deep (circular load?)");
+
+    FILE *f = fopen(path, "rb");
+    if (!f) runtime_error(I, "load: cannot open '%s'", path);
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz < 0) { fclose(f); runtime_error(I, "load: cannot read '%s'", path); }
+    char *src = malloc((size_t)sz + 1);
+    if (!src) { fclose(f); runtime_error(I, "load: out of memory"); }
+    size_t got = fread(src, 1, (size_t)sz, f);
+    fclose(f);
+    src[got] = '\0';
+
+    Arena *a = arena_new();
+    Parser p;
+    parser_init(&p, src, a);
+    AstNode *prog = parser_parse(&p);
+    if (p.had_error) {
+        char msg[256];
+        snprintf(msg, sizeof msg, "%s", p.err_msg);
+        uint32_t el = p.err_tok.line, ec = p.err_tok.col;
+        arena_free(a); free(src);
+        runtime_error(I, "load: parse error in '%s' at %u:%u: %s", path, el, ec, msg);
+    }
+
+    load_keep_push(a, src);                       /* owns them from here on */
+
+    /* who's load groups: snapshot the workspace, remember any prior group
+     * for this same path (its names count as "new again" on re-load), and
+     * note how many groups exist so nested loads keep their own names. */
+    LoadGroup reclaim = {0};
+    for (size_t gi = 0; gi < g_nlg; gi++)
+        if (!strcmp(g_lg[gi].path, path)) {
+            reclaim = g_lg[gi];
+            memmove(&g_lg[gi], &g_lg[gi + 1], (g_nlg - gi - 1) * sizeof g_lg[0]);
+            g_nlg--; break;
+        }
+    size_t pre_groups = g_nlg;
+    EnvObj *ge = I->globals;
+    size_t   pre_n = 0;
+    const char **pre_nm = malloc((ge->count + 1) * sizeof *pre_nm);
+    uint32_t *pre_ln = malloc((ge->count + 1) * sizeof *pre_ln);
+    if (pre_nm && pre_ln)
+        for (uint32_t i = ge->n_protected; i < ge->count; i++) {
+            if (reclaim.n && lg_has(&reclaim, ge->names[i], ge->namelens[i]))
+                continue;                       /* re-load: claim them anew */
+            pre_nm[pre_n] = ge->names[i]; pre_ln[pre_n] = ge->namelens[i]; pre_n++;
+        }
+
+    g_load_depth++;
+    Value r = vm_eval_program(I, prog, I->globals, /*echo=*/false);
+    g_load_depth--;
+
+    if (pre_nm && pre_ln && g_nlg < 64) {
+        LoadGroup ng = {0};
+        ng.names = malloc(ge->count * sizeof *ng.names);
+        ng.lens  = malloc(ge->count * sizeof *ng.lens);
+        if (ng.names && ng.lens) {
+            for (uint32_t i = ge->n_protected; i < ge->count; i++) {
+                bool was = false;
+                for (size_t k = 0; k < pre_n; k++)
+                    if (pre_ln[k] == ge->namelens[i] &&
+                        !memcmp(pre_nm[k], ge->names[i], ge->namelens[i])) { was = true; break; }
+                if (was) continue;
+                if (lg_claimed_from(pre_groups, ge->names[i], ge->namelens[i]))
+                    continue;                   /* an inner load's name */
+                ng.names[ng.n] = malloc(ge->namelens[i] + 1);
+                if (!ng.names[ng.n]) continue;
+                memcpy(ng.names[ng.n], ge->names[i], ge->namelens[i]);
+                ng.names[ng.n][ge->namelens[i]] = '\0';
+                ng.lens[ng.n] = ge->namelens[i]; ng.n++;
+            }
+            if (ng.n) {
+                ng.path = strdup(path);
+                const char *slash = strrchr(path, '/');
+                const char *base = slash ? slash + 1 : path;
+                size_t bl = strlen(base);
+                if (bl > 3 && !strcmp(base + bl - 3, ".nu")) bl -= 3;
+                ng.shortn = malloc(bl + 1);
+                if (ng.path && ng.shortn) {
+                    memcpy(ng.shortn, base, bl); ng.shortn[bl] = '\0';
+                    g_lg[g_nlg++] = ng;
+                } else { lg_free(&ng); }
+            } else { free(ng.names); free(ng.lens); }
+        }
+    }
+    free(pre_nm); free(pre_ln);
+    if (reclaim.n) lg_free(&reclaim);
+    value_release(r);
+    if (I->had_error) {                           /* re-raise into the outer program */
+        char saved[256];
+        snprintf(saved, sizeof saved, "%s", I->err);
+        if (strncmp(saved, "load:", 5) == 0)      /* nested load already labelled: don't wrap again */
+            runtime_error(I, "%s", saved);
+        runtime_error(I, "load: error in '%s': %s", path, saved);
+    }
+    return val_null();
+}
+
+/* ------------------------------------------------------------------ */
+/* solvers: fzero, fminbnd, integral (call back into the language)     */
+/* ------------------------------------------------------------------ */
+
+Value call_value(Interp *I, Value callee, Value *args, uint32_t n);
+static double want_real(Interp *I, Value v, const char *who);   /* defined in the special-functions section */
+static Value record2(const char *k1, Value v1, const char *k2, Value v2);
+static Value record3(const char *k1, Value v1, const char *k2, Value v2, const char *k3, Value v3);
+
+/* Evaluate a user function at x; require a real scalar back. */
+static double call_f1(Interp *I, Value f, double x, const char *who)
+{
+    Value arg = val_float(x);
+    Value r = call_value(I, f, &arg, 1);
+    if (r.kind == VAL_INT)   return (double)r.as.i;
+    if (r.kind == VAL_FLOAT) return r.as.f;
+    ValueKind k = r.kind;
+    value_release(r);
+    runtime_error(I, "%s: f(x) must return a real scalar, got %s", who, type_name(k));
+}
+
+static void want_callable(Interp *I, Value f, const char *who)
+{
+    if (f.kind != VAL_CLOSURE && f.kind != VAL_BUILTIN)
+        runtime_error(I, "%s: expected a function, got %s", who, type_name(f.kind));
+}
+
+/* Brent's zeroin: root of f in [a, b], f(a) and f(b) of opposite sign. */
+static Value bi_fzero(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value f = args[0];
+    want_callable(I, f, "fzero");
+    double a = want_real(I, args[1], "fzero"), b = want_real(I, args[2], "fzero");
+    if (!(a < b)) runtime_error(I, "fzero: needs a < b");
+    double fa = call_f1(I, f, a, "fzero"), fb = call_f1(I, f, b, "fzero");
+    if (fa == 0.0) return val_float(a);
+    if (fb == 0.0) return val_float(b);
+    if ((fa > 0) == (fb > 0))
+        runtime_error(I, "fzero: f(a) and f(b) must have opposite signs (f(%g) = %g, f(%g) = %g)", a, fa, b, fb);
+    double c = a, fc = fa, d = b - a, e = d;
+    for (int iter = 0; iter < 200; iter++) {
+        if (fabs(fc) < fabs(fb)) { a = b; b = c; c = a; fa = fb; fb = fc; fc = fa; }
+        double tol = 2.0 * DBL_EPSILON * fabs(b) + 1e-14;
+        double m = 0.5 * (c - b);
+        if (fabs(m) <= tol || fb == 0.0) return val_float(b);
+        if (fabs(e) < tol || fabs(fa) <= fabs(fb)) { d = m; e = m; }
+        else {
+            double p, q, r_, s_ = fb / fa;
+            if (a == c) { p = 2.0 * m * s_; q = 1.0 - s_; }
+            else {
+                q = fa / fc; r_ = fb / fc;
+                p = s_ * (2.0 * m * q * (q - r_) - (b - a) * (r_ - 1.0));
+                q = (q - 1.0) * (r_ - 1.0) * (s_ - 1.0);
+            }
+            if (p > 0) q = -q; else p = -p;
+            if (2.0 * p < 3.0 * m * q - fabs(tol * q) && p < fabs(0.5 * e * q)) { e = d; d = p / q; }
+            else { d = m; e = m; }
+        }
+        a = b; fa = fb;
+        b += (fabs(d) > tol) ? d : (m > 0 ? tol : -tol);
+        fb = call_f1(I, f, b, "fzero");
+        if ((fb > 0) == (fc > 0)) { c = a; fc = fa; d = b - a; e = d; }
+    }
+    runtime_error(I, "fzero: did not converge in 200 iterations");
+}
+
+/* Brent's localmin: minimum of f on [a, b]; returns {x, fx}. */
+static Value bi_fminbnd(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value f = args[0];
+    want_callable(I, f, "fminbnd");
+    double a = want_real(I, args[1], "fminbnd"), b = want_real(I, args[2], "fminbnd");
+    if (!(a < b)) runtime_error(I, "fminbnd: needs a < b");
+    const double gold = 0.5 * (3.0 - sqrt(5.0));
+    double x = a + gold * (b - a), w = x, v = x;
+    double fx = call_f1(I, f, x, "fminbnd"), fw = fx, fv = fx;
+    double d = 0.0, e = 0.0;
+    for (int iter = 0; iter < 500; iter++) {
+        double m = 0.5 * (a + b);
+        double tol = sqrt(DBL_EPSILON) * fabs(x) + 1e-12, t2 = 2.0 * tol;
+        if (fabs(x - m) <= t2 - 0.5 * (b - a))
+            return record2("x", val_float(x), "fx", val_float(fx));
+        double p = 0, q = 0, r_ = 0;
+        if (fabs(e) > tol) {                          /* try parabolic */
+            r_ = (x - w) * (fx - fv);
+            q = (x - v) * (fx - fw);
+            p = (x - v) * q - (x - w) * r_;
+            q = 2.0 * (q - r_);
+            if (q > 0) p = -p; else q = -q;
+            r_ = e; e = d;
+        }
+        if (fabs(p) < fabs(0.5 * q * r_) && p > q * (a - x) && p < q * (b - x)) {
+            d = p / q;
+            double u = x + d;
+            if (u - a < t2 || b - u < t2) d = (x < m) ? tol : -tol;
+        } else {
+            e = (x < m) ? b - x : a - x;
+            d = gold * e;
+        }
+        double u = (fabs(d) >= tol) ? x + d : x + ((d > 0) ? tol : -tol);
+        double fu = call_f1(I, f, u, "fminbnd");
+        if (fu <= fx) {
+            if (u < x) b = x; else a = x;
+            v = w; fv = fw; w = x; fw = fx; x = u; fx = fu;
+        } else {
+            if (u < x) a = u; else b = u;
+            if (fu <= fw || w == x)           { v = w; fv = fw; w = u; fw = fu; }
+            else if (fu <= fv || v == x || v == w) { v = u; fv = fu; }
+        }
+    }
+    runtime_error(I, "fminbnd: did not converge in 500 iterations");
+}
+
+/* Adaptive Simpson with Richardson error estimate (|S2 - S1| / 15). */
+static double simpson_rec(Interp *I, Value f, double a, double fa2, double m, double fm,
+                          double b, double fb2, double whole, double tol, int depth)
+{
+    if (depth > 60)
+        runtime_error(I, "integral: failed to converge (singular or wildly oscillatory integrand?)");
+    double lm = 0.5 * (a + m), rm = 0.5 * (m + b);
+    double flm = call_f1(I, f, lm, "integral"), frm = call_f1(I, f, rm, "integral");
+    double left  = (m - a) / 6.0 * (fa2 + 4.0 * flm + fm);
+    double right = (b - m) / 6.0 * (fm + 4.0 * frm + fb2);
+    double delta = left + right - whole;
+    if (fabs(delta) <= 15.0 * tol)
+        return left + right + delta / 15.0;
+    return simpson_rec(I, f, a, fa2, lm, flm, m, fm, left,  0.5 * tol, depth + 1)
+         + simpson_rec(I, f, m, fm, rm, frm, b, fb2, right, 0.5 * tol, depth + 1);
+}
+
+/* integral(f, a, b[, tol]) — finite limits; default abstol 1e-10. */
+static Value bi_integral(Interp *I, Value *args, uint32_t n)
+{
+    Value f = args[0];
+    want_callable(I, f, "integral");
+    double a = want_real(I, args[1], "integral"), b = want_real(I, args[2], "integral");
+    if (isinf(a) || isinf(b) || isnan(a) || isnan(b))
+        runtime_error(I, "integral: limits must be finite (transform an infinite domain first)");
+    double tol = 1e-10;
+    if (n >= 4) {
+        tol = want_real(I, args[3], "integral");
+        if (!(tol > 0)) runtime_error(I, "integral: tol must be positive");
+    }
+    if (a == b) return val_float(0.0);
+    double sgn = 1.0;
+    if (a > b) { double t = a; a = b; b = t; sgn = -1.0; }
+    double fa2 = call_f1(I, f, a, "integral"), fb2 = call_f1(I, f, b, "integral");
+    /* Launch from a golden-section split, not the midpoint: a symmetric
+     * integrand whose zeros sit at a, m, b and the quarter points (e.g.
+     * x sin 2x on [-pi, pi]) makes the classic midpoint launch see 0 = 0
+     * and converge on garbage. No simple symmetry survives 1/phi. */
+    double c  = a + (b - a) * 0.6180339887498949;
+    double fc = call_f1(I, f, c, "integral");
+    double m1 = 0.5 * (a + c), fm1 = call_f1(I, f, m1, "integral");
+    double m2 = 0.5 * (c + b), fm2 = call_f1(I, f, m2, "integral");
+    double w1 = (c - a) / 6.0 * (fa2 + 4.0 * fm1 + fc);
+    double w2 = (b - c) / 6.0 * (fc + 4.0 * fm2 + fb2);
+    return val_float(sgn * (simpson_rec(I, f, a, fa2, m1, fm1, c, fc, w1, 0.5 * tol, 0)
+                          + simpson_rec(I, f, c, fc, m2, fm2, b, fb2, w2, 0.5 * tol, 0)));
+}
+
+/* ------------------------------------------------------------------ */
+/* data file I/O: readcsv / writecsv / readtable                       */
+/* ------------------------------------------------------------------ */
+
+static Value rec_field(RecObj *r, const char *name);   /* defined with plotting */
+
+static const char *want_str(Interp *I, Value v, const char *who)
+{
+    if (v.kind != VAL_STRING) runtime_error(I, "%s: expected a filename string, got %s", who, type_name(v.kind));
+    return as_str(v)->data;   /* StrObj data is NUL-terminated */
+}
+
+/* Split one CSV line in place; returns field count, fields[] point into line. */
+/* Split one CSV line in place. Quote-aware (RFC-4180-lite): a cell starting
+ * with '"' runs to its closing quote; delimiters inside are literal and ""
+ * is a literal quote. Quoted cells are rewritten in place without the
+ * surrounding quotes and with doubled quotes collapsed. */
+static uint32_t csv_split(char *line, char delim, char **fields, uint32_t max)
+{
+    uint32_t n = 0;
+    char *p = line;
+    while (n < max) {
+        if (*p == '"') {                              /* quoted cell */
+            char *w = p;                              /* rewrite window start */
+            fields[n++] = w;
+            p++;                                      /* past opening quote */
+            while (*p) {
+                if (*p == '"' && p[1] == '"') { *w++ = '"'; p += 2; }
+                else if (*p == '"')           { p++; break; }
+                else                          *w++ = *p++;
+            }
+            bool more = (*p == delim);
+            *w = '\0';
+            if (!more) break;
+            p++;                                      /* past the delimiter */
+        } else {
+            fields[n++] = p;
+            while (*p && *p != delim) p++;
+            if (*p != delim) break;
+            *p++ = '\0';
+        }
+    }
+    return n;
+}
+
+/* Parse one cell: empty/whitespace -> nan; else full strtod or error. */
+static double csv_cell(Interp *I, const char *cell, size_t row, uint32_t col, const char *who)
+{
+    const char *p = cell;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '\0') return NAN;                       /* missing value */
+    char *end;
+    double v = strtod(p, &end);
+    while (*end == ' ' || *end == '\t') end++;
+    if (*end != '\0')
+        runtime_error(I, "%s: row %zu, column %u: '%s' is not numeric", who, row, col, cell);
+    return v;
+}
+
+typedef struct { char **lines; size_t n; char *buf; } CsvLines;
+
+/* Read the whole file into NUL-terminated lines, CRLF-tolerant, blank lines
+ * skipped. Caller frees lines[0] (one block) and lines. */
+static CsvLines csv_read_lines(Interp *I, const char *path, const char *who)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) runtime_error(I, "%s: cannot open '%s': %s", who, path, strerror(errno));
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    if (sz < 0) { fclose(f); runtime_error(I, "%s: cannot read '%s'", who, path); }
+    if (sz > (1L << 30)) { fclose(f); runtime_error(I, "%s: '%s' is larger than 1 GiB", who, path); }
+    rewind(f);
+    char *buf = malloc((size_t)sz + 1);
+    if (!buf) abort();
+    size_t got = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[got] = '\0';
+    size_t cap = 256, n = 0;
+    char **lines = malloc(cap * sizeof *lines);
+    if (!lines) abort();
+    char *p = buf;
+    while (*p) {
+        char *nl = strchr(p, '\n');
+        char *endp = nl ? nl : p + strlen(p);
+        if (endp > p && endp[-1] == '\r') endp[-1] = '\0';
+        if (nl) *nl = '\0';
+        if (*p != '\0') {                              /* skip blank lines */
+            if (n == cap) { cap *= 2; lines = realloc(lines, cap * sizeof *lines); if (!lines) abort(); }
+            lines[n++] = p;
+        }
+        p = nl ? nl + 1 : endp;
+    }
+    if (n == 0) { free(buf); free(lines); runtime_error(I, "%s: '%s' is empty", who, path); }
+    return (CsvLines){ lines, n, buf };
+}
+
+static void csv_free(CsvLines *c) { free(c->buf); free(c->lines); }
+
+/* Shared option extraction: {delim = ";", skip = n}. */
+static void csv_opts(Interp *I, Value opts, char *delim, int64_t *skip, const char *who)
+{
+    *delim = ','; *skip = 0;
+    if (opts.kind == VAL_NULL) return;
+    if (opts.kind != VAL_RECORD) runtime_error(I, "%s: options must be a record", who);
+    RecObj *o = as_rec(opts);
+    Value v;
+    if ((v = rec_field(o, "delim")).kind != VAL_NULL) {
+        if (v.kind != VAL_STRING || as_str(v)->len != 1)
+            runtime_error(I, "%s: delim must be a single-character string", who);
+        *delim = as_str(v)->data[0];
+    }
+    if ((v = rec_field(o, "skip")).kind != VAL_NULL) {
+        if (v.kind != VAL_INT || v.as.i < 0) runtime_error(I, "%s: skip must be a non-negative integer", who);
+        *skip = v.as.i;
+    }
+}
+
+#define CSV_MAX_COLS 100000
+
+/* readcsv(file[, opts]) -> Float matrix; empty cells are nan. */
+static Value bi_readcsv(Interp *I, Value *args, uint32_t n)
+{
+    const char *path = want_str(I, args[0], "readcsv");
+    char delim; int64_t skip;
+    csv_opts(I, n >= 2 ? args[1] : val_null(), &delim, &skip, "readcsv");
+    CsvLines c = csv_read_lines(I, path, "readcsv");
+    static_assert(sizeof(Value) <= 32, "Value copied in setjmp handler");
+    volatile Value out_v = { 0 };                      /* volatile: written after setjmp */
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        Value o; memcpy(&o, (const void *)&out_v, sizeof o);
+        if (o.kind != VAL_NULL) value_release(o);
+        csv_free(&c); memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
+    }
+    if ((size_t)skip >= c.n) runtime_error(I, "readcsv: skip = %lld leaves no data", (long long)skip);
+    size_t first = (size_t)skip, rows = c.n - first;
+    static char *fields[CSV_MAX_COLS];
+    uint32_t cols = csv_split(c.lines[first], delim, fields, CSV_MAX_COLS);
+    if ((double)rows * cols > 1e8) runtime_error(I, "readcsv: '%s' is too large (%zu x %u)", path, rows, cols);
+    Value out = val_array(ELT_FLOAT, (uint32_t)rows, cols);
+    memcpy((void *)&out_v, &out, sizeof out);
+    double *od = (double *)as_arr(out)->data;
+    for (uint32_t j = 0; j < cols; j++) od[j] = csv_cell(I, fields[j], first + 1, j + 1, "readcsv");
+    for (size_t r = 1; r < rows; r++) {
+        uint32_t k = csv_split(c.lines[first + r], delim, fields, CSV_MAX_COLS);
+        if (k != cols)
+            runtime_error(I, "readcsv: row %zu has %u fields, expected %u", first + r + 1, k, cols);
+        for (uint32_t j = 0; j < cols; j++)
+            od[r * cols + j] = csv_cell(I, fields[j], first + r + 1, j + 1, "readcsv");
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    csv_free(&c);
+    return out;
+}
+
+/* Sanitize a header cell into a record key: lowercase, [a-z0-9_], leading
+ * digit prefixed, empty -> cN. Returns strdup'd string. */
+static char *csv_key(const char *cell, uint32_t idx)
+{
+    while (*cell == ' ' || *cell == '\t' || *cell == '"') cell++;
+    size_t len = strlen(cell);
+    while (len && (cell[len-1] == ' ' || cell[len-1] == '\t' || cell[len-1] == '"')) len--;
+    char *k = malloc(len + 8);
+    if (!k) abort();
+    size_t w = 0;
+    for (size_t i = 0; i < len; i++) {
+        char ch = cell[i];
+        if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) k[w++] = ch;
+        else if (w && k[w-1] != '_') k[w++] = '_';
+    }
+    while (w && k[w-1] == '_') w--;
+    if (w == 0) { snprintf(k, len + 8, "c%u", idx + 1); return k; }
+    if (k[0] >= '0' && k[0] <= '9') { memmove(k + 1, k, w); k[0] = 'c'; w++; }
+    k[w] = '\0';
+    return k;
+}
+
+/* readtable(file[, opts]) -> record of column vectors, keys from the header. */
+static Value bi_readtable(Interp *I, Value *args, uint32_t n)
+{
+    const char *path = want_str(I, args[0], "readtable");
+    char delim; int64_t skip;
+    csv_opts(I, n >= 2 ? args[1] : val_null(), &delim, &skip, "readtable");
+    CsvLines c = csv_read_lines(I, path, "readtable");
+    /* volatile: these are written after setjmp and read in the handler —
+     * without it -O2 register-caches them and longjmp restores garbage */
+    char **volatile keys = nullptr;
+    volatile uint32_t cols = 0;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        char **k = keys;
+        if (k) { for (uint32_t j = 0; j < cols; j++) free(k[j]); free(k); }
+        csv_free(&c); memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
+    }
+    if ((size_t)skip + 1 >= c.n + (c.n ? 0 : 1) && (size_t)skip + 1 > c.n)
+        runtime_error(I, "readtable: skip = %lld leaves no header", (long long)skip);
+    size_t hline = (size_t)skip;
+    if (hline + 1 > c.n) runtime_error(I, "readtable: no data rows after the header");
+    static char *fields[CSV_MAX_COLS];
+    cols = csv_split(c.lines[hline], delim, fields, CSV_MAX_COLS);
+    size_t rows = c.n - hline - 1;
+    if (rows == 0) runtime_error(I, "readtable: no data rows after the header");
+    if ((double)rows * cols > 1e8) runtime_error(I, "readtable: '%s' is too large", path);
+    keys = calloc(cols, sizeof *keys);
+    if (!keys) abort();
+    for (uint32_t j = 0; j < cols; j++) {
+        keys[j] = csv_key(fields[j], j);
+        for (uint32_t i = 0; i < j; i++)              /* dedupe: append _2, _3, ... */
+            if (strcmp(keys[i], keys[j]) == 0) {
+                char *nk = malloc(strlen(keys[j]) + 12);
+                if (!nk) abort();
+                snprintf(nk, strlen(keys[j]) + 12, "%s_%u", keys[j], j + 1);
+                free(keys[j]); keys[j] = nk;
+                break;
+            }
+    }
+    /* Pass 1: classify each column. Any non-empty cell that does not parse
+     * fully as a number makes the whole column a String column. Because the
+     * split lines are consumed by csv_split in place, classification works on
+     * a scratch copy of each line. */
+    bool *is_str = calloc(cols, sizeof *is_str);
+    if (!is_str) abort();
+    for (size_t r = 0; r < rows; r++) {
+        char *scratch = strdup(c.lines[hline + 1 + r]);
+        if (!scratch) abort();
+        uint32_t k = csv_split(scratch, delim, fields, CSV_MAX_COLS);
+        if (k != cols) {
+            free(scratch); free(is_str);
+            runtime_error(I, "readtable: row %zu has %u fields, expected %u", hline + r + 2, k, cols);
+        }
+        for (uint32_t j = 0; j < cols; j++) {
+            if (is_str[j]) continue;
+            const char *p = fields[j];
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '\0') continue;                 /* empty: nan for numeric, "" for string */
+            char *end;
+            strtod(p, &end);
+            while (*end == ' ' || *end == '\t') end++;
+            if (*end != '\0') is_str[j] = true;
+        }
+        free(scratch);
+    }
+    /* Pass 2: allocate typed columns and fill. */
+    Value *colv = calloc(cols, sizeof *colv);
+    if (!colv) abort();
+    for (uint32_t j = 0; j < cols; j++)
+        colv[j] = val_array(is_str[j] ? ELT_STRING : ELT_FLOAT, (uint32_t)rows, 1);
+    for (size_t r = 0; r < rows; r++) {
+        csv_split(c.lines[hline + 1 + r], delim, fields, CSV_MAX_COLS);
+        for (uint32_t j = 0; j < cols; j++) {
+            const char *cell = fields[j];
+            if (is_str[j]) {
+                Value sv = val_string(cell, (uint32_t)strlen(cell));
+                arr_set(as_arr(colv[j]), r, sv);       /* arr_set retains */
+                value_release(sv);
+            } else {
+                const char *p = cell;
+                while (*p == ' ' || *p == '\t') p++;
+                double v = (*p == '\0') ? NAN : strtod(p, nullptr);
+                ((double *)as_arr(colv[j])->data)[r] = v;
+            }
+        }
+    }
+    free(is_str);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value rec = val_record(cols);
+    RecObj *o = as_rec(rec);
+    o->owns_keys = true;
+    for (uint32_t j = 0; j < cols; j++) {
+        o->keys[j] = keys[j];
+        o->keylens[j] = (uint32_t)strlen(keys[j]);
+        o->vals[j] = colv[j];
+    }
+    free(keys); free(colv);
+    csv_free(&c);
+    return rec;
+}
+
+/* writecsv(file, A[, opts]) -> null; full-precision %.17g, Int stays integral. */
+static Value bi_writecsv(Interp *I, Value *args, uint32_t n)
+{
+    const char *path = want_str(I, args[0], "writecsv");
+    Value av = args[1];
+    char delim; int64_t skip;
+    csv_opts(I, n >= 3 ? args[2] : val_null(), &delim, &skip, "writecsv");
+    if (!is_array(av) && !is_num(av)) runtime_error(I, "writecsv: expected a matrix, got %s", type_name(av.kind));
+    if (is_num(av)) runtime_error(I, "writecsv: expected a matrix (wrap a scalar as [x])");
+    ArrObj *a = as_arr(av);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "writecsv: complex matrices are not CSV-representable");
+
+    FILE *f = fopen(path, "wb");
+    if (!f) runtime_error(I, "writecsv: cannot open '%s': %s", path, strerror(errno));
+    for (uint32_t r = 0; r < a->rows; r++) {
+        for (uint32_t col = 0; col < a->cols; col++) {
+            if (col) fputc(delim, f);
+            Value e = arr_get(a, (size_t)r * a->cols + col);
+            if (e.kind == VAL_INT)       fprintf(f, "%lld", (long long)e.as.i);
+            else if (e.kind == VAL_BOOL) fprintf(f, "%d", e.as.b ? 1 : 0);
+            else if (e.kind == VAL_STRING) {
+                StrObj *sv = as_str(e);
+                bool q = memchr(sv->data, delim, sv->len) || memchr(sv->data, '"', sv->len)
+                      || memchr(sv->data, '\n', sv->len);
+                if (q) {
+                    fputc('"', f);
+                    for (uint32_t i2 = 0; i2 < sv->len; i2++) {
+                        if (sv->data[i2] == '"') fputc('"', f);   /* CSV doubles quotes */
+                        fputc(sv->data[i2], f);
+                    }
+                    fputc('"', f);
+                } else fwrite(sv->data, 1, sv->len, f);
+            }
+            else                         fprintf(f, "%.17g", e.as.f);
+        }
+        fputc('\n', f);
+    }
+    if (fclose(f) != 0) runtime_error(I, "writecsv: write to '%s' failed: %s", path, strerror(errno));
+    return val_null();
+}
+
+/* ------------------------------------------------------------------ */
+/* plotting (gnuplot, out of process)                                  */
+/* ------------------------------------------------------------------ */
+
+/* Look up a record field; null Value if absent. */
+static Value rec_field(RecObj *r, const char *name)
+{
+    size_t len = strlen(name);
+    for (uint32_t i = 0; i < r->count; i++)
+        if (r->keylens[i] == len && memcmp(r->keys[i], name, len) == 0)
+            return r->vals[i];
+    return val_null();
+}
+
+/* Write s into gnuplot double quotes, escaping " and backslash. */
+static void gp_qstr(FILE *g, const char *s, uint32_t len)
+{
+    fputc('"', g);
+    for (uint32_t i = 0; i < len; i++) {
+        char c = s[i];
+        if (c == '"' || c == '\\') fputc('\\', g);
+        if ((unsigned char)c >= 0x20 || c == '\t') fputc(c, g);
+    }
+    fputc('"', g);
+}
+
+/* ------------------------------------------------------------------ */
+/* ASCII plotting: the terminal backend, selected natively by           */
+/* NEUTRINO_PLOT_TERM=ascii (a missing gnuplot is an error, not a       */
+/* silent fallback); in the browser it is reachable only if the page    */
+/* sets a non-svg NEUTRINO_PLOT_TERM (the browser DEFAULT is the SVG    */
+/* backend below — dispatch tries svg first). Renders into vout().      */
+
+static Value gp_label(RecObj *o, uint32_t k);
+
+static bool plot_is_ascii(void)
+{
+#ifdef __EMSCRIPTEN__
+    return true;                                  /* no subprocesses in the browser */
+#else
+    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    return t && strcmp(t, "ascii") == 0;
+#endif
+}
+
+/* Optional string field for titles/labels; returns nullptr if absent. */
+static const char *ascii_optstr(Value opts, const char *key, uint32_t *len)
+{
+    if (opts.kind != VAL_RECORD) return nullptr;
+    Value v = rec_field(as_rec(opts), key);
+    if (v.kind != VAL_STRING) return nullptr;
+    *len = as_str(v)->len;
+    return as_str(v)->data;
+}
+
+#define ASCII_W 64
+#define ASCII_H 18
+
+/* Line/scatter plot. get(series, k) yields the k-th y of a series. */
+/* ------------------------------------------------------------------ */
+/* SVG plot backend. Selected by NEUTRINO_PLOT_TERM=svg natively and by */
+/* default in the browser, where a JS hook (Module.neutrinoPlot) shows  */
+/* each written file. Structure borrowed from tea's graph.c.            */
+/* ------------------------------------------------------------------ */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
+static bool plot_is_svg(void)
+{
+#ifdef __EMSCRIPTEN__
+    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    return !t || strcmp(t, "svg") == 0;           /* browser default */
+#else
+    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    return t && strcmp(t, "svg") == 0;
+#endif
+}
+
+static int g_svg_plot_no;
+
+static void svg_announce(const char *fname)
+{
+    fprintf(vout(), "(plot written: %s)\n", fname);
+#ifdef __EMSCRIPTEN__
+    EM_ASM({ if (Module.neutrinoPlot) Module.neutrinoPlot(UTF8ToString($0)); }, fname);
+#endif
+}
+
+static void svg_esc(FILE *o, const char *s, uint32_t n)
+{
+    for (uint32_t i = 0; i < n; i++)
+        switch (s[i]) {
+        case '&': fputs("&amp;", o); break;
+        case '<': fputs("&lt;", o); break;
+        case '>': fputs("&gt;", o); break;
+        default:  fputc(s[i], o);
+        }
+}
+
+/* 1-2-5 "nice" tick step for a span */
+static double svg_nice_step(double span, int target)
+{
+    double raw = span / (target > 0 ? target : 5);
+    double mag = pow(10, floor(log10(raw)));
+    double r = raw / mag;
+    return (r < 1.5 ? 1 : r < 3.5 ? 2 : r < 7.5 ? 5 : 10) * mag;
+}
+
+static const char *svg_palette(uint32_t s)
+{
+    static const char *pal[] = { "#58a6ff", "#ff7b72", "#3fb950", "#bc8cff",
+                                 "#ff7f0e", "#8c564b", "#17becf", "#7f7f7f" };
+    return pal[s % 8];
+}
+
+#define SVG_W 720
+#define SVG_H 440
+#define SVG_ML 62
+#define SVG_MR 18
+#define SVG_MT 40
+#define SVG_MB 52
+
+static void svg_frame(FILE *o, double xmin, double xmax, double ymin, double ymax,
+                      const char *title, uint32_t tlen,
+                      const char *xl, uint32_t xllen, const char *yl, uint32_t yllen)
+{
+    const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
+    fprintf(o, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
+               "viewBox=\"0 0 %d %d\" font-family=\"Helvetica,Arial,sans-serif\">\n",
+            SVG_W, SVG_H, SVG_W, SVG_H);
+    fprintf(o, "<rect width=\"%d\" height=\"%d\" fill=\"#0d1117\"/>\n", SVG_W, SVG_H);
+    fprintf(o, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"none\" "
+               "stroke=\"#8b98a9\" stroke-width=\"1\"/>\n", SVG_ML, SVG_MT, PW, PH);
+    double xs = svg_nice_step(xmax - xmin, 6), ys = svg_nice_step(ymax - ymin, 5);
+    for (double v = ceil(xmin / xs) * xs; v <= xmax + 1e-12 * xs; v += xs) {
+        double X = SVG_ML + (v - xmin) / (xmax - xmin) * PW;
+        fprintf(o, "<line x1=\"%.2f\" y1=\"%d\" x2=\"%.2f\" y2=\"%d\" stroke=\"#1e2633\"/>\n",
+                X, SVG_MT, X, SVG_MT + PH);
+        fprintf(o, "<text x=\"%.2f\" y=\"%d\" text-anchor=\"middle\" font-size=\"12\" fill=\"#c6cdd8\">%g</text>\n",
+                X, SVG_MT + PH + 18, v);
+    }
+    for (double v = ceil(ymin / ys) * ys; v <= ymax + 1e-12 * ys; v += ys) {
+        double Y = SVG_MT + PH - (v - ymin) / (ymax - ymin) * PH;
+        fprintf(o, "<line x1=\"%d\" y1=\"%.2f\" x2=\"%d\" y2=\"%.2f\" stroke=\"#1e2633\"/>\n",
+                SVG_ML, Y, SVG_ML + PW, Y);
+        fprintf(o, "<text x=\"%d\" y=\"%.2f\" text-anchor=\"end\" dominant-baseline=\"middle\" fill=\"#c6cdd8\" "
+                   "font-size=\"12\">%g</text>\n", SVG_ML - 8, Y, v);
+    }
+    if (title) {
+        fprintf(o, "<text x=\"%d\" y=\"24\" text-anchor=\"middle\" font-size=\"15\" font-weight=\"bold\" fill=\"#e6edf3\">",
+                SVG_W / 2);
+        svg_esc(o, title, tlen); fputs("</text>\n", o);
+    }
+    if (xl) {
+        fprintf(o, "<text x=\"%d\" y=\"%d\" text-anchor=\"middle\" font-size=\"13\" fill=\"#c6cdd8\">",
+                SVG_ML + PW / 2, SVG_H - 12);
+        svg_esc(o, xl, xllen); fputs("</text>\n", o);
+    }
+    if (yl) {
+        fprintf(o, "<text x=\"16\" y=\"%d\" text-anchor=\"middle\" font-size=\"13\" "
+                   "transform=\"rotate(-90 16 %d)\">", SVG_MT + PH / 2, SVG_MT + PH / 2);
+        svg_esc(o, yl, yllen); fputs("</text>\n", o);
+    }
+}
+
+static void svg_plot_render(Interp *I, ArrObj *X, ArrObj *Y, bool yvec,
+                            uint32_t npts, uint32_t nser, Value opts)
+{
+    double ymin = HUGE_VAL, ymax = -HUGE_VAL, xmin = HUGE_VAL, xmax = -HUGE_VAL;
+    for (uint32_t s = 0; s < nser; s++)
+        for (uint32_t k = 0; k < npts; k++) {
+            double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+            double y = yvec ? as_double(arr_get(Y, k))
+                            : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+            if (isfinite(y)) { if (y < ymin) ymin = y; if (y > ymax) ymax = y; }
+            if (isfinite(x)) { if (x < xmin) xmin = x; if (x > xmax) xmax = x; }
+        }
+    if (!isfinite(ymin) || !isfinite(ymax)) runtime_error(I, "plot: no finite data to plot");
+    if (ymax == ymin) { ymax += 0.5; ymin -= 0.5; }
+    if (xmax == xmin) { xmax += 0.5; xmin -= 0.5; }
+    double pad = (ymax - ymin) * 0.05; ymin -= pad; ymax += pad;
+
+    char fname[64];
+    snprintf(fname, sizeof fname,
+#ifdef __EMSCRIPTEN__
+             "/plot_%d.svg",
+#else
+             "plot_%d.svg",
+#endif
+             ++g_svg_plot_no);
+    FILE *o = fopen(fname, "w");
+    if (!o) { g_svg_plot_no--; runtime_error(I, "plot: cannot write %s", fname); }
+
+    uint32_t tlen = 0, xllen = 0, yllen = 0, stlen = 0;
+    const char *title = ascii_optstr(opts, "title", &tlen);
+    const char *xl = ascii_optstr(opts, "xlabel", &xllen);
+    const char *yl = ascii_optstr(opts, "ylabel", &yllen);
+    const char *style = ascii_optstr(opts, "style", &stlen);
+    /* Marker-family styles render as points in the svg/ascii backends.
+     * gnuplot accepts a whole family (points, circles, dots) plus
+     * abbreviations; match by substring so "circle" means the same thing
+     * on every backend instead of silently becoming a line. */
+    bool points_only = false;
+    if (style)
+        for (uint32_t si = 0; si + 2 < stlen && !points_only; si++)
+            points_only = (stlen - si >= 5 && memcmp(style + si, "point", 5) == 0)
+                       || (stlen - si >= 6 && memcmp(style + si, "circle", 6) == 0)
+                       || (stlen - si >= 3 && memcmp(style + si, "dot", 3) == 0);
+
+    svg_frame(o, xmin, xmax, ymin, ymax, title, tlen, xl, xllen, yl, yllen);
+    const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
+    for (uint32_t s = 0; s < nser; s++) {
+        const char *col = svg_palette(s);
+        if (!points_only) {
+            fprintf(o, "<polyline fill=\"none\" stroke=\"%s\" stroke-width=\"1.8\" points=\"", col);
+            for (uint32_t k = 0; k < npts; k++) {
+                double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+                double y = yvec ? as_double(arr_get(Y, k))
+                                : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+                if (!isfinite(x) || !isfinite(y)) continue;
+                fprintf(o, "%.2f,%.2f ",
+                        SVG_ML + (x - xmin) / (xmax - xmin) * PW,
+                        SVG_MT + PH - (y - ymin) / (ymax - ymin) * PH);
+            }
+            fputs("\"/>\n", o);
+        } else {
+            for (uint32_t k = 0; k < npts; k++) {
+                double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+                double y = yvec ? as_double(arr_get(Y, k))
+                                : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+                if (!isfinite(x) || !isfinite(y)) continue;
+                fprintf(o, "<circle cx=\"%.2f\" cy=\"%.2f\" r=\"3\" fill=\"%s\"/>\n",
+                        SVG_ML + (x - xmin) / (xmax - xmin) * PW,
+                        SVG_MT + PH - (y - ymin) / (ymax - ymin) * PH, col);
+            }
+        }
+        /* legend entry */
+        Value lv = (opts.kind == VAL_RECORD) ? gp_label(as_rec(opts), s + 1) : val_null();
+        double lx = SVG_ML + PW - 132, ly = SVG_MT + 16 + 18 * s;
+        fprintf(o, "<line x1=\"%.1f\" y1=\"%.1f\" x2=\"%.1f\" y2=\"%.1f\" stroke=\"%s\" stroke-width=\"2\"/>\n",
+                lx, ly - 4, lx + 22, ly - 4, col);
+        fprintf(o, "<text x=\"%.1f\" y=\"%.1f\" font-size=\"12\" fill=\"#c6cdd8\">", lx + 28, ly);
+        if (lv.kind == VAL_STRING) svg_esc(o, as_str(lv)->data, as_str(lv)->len);
+        else fprintf(o, "series %u", s + 1);
+        fputs("</text>\n", o);
+    }
+    fputs("</svg>\n", o);
+    fclose(o);
+    svg_announce(fname);
+}
+
+static void svg_hist_render(Interp *I, double lo, double w, uint32_t nb,
+                            const uint64_t *cnt, Value opts)
+{
+    uint32_t cmax = 1;
+    for (uint32_t b = 0; b < nb; b++) if (cnt[b] > cmax) cmax = cnt[b];
+    char fname[64];
+    snprintf(fname, sizeof fname,
+#ifdef __EMSCRIPTEN__
+             "/plot_%d.svg",
+#else
+             "plot_%d.svg",
+#endif
+             ++g_svg_plot_no);
+    FILE *o = fopen(fname, "w");
+    if (!o) { g_svg_plot_no--; runtime_error(I, "hist: cannot write %s", fname); }
+    uint32_t tlen = 0, xllen = 0;
+    const char *title = ascii_optstr(opts, "title", &tlen);
+    const char *xl = ascii_optstr(opts, "xlabel", &xllen);
+    svg_frame(o, lo, lo + w * nb, 0, (double)cmax * 1.05, title, tlen, xl, xllen, nullptr, 0);
+    const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
+    double xspan = w * nb, yspan = (double)cmax * 1.05;
+    for (uint32_t b = 0; b < nb; b++) {
+        double bx = SVG_ML + (b * w) / xspan * PW;
+        double bw = w / xspan * PW;
+        double bh = cnt[b] / yspan * PH;
+        fprintf(o, "<rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" "
+                   "fill=\"#58a6ff\" fill-opacity=\"0.65\" stroke=\"#79c0ff\"/>\n",
+                bx + 0.5, SVG_MT + PH - bh, bw - 1.0, bh);
+    }
+    fputs("</svg>\n", o);
+    fclose(o);
+    svg_announce(fname);
+}
+
+static void ascii_plot_render(Interp *I, ArrObj *X, ArrObj *Y, bool yvec,
+                              uint32_t npts, uint32_t nser, Value opts)
+{
+    FILE *o = vout();
+    double ymin = HUGE_VAL, ymax = -HUGE_VAL, xmin = HUGE_VAL, xmax = -HUGE_VAL;
+    for (uint32_t s = 0; s < nser; s++)
+        for (uint32_t k = 0; k < npts; k++) {
+            double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+            double y = yvec ? as_double(arr_get(Y, k))
+                            : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+            if (isfinite(y)) { if (y < ymin) ymin = y; if (y > ymax) ymax = y; }
+            if (isfinite(x)) { if (x < xmin) xmin = x; if (x > xmax) xmax = x; }
+        }
+    if (!isfinite(ymin) || !isfinite(ymax)) runtime_error(I, "plot: no finite data to plot");
+    if (ymax == ymin) { ymax += 0.5; ymin -= 0.5; }
+    if (xmax == xmin) { xmax += 0.5; xmin -= 0.5; }
+
+    uint32_t tlen;
+    const char *title = ascii_optstr(opts, "title", &tlen);
+    if (title) fprintf(o, "  %.*s\n", (int)tlen, title);
+
+    static const char marks[] = "*+x#o@%&";        /* per-series glyphs */
+    char grid[ASCII_H][ASCII_W];
+    for (uint32_t r = 0; r < ASCII_H; r++)
+        for (uint32_t c = 0; c < ASCII_W; c++) grid[r][c] = ' ';
+
+    for (uint32_t s = 0; s < nser; s++) {
+        char m = marks[s % (sizeof marks - 1)];
+        for (uint32_t k = 0; k < npts; k++) {
+            double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+            double y = yvec ? as_double(arr_get(Y, k))
+                            : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+            if (!isfinite(x) || !isfinite(y)) continue;
+            uint32_t cx = (uint32_t)((x - xmin) / (xmax - xmin) * (ASCII_W - 1) + 0.5);
+            uint32_t cy = (uint32_t)((y - ymin) / (ymax - ymin) * (ASCII_H - 1) + 0.5);
+            if (cx >= ASCII_W) cx = ASCII_W - 1;
+            if (cy >= ASCII_H) cy = ASCII_H - 1;
+            grid[ASCII_H - 1 - cy][cx] = m;         /* row 0 is the top (ymax) */
+        }
+    }
+
+    for (uint32_t r = 0; r < ASCII_H; r++) {
+        double yv = ymax - (double)r / (ASCII_H - 1) * (ymax - ymin);
+        fprintf(o, "%9.3g |", yv);                  /* y-axis tick + labels */
+        for (uint32_t c = 0; c < ASCII_W; c++) fputc(grid[r][c], o);
+        fputc('\n', o);
+    }
+    fputs("          +", o);
+    for (uint32_t c = 0; c < ASCII_W; c++) fputc('-', o);
+    fputc('\n', o);
+    fprintf(o, "           %-*.4g%*.4g\n", ASCII_W / 2, xmin, ASCII_W / 2, xmax);
+
+    if (nser > 1) {                                 /* legend for multi-series */
+        for (uint32_t s = 0; s < nser; s++) {
+            Value lv = gp_label(as_rec(opts), s + 1);
+            fprintf(o, "  %c series %u", marks[s % (sizeof marks - 1)], s + 1);
+            if (lv.kind == VAL_STRING) fprintf(o, " (%.*s)", (int)as_str(lv)->len, as_str(lv)->data);
+            fputc('\n', o);
+        }
+    }
+}
+
+/* Horizontal-bar histogram from precomputed bin counts. */
+static void ascii_hist_render(FILE *o, double lo, double w, int64_t nb,
+                              const uint64_t *cnt, Value opts)
+{
+    uint32_t tlen;
+    const char *title = ascii_optstr(opts, "title", &tlen);
+    if (title) fprintf(o, "  %.*s\n", (int)tlen, title);
+    uint64_t cmax = 1;
+    for (int64_t b = 0; b < nb; b++) if (cnt[b] > cmax) cmax = cnt[b];
+    const uint32_t BARW = 44;
+    for (int64_t b = 0; b < nb; b++) {
+        double centre = lo + (b + 0.5) * w;
+        uint32_t len = (uint32_t)((double)cnt[b] / (double)cmax * BARW + 0.5);
+        fprintf(o, "%9.3g |", centre);
+        for (uint32_t i = 0; i < len; i++) fputc('#', o);
+        fprintf(o, " %llu\n", (unsigned long long)cnt[b]);
+    }
+}
+
+static FILE *gp_open(Interp *I)
+{
+    FILE *g = popen("gnuplot -persist 2>/dev/null", "w");
+    if (!g) runtime_error(I, "plot: could not start gnuplot (set NEUTRINO_PLOT_TERM=ascii for a text plot)");
+    const char *term = getenv("NEUTRINO_PLOT_TERM");
+    if (term && *term) {
+        fprintf(g, "set terminal %s\n", term);
+        const char *out = getenv("NEUTRINO_PLOT_OUT");
+        if (out && *out) fprintf(g, "set output '%s'\n", out);
+    }
+    return g;
+}
+
+static void gp_close(Interp *I, FILE *g)
+{
+    int rc = pclose(g);
+    if (rc != 0)
+        runtime_error(I, "plot: gnuplot failed (exit %d) — is gnuplot installed?",
+                      rc == -1 ? -1 : WEXITSTATUS(rc));
+}
+
+/* A vector argument for plotting: any 1 x n / n x 1 real array. */
+static ArrObj *want_vec(Interp *I, Value v, const char *who)
+{
+    if (!is_array(v)) runtime_error(I, "%s: expected a vector, got %s", who, type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    if (a->rows != 1 && a->cols != 1) runtime_error(I, "%s: expected a vector, got %ux%u", who, a->rows, a->cols);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "%s: complex data is not plottable directly (plot real/imag/abs)", who);
+    if ((size_t)a->rows * a->cols == 0) runtime_error(I, "%s: empty data", who);
+    return a;
+}
+
+/* Emit a "set xrange/yrange [lo:hi]" from a 2-element vector option. */
+static void gp_range(Interp *I, FILE *g, const char *axis, Value v, const char *who)
+{
+    if (!is_array(v) || (size_t)as_arr(v)->rows * as_arr(v)->cols != 2 || as_arr(v)->elt == ELT_COMPLEX)
+        runtime_error(I, "%s: %srange must be a 2-element vector [lo, hi]", who, axis);
+    double lo = as_double(arr_get(as_arr(v), 0)), hi = as_double(arr_get(as_arr(v), 1));
+    if (!(lo < hi)) runtime_error(I, "%s: %srange needs lo < hi", who, axis);
+    fprintf(g, "set %srange [%.17g:%.17g]\n", axis, lo, hi);
+}
+
+/* Validate an options record before any gnuplot process exists, so option
+ * errors cannot leak the popen stream. */
+static void gp_check_range(Interp *I, Value v, const char *axis, const char *who)
+{
+    if (!is_array(v) || (size_t)as_arr(v)->rows * as_arr(v)->cols != 2 || as_arr(v)->elt == ELT_COMPLEX)
+        runtime_error(I, "%s: %srange must be a 2-element vector [lo, hi]", who, axis);
+    double lo = as_double(arr_get(as_arr(v), 0)), hi = as_double(arr_get(as_arr(v), 1));
+    if (!(lo < hi)) runtime_error(I, "%s: %srange needs lo < hi", who, axis);
+}
+static void gp_check_opts(Interp *I, Value opts, const char *who)
+{
+    if (opts.kind != VAL_RECORD) return;
+    RecObj *o = as_rec(opts);
+    Value v;
+    if ((v = rec_field(o, "xrange")).kind != VAL_NULL) gp_check_range(I, v, "x", who);
+    if ((v = rec_field(o, "yrange")).kind != VAL_NULL) gp_check_range(I, v, "y", who);
+    for (uint32_t i = 0; i < o->count; i++) {          /* label / label1..labelN */
+        const char *k = o->keys[i];
+        uint32_t kl = o->keylens[i];
+        if (kl >= 5 && memcmp(k, "label", 5) == 0) {
+            bool numeric_tail = true;
+            for (uint32_t j = 5; j < kl; j++)
+                if (k[j] < '0' || k[j] > '9') { numeric_tail = false; break; }
+            if (numeric_tail && o->vals[i].kind != VAL_STRING)
+                runtime_error(I, "%s: %.*s must be a string", who, (int)kl, k);
+        }
+    }
+}
+
+/* Legend label for series k (1-based): labelK, else label (k == 1), else null. */
+static Value gp_label(RecObj *o, uint32_t k)
+{
+    Value la = rec_field(o, "labels");             /* {labels = ["a", "b", ...]} */
+    if (la.kind == VAL_ARRAY && as_arr(la)->elt == ELT_STRING
+        && k >= 1 && (size_t)k <= (size_t)as_arr(la)->rows * as_arr(la)->cols)
+        return arr_get(as_arr(la), (size_t)k - 1);
+    char key[16];
+    snprintf(key, sizeof key, "label%u", k);
+    Value v = rec_field(o, key);
+    if (v.kind == VAL_STRING) return v;
+    if (k == 1) {
+        v = rec_field(o, "label");
+        if (v.kind == VAL_STRING) return v;
+    }
+    return val_null();
+}
+
+/* Shared options record for plot/hist: title, xlabel, ylabel (strings);
+ * logx, logy, grid (booleans); xrange, yrange ([lo, hi] vectors). */
+static void gp_opts(Interp *I, FILE *g, Value opts)
+{
+    if (opts.kind != VAL_RECORD) return;
+    RecObj *o = as_rec(opts);
+    Value v;
+    if ((v = rec_field(o, "title")).kind == VAL_STRING)  { fputs("set title ", g);  gp_qstr(g, as_str(v)->data, as_str(v)->len); fputc('\n', g); }
+    if ((v = rec_field(o, "xlabel")).kind == VAL_STRING) { fputs("set xlabel ", g); gp_qstr(g, as_str(v)->data, as_str(v)->len); fputc('\n', g); }
+    if ((v = rec_field(o, "ylabel")).kind == VAL_STRING) { fputs("set ylabel ", g); gp_qstr(g, as_str(v)->data, as_str(v)->len); fputc('\n', g); }
+    if ((v = rec_field(o, "logx")).kind == VAL_BOOL && v.as.b) fputs("set logscale x\n", g);
+    if ((v = rec_field(o, "logy")).kind == VAL_BOOL && v.as.b) fputs("set logscale y\n", g);
+    if ((v = rec_field(o, "grid")).kind == VAL_BOOL && v.as.b) fputs("set grid\n", g);
+    if ((v = rec_field(o, "xrange")).kind != VAL_NULL) gp_range(I, g, "x", v, "plot");
+    if ((v = rec_field(o, "yrange")).kind != VAL_NULL) gp_range(I, g, "y", v, "plot");
+}
+
+/* plot(y) | plot(x, y) | plot(x, Y) — trailing string = style, trailing
+ * record = {title, xlabel, ylabel, style, logx, logy, grid}. Y's columns
+ * are separate series when Y is a matrix with matching rows. */
+static Value bi_plot(Interp *I, Value *args, uint32_t n)
+{
+    Value opts = val_null(); const char *style = "lines"; uint32_t style_len = 5;
+    if (n >= 2 && args[n-1].kind == VAL_STRING) {
+        StrObj *s = as_str(args[n-1]);
+        style = s->data; style_len = s->len; n--;
+    } else if (n >= 2 && args[n-1].kind == VAL_RECORD) {
+        opts = args[n-1]; n--;
+        Value sv = rec_field(as_rec(opts), "style");
+        if (sv.kind == VAL_STRING) { style = as_str(sv)->data; style_len = as_str(sv)->len; }
+        else if (sv.kind != VAL_NULL) runtime_error(I, "plot: style must be a string");
+    }
+    if (n < 1 || n > 2) runtime_error(I, "plot: usage plot(y), plot(x, y), plot(x, Y[, style-or-opts])");
+
+    ArrObj *X = nullptr, *Y;                      /* Y may be a matrix: columns are series */
+    if (n == 2) X = want_vec(I, args[0], "plot");
+    Value yv = args[n-1];
+    if (!is_array(yv)) runtime_error(I, "plot: expected numeric data, got %s", type_name(yv.kind));
+    Y = as_arr(yv);
+    if (Y->elt == ELT_COMPLEX) runtime_error(I, "plot: complex data is not plottable directly");
+    if (Y->elt == ELT_STRING) runtime_error(I, "plot: undefined for strings");
+    if ((size_t)Y->rows * Y->cols == 0) runtime_error(I, "plot: empty data");
+
+    bool yvec = (Y->rows == 1 || Y->cols == 1);
+    uint32_t npts   = yvec ? Y->rows * Y->cols : Y->rows;
+    uint32_t nser   = yvec ? 1 : Y->cols;
+    if (X) {
+        uint32_t xn = X->rows * X->cols;
+        if (xn != npts) runtime_error(I, "plot: x has %u points but y has %u", xn, npts);
+    }
+
+    gp_check_opts(I, opts, "plot");
+    if (plot_is_svg())   { svg_plot_render(I, X, Y, yvec, npts, nser, opts); return val_null(); }
+    if (plot_is_ascii()) { ascii_plot_render(I, X, Y, yvec, npts, nser, opts); return val_null(); }
+    FILE *g = gp_open(I);
+    gp_opts(I, g, opts);
+    fputs("plot ", g);
+    for (uint32_t s = 0; s < nser; s++) {
+        if (s) fputs(", ", g);
+        Value lv = (opts.kind == VAL_RECORD) ? gp_label(as_rec(opts), s + 1) : val_null();
+        fprintf(g, "'-' using 1:2 with %.*s title ", (int)style_len, style);
+        if (lv.kind == VAL_STRING) gp_qstr(g, as_str(lv)->data, as_str(lv)->len);
+        else fprintf(g, "\"series %u\"", s + 1);
+    }
+    fputc('\n', g);
+    for (uint32_t s = 0; s < nser; s++) {         /* one inline data block per series */
+        for (uint32_t k = 0; k < npts; k++) {
+            double x = X ? as_double(arr_get(X, k)) : (double)(k + 1);
+            double y = yvec ? as_double(arr_get(Y, k))
+                            : as_double(arr_get(Y, (size_t)k * Y->cols + s));
+            fprintf(g, "%.17g %.17g\n", x, y);
+        }
+        fputs("e\n", g);
+    }
+    gp_close(I, g);
+    return val_null();
+}
+
+/* hist(y[, nbins]) — histogram with boxes; default bin count by Sturges. */
+static Value bi_hist(Interp *I, Value *args, uint32_t n)
+{
+    if (is_array(args[0]) && as_arr(args[0])->elt == ELT_STRING)
+        runtime_error(I, "hist: undefined for strings");
+    Value opts = val_null();
+    if (n >= 2 && args[n-1].kind == VAL_RECORD) { opts = args[n-1]; n--; }
+    gp_check_opts(I, opts, "hist");                    /* before any allocation */
+    ArrObj *Y = want_vec(I, args[0], "hist");
+    size_t nn = (size_t)Y->rows * Y->cols;
+    int64_t nb = n >= 2 ? as_count(I, args[1], "hist") : (int64_t)(1.0 + log2((double)nn)) ;
+    if (nb < 1 || nb > 100000) runtime_error(I, "hist: bin count out of range");
+    double lo = as_double(arr_get(Y, 0)), hi = lo;
+    for (size_t k = 1; k < nn; k++) {
+        double v = as_double(arr_get(Y, k));
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    if (hi == lo) { lo -= 0.5; hi += 0.5; }
+    double w = (hi - lo) / (double)nb;
+    uint64_t *cnt = calloc((size_t)nb, sizeof *cnt);
+    for (size_t k = 0; k < nn; k++) {
+        double v = as_double(arr_get(Y, k));
+        int64_t b = (int64_t)((v - lo) / w);
+        if (b < 0) b = 0;
+        if (b >= nb) b = nb - 1;
+        cnt[b]++;
+    }
+    if (plot_is_svg())   { svg_hist_render(I, lo, w, nb, cnt, opts); free(cnt); return val_null(); }
+    if (plot_is_ascii()) { ascii_hist_render(vout(), lo, w, nb, cnt, opts); free(cnt); return val_null(); }
+    FILE *g = gp_open(I);
+    Value hlv = (opts.kind == VAL_RECORD) ? gp_label(as_rec(opts), 1) : val_null();
+    fputs("plot '-' using 1:2 with boxes title ", g);
+    if (hlv.kind == VAL_STRING) gp_qstr(g, as_str(hlv)->data, as_str(hlv)->len);
+    else fputs("\"hist\"", g);
+    fputc('\n', g);
+    for (int64_t b = 0; b < nb; b++)
+        fprintf(g, "%.17g %llu\n", lo + (b + 0.5) * w, (unsigned long long)cnt[b]);
+    fputs("e\n", g);
+    free(cnt);
+    gp_close(I, g);
+    return val_null();
+}
+
+static Value bi_system(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_STRING)
+        runtime_error(I, "system: expected a command string, got %s", type_name(args[0].kind));
+    StrObj *s = as_str(args[0]);
+    char *cmd = malloc((size_t)s->len + 1);
+    if (!cmd) runtime_error(I, "system: out of memory");
+    memcpy(cmd, s->data, s->len);
+    cmd[s->len] = '\0';
+    fflush(stdout); fflush(vout()); fflush(stderr);  /* flush before the child writes to fd 1 */
+    int rc = system(cmd);
+    free(cmd);
+    if (rc == -1) runtime_error(I, "system: could not start a shell");
+    int code = WIFEXITED(rc) ? WEXITSTATUS(rc) : WIFSIGNALED(rc) ? 128 + WTERMSIG(rc) : rc;
+    return val_int(code);
+}
+
+static void who_describe(FILE *out, Value v)        /* compact type + shape/value column */
+{
+    switch (v.kind) {
+    case VAL_BOOL:    fprintf(out, "bool       = %s", v.as.b ? "true" : "false"); break;
+    case VAL_INT:     fprintf(out, "int        = %lld", (long long)v.as.i); break;
+    case VAL_FLOAT:   fprintf(out, "float      = %g", v.as.f); break;
+    case VAL_COMPLEX: fprintf(out, "complex    = %g%+gi", v.as.z.re, v.as.z.im); break;
+    case VAL_STRING:  fprintf(out, "string     (%u chars)", as_str(v)->len); break;
+    case VAL_ARRAY: {
+        ArrObj *a = as_arr(v);
+        fprintf(out, "array      %ux%u %s", a->rows, a->cols, elt_name(a->elt));
+        break;
+    }
+    case VAL_RECORD:  fprintf(out, "record     (%u field%s)", as_rec(v)->count, as_rec(v)->count == 1 ? "" : "s"); break;
+    case VAL_CLOSURE: fprintf(out, "function   (%u param%s)", as_clo(v)->chunk->nparams, as_clo(v)->chunk->nparams == 1 ? "" : "s"); break;
+    case VAL_BUILTIN: fprintf(out, "builtin"); break;
+    default:          fputs(type_name(v.kind), out); break;
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* string builtins (Phase 1: scalar strings; byte semantics)           */
+/* ------------------------------------------------------------------ */
+
+static StrObj *want_strobj(Interp *I, Value v, const char *who)
+{
+    if (v.kind != VAL_STRING) runtime_error(I, "%s: expected a string, got %s", who, type_name(v.kind));
+    return as_str(v);
+}
+
+static Value bi_upper(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "upper");
+    char *b = malloc(s->len ? s->len : 1);
+    if (!b) runtime_error(I, "out of memory");
+    for (uint32_t i = 0; i < s->len; i++)
+        b[i] = (s->data[i] >= 'a' && s->data[i] <= 'z') ? s->data[i] - 32 : s->data[i];
+    Value r = val_string(b, s->len); free(b); return r;
+}
+
+static Value bi_lower(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "lower");
+    char *b = malloc(s->len ? s->len : 1);
+    if (!b) runtime_error(I, "out of memory");
+    for (uint32_t i = 0; i < s->len; i++)
+        b[i] = (s->data[i] >= 'A' && s->data[i] <= 'Z') ? s->data[i] + 32 : s->data[i];
+    Value r = val_string(b, s->len); free(b); return r;
+}
+
+static bool str_isspace(char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
+
+static Value bi_trim(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "trim");
+    uint32_t a = 0, b = s->len;
+    while (a < b && str_isspace(s->data[a])) a++;
+    while (b > a && str_isspace(s->data[b - 1])) b--;
+    return val_string(s->data + a, b - a);
+}
+
+/* naive substring search (memmem is not portable) */
+static int64_t str_find(const char *hay, uint32_t hn, const char *nee, uint32_t nn)
+{
+    if (nn == 0 || nn > hn) return -1;
+    for (uint32_t i = 0; i + nn <= hn; i++)
+        if (memcmp(hay + i, nee, nn) == 0) return (int64_t)i;
+    return -1;
+}
+
+static Value bi_contains(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "contains"), *sub = want_strobj(I, args[1], "contains");
+    return val_bool(str_find(s->data, s->len, sub->data, sub->len) >= 0);
+}
+
+static Value bi_startswith(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "startswith"), *p = want_strobj(I, args[1], "startswith");
+    return val_bool(p->len <= s->len && memcmp(s->data, p->data, p->len) == 0);
+}
+
+static Value bi_endswith(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "endswith"), *p = want_strobj(I, args[1], "endswith");
+    return val_bool(p->len <= s->len && memcmp(s->data + s->len - p->len, p->data, p->len) == 0);
+}
+
+static Value bi_strrep(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "strrep"), *from = want_strobj(I, args[1], "strrep"),
+           *to = want_strobj(I, args[2], "strrep");
+    if (from->len == 0) runtime_error(I, "strrep: the pattern to replace cannot be empty");
+    char *buf = nullptr; size_t blen = 0;
+    FILE *ms = open_memstream(&buf, &blen);
+    if (!ms) runtime_error(I, "out of memory");
+    uint32_t i = 0;
+    while (i < s->len) {
+        if (i + from->len <= s->len && memcmp(s->data + i, from->data, from->len) == 0) {
+            fwrite(to->data, 1, to->len, ms);
+            i += from->len;
+        } else fputc(s->data[i++], ms);
+    }
+    fclose(ms);
+    Value r = val_string(buf, (uint32_t)blen);
+    free(buf);
+    return r;
+}
+
+/* str(x): the display text of any value, as a string. */
+static Value bi_str(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n;
+    if (args[0].kind == VAL_STRING) return value_retain(args[0]);
+    char *buf = nullptr; size_t blen = 0;
+    FILE *ms = open_memstream(&buf, &blen);
+    if (!ms) runtime_error(I, "out of memory");
+    value_print(ms, args[0]);
+    fclose(ms);
+    Value r = val_string(buf, (uint32_t)blen);
+    free(buf);
+    return r;
+}
+
+/* num(s): parse a string as Int (preferred) or Float; whole string must parse. */
+static Value bi_num(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "num");
+    char tmp[64];
+    uint32_t a = 0, b = s->len;
+    while (a < b && str_isspace(s->data[a])) a++;
+    while (b > a && str_isspace(s->data[b - 1])) b--;
+    if (b - a == 0 || b - a >= sizeof tmp)
+        runtime_error(I, "num: not a number: \"%.*s\"", (int)s->len, s->data);
+    memcpy(tmp, s->data + a, b - a); tmp[b - a] = '\0';
+    char *endp;
+    errno = 0;
+    long long iv = strtoll(tmp, &endp, 10);
+    if (*endp == '\0' && errno == 0) return val_int((int64_t)iv);
+    errno = 0;
+    double dv = strtod(tmp, &endp);
+    if (*endp == '\0' && errno == 0) return val_float(dv);
+    runtime_error(I, "num: not a number: \"%.*s\"", (int)s->len, s->data);
+}
+
+/* fmt(template, ...): print's template engine, captured into a string. */
+static Value bi_print(Interp *I, Value *args, uint32_t n);
+
+static Value bi_fmt(Interp *I, Value *args, uint32_t n)
+{
+    char *buf = nullptr; size_t blen = 0;
+    FILE *prev = vout();
+    FILE *ms = open_memstream(&buf, &blen);
+    if (!ms) runtime_error(I, "out of memory");
+    value_set_out(ms);
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {                       /* bad template: restore out, free, re-raise */
+        value_set_out(prev);
+        fclose(ms); free(buf);
+        memcpy(I->jmp, saved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
+    }
+    Value r = bi_print(I, args, n);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    value_release(r);
+    value_set_out(prev);
+    fclose(ms);
+    uint32_t out_len = (uint32_t)blen;
+    if (out_len && buf[out_len - 1] == '\n') out_len--;   /* drop print's newline */
+    Value rs = val_string(buf, out_len);
+    free(buf);
+    return rs;
+}
+
+/* error(msg) / error(tmpl, ...): raise a runtime error from Neutrino code.
+ * Uses fmt's templating, so packages validate like builtins do. */
+static Value bi_error(Interp *I, Value *args, uint32_t n)
+{
+    Value m = bi_fmt(I, args, n);
+    char buf[240];
+    StrObj *sv = as_str(m);
+    snprintf(buf, sizeof buf, "%.*s", (int)sv->len, sv->data);
+    value_release(m);
+    runtime_error(I, "%s", buf);
+}
+
+/* assert(cond) / assert(cond, tmpl, ...): error unless cond is true. */
+static Value bi_assert(Interp *I, Value *args, uint32_t n)
+{
+    if (args[0].kind != VAL_BOOL)
+        runtime_error(I, "assert: the condition must be a Bool, got %s", type_name(args[0].kind));
+    if (args[0].as.b) return val_null();
+    if (n > 1) return bi_error(I, args + 1, n - 1);
+    runtime_error(I, "assertion failed");
+}
+
+static Value bi_strsplit(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *sv = want_strobj(I, args[0], "strsplit"), *sep = want_strobj(I, args[1], "strsplit");
+    if (sep->len == 0) runtime_error(I, "strsplit: the separator cannot be empty");
+    uint32_t pieces = 1;
+    for (uint32_t i = 0; i + sep->len <= sv->len; )
+        if (memcmp(sv->data + i, sep->data, sep->len) == 0) { pieces++; i += sep->len; }
+        else i++;
+    Value out = val_array(ELT_STRING, 1, pieces);
+    uint32_t start = 0, k = 0;
+    for (uint32_t i = 0; i + sep->len <= sv->len; ) {
+        if (memcmp(sv->data + i, sep->data, sep->len) == 0) {
+            Value piece = val_string(sv->data + start, i - start);
+            arr_set(as_arr(out), k++, piece); value_release(piece);
+            i += sep->len; start = i;
+        } else i++;
+    }
+    Value last = val_string(sv->data + start, sv->len - start);
+    arr_set(as_arr(out), k, last); value_release(last);
+    return out;
+}
+
+static Value bi_strjoin(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind == VAL_STRING) return value_retain(args[0]);
+    if (!is_array(args[0]) || as_arr(args[0])->elt != ELT_STRING)
+        runtime_error(I, "strjoin: expected a string array, got %s",
+                      is_array(args[0]) ? elt_name(as_arr(args[0])->elt) : type_name(args[0].kind));
+    StrObj *sep = want_strobj(I, args[1], "strjoin");
+    ArrObj *a = as_arr(args[0]);
+    size_t cells = (size_t)a->rows * a->cols;
+    char *buf = nullptr; size_t blen = 0;
+    FILE *ms = open_memstream(&buf, &blen);
+    if (!ms) runtime_error(I, "out of memory");
+    for (size_t k = 0; k < cells; k++) {
+        if (k) fwrite(sep->data, 1, sep->len, ms);
+        StrObj *e = as_str(arr_get(a, k));
+        fwrite(e->data, 1, e->len, ms);
+    }
+    fclose(ms);
+    Value r = val_string(buf, (uint32_t)blen);
+    free(buf);
+    return r;
+}
+
+/* fields(r): the record's field names, as a string column (composable). */
+#include <unistd.h>
+#include <dirent.h>
+#include <glob.h>
+#include <errno.h>
+
+/* pwd(): the current working directory, as a string. */
+static Value bi_pwd(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    char buf[4096];
+    if (!getcwd(buf, sizeof buf))
+        runtime_error(I, "pwd: %s", strerror(errno));
+    return val_string(buf, (uint32_t)strlen(buf));
+}
+
+/* cd(dir) / cd(): change the working directory (persists, unlike !cd);
+ * with no argument, go to $HOME. Returns the new directory. */
+static Value bi_cd(Interp *I, Value *args, uint32_t n)
+{
+    const char *dst;
+    char tmp[4096];
+    if (n == 0) {
+        dst = getenv("HOME");
+        if (!dst) runtime_error(I, "cd: $HOME is not set");
+    } else {
+        StrObj *sv = want_strobj(I, args[0], "cd");
+        if (sv->len >= sizeof tmp) runtime_error(I, "cd: path too long");
+        memcpy(tmp, sv->data, sv->len); tmp[sv->len] = 0;
+        dst = tmp;
+    }
+    if (chdir(dst) != 0)
+        runtime_error(I, "cd: %s: %s", dst, strerror(errno));
+    return bi_pwd(I, nullptr, 0);
+}
+
+static int ls_cmp(const void *a, const void *b)
+{
+    return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+
+/* ls() / ls(dir) / ls(pattern): names in a directory (dotfiles skipped),
+ * or glob matches if the argument contains a wildcard. A string array,
+ * so the listing is a value: ls("packages") ~> load. */
+static Value bi_ls(Interp *I, Value *args, uint32_t n)
+{
+    char pat[4096];
+    const char *arg = ".";
+    if (n == 1) {
+        StrObj *sv = want_strobj(I, args[0], "ls");
+        if (sv->len >= sizeof pat) runtime_error(I, "ls: path too long");
+        memcpy(pat, sv->data, sv->len); pat[sv->len] = 0;
+        arg = pat;
+    }
+    char **names = nullptr;
+    uint32_t cnt = 0, cap = 0;
+    if (strpbrk(arg, "*?[")) {
+        glob_t g;
+        int rc = glob(arg, 0, nullptr, &g);
+        if (rc != 0 && rc != GLOB_NOMATCH)
+            runtime_error(I, "ls: glob failed for %s", arg);
+        for (size_t i = 0; rc == 0 && i < g.gl_pathc; i++) {
+            if (cnt == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, cap * sizeof *names); }
+            names[cnt++] = strdup(g.gl_pathv[i]);
+        }
+        if (rc == 0) globfree(&g);
+    } else {
+        DIR *d = opendir(arg);
+        if (!d) runtime_error(I, "ls: %s: %s", arg, strerror(errno));
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            if (e->d_name[0] == '.') continue;
+            if (cnt == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, cap * sizeof *names); }
+            names[cnt++] = strdup(e->d_name);
+        }
+        closedir(d);
+    }
+    qsort(names, cnt, sizeof *names, ls_cmp);
+    Value out = val_array(ELT_STRING, cnt, cnt ? 1 : 0);
+    for (uint32_t i = 0; i < cnt; i++) {
+        Value sv = val_string(names[i], (uint32_t)strlen(names[i]));
+        arr_set(as_arr(out), i, sv);
+        value_release(sv);
+        free(names[i]);
+    }
+    free(names);
+    return out;
+}
+
+static Value bi_fields(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_RECORD)
+        runtime_error(I, "fields: expected a record, got %s", type_name(args[0].kind));
+    RecObj *r = as_rec(args[0]);
+    Value out = val_array(ELT_STRING, r->count, r->count ? 1 : 0);
+    for (uint32_t i = 0; i < r->count; i++) {
+        Value sv = val_string(r->keys[i], r->keylens[i]);
+        arr_set(as_arr(out), i, sv);
+        value_release(sv);
+    }
+    return out;
+}
+
+#include <time.h>
+#include "version.h"
+
+/* version(): the interpreter version as a string. */
+static Value bi_version(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)args; (void)n;
+    return val_string(NEUTRINO_VERSION, (uint32_t)strlen(NEUTRINO_VERSION));
+}
+
+/* Build introspection (design entry 2): a production tool whose user cannot
+ * tell Accelerate from the fallback kernels is not verifiable. `backend` is
+ * the linked LinalgKernels table's name; `built` embeds compile date/time,
+ * so goldens assert structure, never contents. */
+static Value bi_buildinfo(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)args; (void)n;
+    const char *b = cozy_linalg()->name;
+    return record3("backend", val_string(b, (uint32_t)strlen(b)),
+                   "version", val_string(NEUTRINO_VERSION, (uint32_t)strlen(NEUTRINO_VERSION)),
+                   "built",   val_string(NEUTRINO_BUILT, (uint32_t)strlen(NEUTRINO_BUILT)));
+}
+
+/* now(): the current local date and time as {y, m, d, h, mi, s}. */
+static Value bi_now(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)args; (void)n;
+    time_t t = time(nullptr);
+    struct tm tmv;
+    localtime_r(&t, &tmv);
+    Value r = val_record(6); RecObj *o = as_rec(r);
+    static const char *K[6] = { "y", "m", "d", "h", "mi", "s" };
+    int64_t V[6] = { tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+                     tmv.tm_hour, tmv.tm_min, tmv.tm_sec };
+    for (uint32_t i = 0; i < 6; i++) {
+        o->keys[i] = K[i]; o->keylens[i] = (uint32_t)strlen(K[i]);
+        o->vals[i] = val_int(V[i]);
+    }
+    return r;
+}
+
+/* name comparator over global slots, for who("sorted") */
+static EnvObj *g_who_env;
+static int who_name_cmp(const void *x, const void *y)
+{
+    uint32_t a = *(const uint32_t *)x, b = *(const uint32_t *)y;
+    uint32_t la = g_who_env->namelens[a], lb = g_who_env->namelens[b];
+    uint32_t m = la < lb ? la : lb;
+    int c = memcmp(g_who_env->names[a], g_who_env->names[b], m);
+    return c ? c : (la > lb) - (la < lb);
+}
+
+/* who | who("records"|"functions"|"vars") | who(..., "sorted") — list the
+ * workspace, optionally filtered by kind and sorted by name. */
+/* REPL-command stand-ins: in the interactive REPL these names are handled
+ * before evaluation; as builtins they resolve for help(), the tour, and tab
+ * completion, and give a useful hint when called outside the REPL. */
+static Value bi_repl_hint(Interp *I, const char *what)
+{
+    (void)I;
+    fprintf(vout(), "%s is an interactive REPL command — start ./neutrino and type it at the prompt\n", what);
+    return val_null();
+}
+static Value bi_exit(Interp *I, Value *args, uint32_t n)
+{
+    (void)I;
+    int code = (n >= 1 && args[0].kind == VAL_INT) ? (int)args[0].as.i : 0;
+    fflush(vout());
+    exit(code);
+}
+
+static Value bi_manual_stub(Interp *I, Value *args, uint32_t n) { (void)args; (void)n; return bi_repl_hint(I, "manual"); }
+static Value bi_pretty_stub(Interp *I, Value *args, uint32_t n) { (void)args; (void)n; return bi_repl_hint(I, "pretty"); }
+static Value bi_more_stub(Interp *I, Value *args, uint32_t n)   { (void)args; (void)n; return bi_repl_hint(I, "more"); }
+
+enum WhoKind { W_ALL, W_REC, W_FN, W_VAR };
+
+static Value who_impl(Interp *I, enum WhoKind kind, bool sorted);
+static Value who_impl2(Interp *I, enum WhoKind kind, bool sorted, int group);
+
+static Value bi_who(Interp *I, Value *args, uint32_t n)
+{
+    enum WhoKind kind = W_ALL;
+    bool sorted = false;
+    int group = -1, gi;
+    for (uint32_t i = 0; i < n; i++) {
+        StrObj *sv = want_strobj(I, args[i], "who");
+        if      (sv->len == 7  && !memcmp(sv->data, "records",   7))  kind = W_REC;
+        else if (sv->len == 9  && !memcmp(sv->data, "functions", 9))  kind = W_FN;
+        else if (sv->len == 4  && !memcmp(sv->data, "vars",      4))  kind = W_VAR;
+        else if (sv->len == 6  && !memcmp(sv->data, "sorted",    6))  sorted = true;
+        else if (sv->len == 3  && !memcmp(sv->data, "all",       3))  group = -2;
+        else if ((gi = lg_find(sv->data, sv->len)) >= 0)              group = gi;
+        else runtime_error(I, "who: unknown selector \"%.*s\" "
+                              "(try \"records\", \"functions\", \"vars\", \"sorted\", "
+                              "\"all\", or a loaded package name)",
+                           (int)sv->len, sv->data);
+    }
+    if (kind != W_ALL && group == -1) group = -2;   /* kind filters stay flat */
+    return who_impl2(I, kind, sorted, group);
+}
+
+/* whov/whof/whor: filtered who; whos: everything, sorted. Each shorthand
+ * accepts an optional "sorted". */
+static bool who_arg_sorted(Interp *I, Value *args, uint32_t n, const char *cmd)
+{
+    if (n == 0) return false;
+    StrObj *sv = want_strobj(I, args[0], cmd);
+    if (sv->len == 6 && !memcmp(sv->data, "sorted", 6)) return true;
+    runtime_error(I, "%s: the only selector is \"sorted\"", cmd);
+    return false;
+}
+static Value bi_whov(Interp *I, Value *args, uint32_t n) { return who_impl(I, W_VAR, who_arg_sorted(I, args, n, "whov")); }
+static Value bi_whof(Interp *I, Value *args, uint32_t n) { return who_impl(I, W_FN,  who_arg_sorted(I, args, n, "whof")); }
+static Value bi_whor(Interp *I, Value *args, uint32_t n) { return who_impl(I, W_REC, who_arg_sorted(I, args, n, "whor")); }
+static Value bi_whos(Interp *I, Value *args, uint32_t n) { (void)args; (void)n; return who_impl(I, W_ALL, true); }
+
+/* group: -1 = grouped default view; -2 = flat (kind filters, "all");
+ * >= 0 = list only that load group's members. */
+static Value who_impl2(Interp *I, enum WhoKind kind, bool sorted, int group)
+{
+    EnvObj *g = I->globals;
+    uint32_t *sel = nullptr, nsel = 0;
+    size_t ngroupline = 0;
+    if (g) {
+        if (group == -1)                          /* shelf summaries first */
+            for (size_t gi = 0; gi < g_nlg; gi++) {
+                size_t live = lg_live(I, &g_lg[gi]);
+                if (!live) continue;
+                fprintf(vout(), "  %-22s %3zu names   (who(\"%s\") to list)\n",
+                        g_lg[gi].path, live, g_lg[gi].shortn);
+                ngroupline++;
+            }
+        sel = malloc(g->count * sizeof *sel);
+        if (!sel) runtime_error(I, "out of memory");
+        for (uint32_t i = 0; i < g->count; i++) {
+        if (i < g->n_protected) continue;   /* standard library: not workspace */
+            if (group == -1 && lg_claimed_from(0, g->names[i], g->namelens[i]))
+                continue;                       /* shelved: summary covers it */
+            if (group >= 0 && !lg_has(&g_lg[group], g->names[i], g->namelens[i]))
+                continue;
+            ValueKind k = g->vals[i].kind;
+            /* a VAL_BUILTIN here is a user alias (let v = version): the
+             * protected region is already skipped, so list it — under
+             * functions, where it belongs (the invisible-alias bug). */
+            bool take = kind == W_ALL
+                     || (kind == W_REC && k == VAL_RECORD)
+                     || (kind == W_FN  && (k == VAL_CLOSURE || k == VAL_BUILTIN))
+                     || (kind == W_VAR && k != VAL_RECORD && k != VAL_CLOSURE && k != VAL_BUILTIN);
+            if (take) sel[nsel++] = i;
+        }
+        if (sorted && nsel > 1) { g_who_env = g; qsort(sel, nsel, sizeof *sel, who_name_cmp); }
+        for (uint32_t j = 0; j < nsel; j++) {
+            uint32_t i = sel[j];
+            fprintf(vout(), "  %-12.*s ", (int)g->namelens[i], g->names[i]);
+            who_describe(vout(), g->vals[i]);
+            fputc('\n', vout());
+        }
+        free(sel);
+    }
+    if (!nsel && !ngroupline) fputs(kind == W_ALL ? "(no variables defined)\n" : "(none match)\n", vout());
+    return val_null();
+}
+static Value who_impl(Interp *I, enum WhoKind kind, bool sorted)
+{   return who_impl2(I, kind, sorted, -2); }    /* shorthands stay flat */
+
+/* clear() removes all user variables; clear("a", "b") removes those named.
+ * Builtin bindings are invisible to clear, exactly as they are to who. */
+/* keep("a", "b", ...): remove every user variable EXCEPT the named ones —
+ * the complement of clear, composed from the same machinery (who's
+ * iteration over the user region, clear's removal). Standard-library
+ * slots are untouched, exactly as with clear. */
+static Value bi_keep(Interp *I, Value *args, uint32_t n)
+{
+    EnvObj *g = I->globals;
+    for (uint32_t k = 0; k < n; k++) {              /* validate all names first */
+        if (args[k].kind != VAL_STRING)
+            runtime_error(I, "keep: expected variable names as strings");
+        StrObj *s = as_str(args[k]);
+        bool found = false;
+        for (uint32_t i = g->n_protected; i < g->count; i++)
+            if (g->namelens[i] == s->len && memcmp(g->names[i], s->data, s->len) == 0)
+                { found = true; break; }
+        if (!found)
+            runtime_error(I, "keep: no such variable '%.*s'", (int)s->len, s->data);
+    }
+    uint32_t w = g->n_protected;
+    for (uint32_t i = g->n_protected; i < g->count; i++) {
+        bool kept = false;
+        for (uint32_t k = 0; k < n && !kept; k++) {
+            StrObj *s = as_str(args[k]);
+            kept = (g->namelens[i] == s->len && memcmp(g->names[i], s->data, s->len) == 0);
+        }
+        if (kept) {
+            g->names[w] = g->names[i]; g->namelens[w] = g->namelens[i];
+            g->vals[w] = g->vals[i]; w++;
+        } else value_release(g->vals[i]);
+    }
+    g->count = w;
+    return val_null();
+}
+
+static Value bi_clear(Interp *I, Value *args, uint32_t n)
+{
+    EnvObj *g = I->globals;
+    if (!g) return val_null();
+    if (n == 0) {                                       /* clear everything user-defined */
+        for (uint32_t i = g->n_protected; i < g->count; i++)
+            value_release(g->vals[i]);
+        g->count = g->n_protected;                      /* shadows removed: originals resurface */
+        for (size_t gi = 0; gi < g_nlg; gi++) lg_free(&g_lg[gi]);
+        g_nlg = 0;                                      /* empty shelves go too */
+        return val_null();
+    }
+    for (uint32_t a = 0; a < n; a++) {
+        if (args[a].kind != VAL_STRING)
+            runtime_error(I, "clear: expected variable name strings, e.g. clear(\"a\")");
+        StrObj *s = as_str(args[a]);
+        bool found = false;
+        for (uint32_t i = g->n_protected; i < g->count; i++) {
+            if (g->namelens[i] == s->len && memcmp(g->names[i], s->data, s->len) == 0) {
+                value_release(g->vals[i]);
+                g->names[i] = g->names[g->count - 1];   /* swap-remove */
+                g->namelens[i] = g->namelens[g->count - 1];
+                g->vals[i] = g->vals[g->count - 1];
+                g->count--;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            int gi = lg_find(s->data, s->len);
+            if (gi < 0)
+                runtime_error(I, "clear: no such variable or loaded package '%.*s'",
+                              (int)s->len, s->data);
+            /* clear a shelf: remove every live member, then the shelf itself */
+            for (size_t m = 0; m < g_lg[gi].n; m++)
+                for (uint32_t i = g->n_protected; i < g->count; i++)
+                    if (g->namelens[i] == g_lg[gi].lens[m] &&
+                        !memcmp(g->names[i], g_lg[gi].names[m], g_lg[gi].lens[m])) {
+                        value_release(g->vals[i]);
+                        g->names[i]    = g->names[g->count - 1];
+                        g->namelens[i] = g->namelens[g->count - 1];
+                        g->vals[i]     = g->vals[g->count - 1];
+                        g->count--;
+                        break;
+                    }
+            lg_free(&g_lg[gi]);
+            memmove(&g_lg[gi], &g_lg[gi + 1], (g_nlg - gi - 1) * sizeof g_lg[0]);
+            g_nlg--;
+        }
+    }
+    return val_null();
+}
+
+/* Payload bytes of a value (arrays, strings, records, closures; scalars 0).
+ * Values are trees (no mutation of fields), so plain recursion is safe. */
+static size_t value_bytes(Value v)
+{
+    switch (v.kind) {
+    case VAL_ARRAY: {
+        ArrObj *a = as_arr(v);
+        size_t elt = a->elt == ELT_COMPLEX ? 16 : a->elt == ELT_BOOL ? 1 : 8;
+        return sizeof *a + (size_t)a->rows * a->cols * elt;
+    }
+    case VAL_STRING: return sizeof(StrObj) + as_str(v)->len;
+    case VAL_RECORD: {
+        RecObj *r = as_rec(v);
+        size_t b = sizeof *r;
+        for (uint32_t i = 0; i < r->count; i++) b += value_bytes(r->vals[i]);
+        return b;
+    }
+    case VAL_CLOSURE: {
+        CloObj *c = (CloObj *)v.as.obj;
+        size_t b = sizeof *c;
+        for (uint32_t i = 0; i < c->nupvalues; i++) b += value_bytes(c->upvalues[i]);
+        return b;
+    }
+    default: return 0;
+    }
+}
+
+static void fmt_bytes(FILE *out, double b)
+{
+    if (b >= 1024.0 * 1024.0 * 1024.0) fprintf(out, "%.1f GB", b / (1024.0 * 1024.0 * 1024.0));
+    else if (b >= 1024.0 * 1024.0)     fprintf(out, "%.1f MB", b / (1024.0 * 1024.0));
+    else if (b >= 1024.0)              fprintf(out, "%.1f KB", b / 1024.0);
+    else                               fprintf(out, "%.0f B", b);
+}
+
+static Value bi_mem(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    EnvObj *g = I->globals;
+    size_t ws = 0; uint32_t nvars = 0;
+    if (g)
+        for (uint32_t i = 0; i < g->count; i++)
+            if (g->vals[i].kind != VAL_BUILTIN) { ws += value_bytes(g->vals[i]); nvars++; }
+    fprintf(vout(), "  workspace: %u variable%s, ", nvars, nvars == 1 ? "" : "s");
+    fmt_bytes(vout(), (double)ws);
+    fputc('\n', vout());
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) == 0) {
+#ifdef __APPLE__
+        double rss = (double)ru.ru_maxrss;              /* bytes on macOS */
+#else
+        double rss = (double)ru.ru_maxrss * 1024.0;     /* kilobytes on Linux */
+#endif
+        fputs("  process:   peak ", vout());
+        fmt_bytes(vout(), rss);
+        fputs(" resident\n", vout());
+    }
+    return val_null();
+}
+
+static void help_arity(FILE *out, BuiltinObj *b)
+{
+    if (b->max_arity == UINT32_MAX)        fprintf(out, "%u or more arguments", b->min_arity);
+    else if (b->min_arity == b->max_arity) fprintf(out, "%u argument%s", b->min_arity, b->min_arity == 1 ? "" : "s");
+    else                                   fprintf(out, "%u to %u arguments", b->min_arity, b->max_arity);
+}
+
+static Value bi_help(Interp *I, Value *args, uint32_t n)
+{
+    (void)I;
+    if (n == 1) {
+        Value v = args[0];
+        if (v.kind == VAL_BUILTIN) {
+            BuiltinObj *b = as_blt(v);
+            const BuiltinDoc *d = builtin_info(b->name);
+            fprintf(vout(), "  %s\n", d ? d->sig : b->name);
+            if (d) fprintf(vout(), "      %s\n", d->desc);
+            fprintf(vout(), "      builtin, ");
+            help_arity(vout(), b);
+            fputc('\n', vout());
+            if (d && d->ex && d->ex[0]) {
+                const char *p = d->ex;
+                bool first = true;
+                while (*p) {
+                    const char *nl = strchr(p, '\n');
+                    size_t len = nl ? (size_t)(nl - p) : strlen(p);
+                    fprintf(vout(), "      %s", first ? "e.g.  " : "      ");
+                    for (size_t i = 0; i < len; i++) {      /* '%=' is the verifier marker; show '%' */
+                        if (p[i] == '%' && i + 1 < len && p[i+1] == '=') { fputc('%', vout()); i++; }
+                        else fputc(p[i], vout());
+                    }
+                    fputc('\n', vout());
+                    first = false;
+                    p += len + (nl ? 1 : 0);
+                }
+            }
+        } else if (v.kind == VAL_CLOSURE) {
+            uint32_t np = as_clo(v)->chunk->nparams;
+            fprintf(vout(), "  a function you defined, taking %u argument%s\n", np, np == 1 ? "" : "s");
+        } else if (v.kind == VAL_ARRAY) {
+            ArrObj *a = as_arr(v);
+            fprintf(vout(), "  a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));
+        } else {
+            fprintf(vout(), "  a %s value\n", type_name(v.kind));
+        }
+        return val_null();
+    }
+
+    /* help() — grouped catalogue of builtins, then a language cheat-sheet */
+    static const struct { const char *cat, *label; } groups[] = {
+        { "core",    "core" },        { "make",    "constructors" }, { "reduce",  "reductions" },
+        { "array",   "arrays" },      { "string",  "strings" },      { "math",    "math" },
+        { "trig",    "trigonometry" },{ "complex", "complex" },      { "linalg",  "linear algebra" },
+        { "solve",   "solvers" },     { "io",      "data files" },   { "plot",    "plotting" },
+        { "random",  "random" },      { "test",    "predicates" },   { "hof",     "higher-order" },
+        { "repl",    "repl commands" },
+    };
+    fputs("Neutrino builtins  —  help(name) for detail, e.g. help(svd)\n\n", vout());
+    for (size_t gi = 0; gi < sizeof groups / sizeof *groups; gi++) {
+        fprintf(vout(), "  %-15s", groups[gi].label);
+        int col = 0;
+        for (size_t i = 0; i < n_builtin_docs; i++) {
+            if (strcmp(builtin_docs[i].cat, groups[gi].cat) != 0) continue;
+            if (col && col % 8 == 0) fprintf(vout(), "\n  %-15s", "");
+            fprintf(vout(), " %s", builtin_docs[i].name);
+            col++;
+        }
+        fputc('\n', vout());
+    }
+    fputs("\nLanguage\n", vout());
+    fputs("  let x = v              bind a variable;  x = v reassigns an existing one\n", vout());
+    fputs("  fn x -> expr           a function;  call f(x),  pipe  x |> f  or  x |> f(@)\n", vout());
+    fputs("  if c then a else b end   for i = 1:n do .. end   while c do .. end\n", vout());
+    fputs("  break  continue  return [v]    inside loops / functions\n", vout());
+    fputs("  let x = v in expr      local binding (an expression)\n", vout());
+    fputs("  A[i] / A[i, j] / A[:]  indexing (1-based; 'end' is the last index)\n", vout());
+    fputs("  # comment    trailing ; hides a line's result\n", vout());
+    fputs("  format short|long|\"short e\"   number display     more on|off   paging (REPL)\n", vout());
+    fputs("  pretty on|off   aligned multi-line matrices (REPL)\n", vout());
+    fputs("  manual [doc]    page rendered docs: manual, manual packages|changelog|lessons|design (REPL)\n", vout());
+    fputs("  !cmd   run a shell command (REPL)       system(\"cmd\")   run one, get its exit code\n", vout());
+    return val_null();
+}
+
+/* ------------------------------------------------------------------ */
+static void rng_seed(Interp *I, uint64_t seed);
+void interp_init(Interp *I) { *I = (Interp){0}; rng_seed(I, 0x9E3779B97F4A7C15ULL); }
+
+/* ------------------------------------------------------------------ */
+/* linear algebra                                                      */
+/* ------------------------------------------------------------------ */
+/* extract a real matrix into a fresh double[rows*cols]; complex errors */
+/* extract any real/complex array into a fresh Cplx[rows*cols]; the algorithms
+ * below all compute in Cplx, so real inputs flow through unchanged (real
+ * arithmetic keeps imaginary parts exactly zero) and complex inputs just work. */
+static Cplx *to_cplx(Interp *I, Value v, uint32_t *rows, uint32_t *cols, const char *who)
+{
+    if (!is_array(v)) runtime_error(I, "%s: expected a matrix, got %s", who, type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    *rows = a->rows; *cols = a->cols;
+    size_t nn = (size_t)a->rows * a->cols;
+    Cplx *d = malloc((nn ? nn : 1) * sizeof *d);
+    for (size_t k = 0; k < nn; k++) {
+        Value e = arr_get(a, k);
+        d[k] = (e.kind == VAL_BOOL) ? (Cplx){ e.as.b ? 1.0 : 0.0, 0.0 } : as_cplx(e);
+    }
+    return d;
+}
+static Value from_cplx(const Cplx *d, uint32_t rows, uint32_t cols, bool real_out)
+{
+    Value out = val_array(real_out ? ELT_FLOAT : ELT_COMPLEX, rows, cols);
+    size_t nn = (size_t)rows * cols;
+    if (real_out) { double *o = (double *)as_arr(out)->data; for (size_t k = 0; k < nn; k++) o[k] = d[k].re; }
+    else          { Cplx   *o = (Cplx   *)as_arr(out)->data; for (size_t k = 0; k < nn; k++) o[k] = d[k]; }
+    return out;
+}
+static bool   arr_real(Value v)  { return as_arr(v)->elt != ELT_COMPLEX; }
+static Value record2(const char *k1, Value v1, const char *k2, Value v2)
+{
+    Value r = val_record(2); RecObj *o = as_rec(r);
+    o->keys[0] = k1; o->keylens[0] = (uint32_t)strlen(k1); o->vals[0] = v1;
+    o->keys[1] = k2; o->keylens[1] = (uint32_t)strlen(k2); o->vals[1] = v2;
+    return r;
+}
+static Value record3(const char *k1, Value v1, const char *k2, Value v2, const char *k3, Value v3)
+{
+    Value r = val_record(3); RecObj *o = as_rec(r);
+    o->keys[0] = k1; o->keylens[0] = (uint32_t)strlen(k1); o->vals[0] = v1;
+    o->keys[1] = k2; o->keylens[1] = (uint32_t)strlen(k2); o->vals[1] = v2;
+    o->keys[2] = k3; o->keylens[2] = (uint32_t)strlen(k3); o->vals[2] = v3;
+    return r;
+}
+static double vmag(Value v)
+{
+    return v.kind == VAL_COMPLEX ? hypot(v.as.z.re, v.as.z.im) : fabs(as_double(v));
+}
+
+static Value bi_eye(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_INT || args[0].as.i < 0) runtime_error(I, "eye: size must be a non-negative Int");
+    int64_t d = args[0].as.i;
+    if (d > DIM_MAX) runtime_error(I, "eye: size %lld too large (limit %lld)", (long long)d, (long long)DIM_MAX);
+    check_cells(I, d, d, "eye");
+    return identity((uint32_t)d);
+}
+
+static Value bi_diag(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0])) runtime_error(I, "diag: expected an array");
+    ArrObj *a = as_arr(args[0]);
+    EltType et = a->elt == ELT_BOOL ? ELT_INT : a->elt;
+    if (a->rows == 1 || a->cols == 1) {              /* vector -> diagonal matrix */
+        uint32_t len = a->rows * a->cols;
+        check_cells(I, (int64_t)len, (int64_t)len, "diag");
+        Value out = val_array(et, len, len);
+        for (uint32_t k = 0; k < len; k++) arr_set(as_arr(out), (size_t)k * len + k, arr_get(a, k));
+        return out;
+    }
+    uint32_t m = a->rows < a->cols ? a->rows : a->cols;  /* matrix -> diagonal vector */
+    Value out = val_array(et, m, 1);
+    for (uint32_t i = 0; i < m; i++) arr_set(as_arr(out), i, arr_get(a, (size_t)i * a->cols + i));
+    return out;
+}
+
+static Value bi_trace(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0])) runtime_error(I, "trace: expected a matrix");
+    ArrObj *a = as_arr(args[0]);
+    uint32_t m = a->rows < a->cols ? a->rows : a->cols;
+    Value acc = val_int(0);
+    for (uint32_t i = 0; i < m; i++) {
+        Value e = arr_get(a, (size_t)i * a->cols + i);
+        acc = scalar_arith_k(I, AR_ADD, acc, e);
+    }
+    return acc;
+}
+
+static Value bi_det(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0])) runtime_error(I, "det: expected a square matrix");
+    ArrObj *a = as_arr(args[0]);
+    uint32_t N = a->rows;
+    if (a->cols != N) runtime_error(I, "det: matrix must be square (got %ux%u)", a->rows, a->cols);
+    bool real_in = a->elt != ELT_COMPLEX;
+    if (N == 0) return val_int(1);
+    Cplx *M = malloc((size_t)N * N * sizeof *M);
+    for (size_t k = 0; k < (size_t)N * N; k++) M[k] = as_cplx(arr_get(a, k));
+    Cplx det;
+    cozy_linalg()->det(M, N, &det);
+    free(M);
+    return real_in ? val_float(det.re) : val_complex(det.re, det.im);
+}
+
+static Value bi_inv(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0])) runtime_error(I, "inv: expected a square matrix");
+    ArrObj *a = as_arr(args[0]);
+    if (a->rows != a->cols) runtime_error(I, "inv: matrix must be square (got %ux%u)", a->rows, a->cols);
+    return inv_via_solve(I, args[0], a->rows);
+}
+
+static Value bi_dot(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0]) || !is_array(args[1])) runtime_error(I, "dot: expected two vectors");
+    ArrObj *x = as_arr(args[0]), *y = as_arr(args[1]);
+    size_t nx = (size_t)x->rows * x->cols, ny = (size_t)y->rows * y->cols;
+    if (nx != ny) runtime_error(I, "dot: length mismatch (%zu vs %zu)", nx, ny);
+    Value acc = val_int(0);
+    for (size_t k = 0; k < nx; k++) {
+        Value p = scalar_arith_k(I, AR_MUL, arr_get(x, k), arr_get(y, k));
+        acc = scalar_arith_k(I, AR_ADD, acc, p);
+    }
+    return acc;
+}
+
+static Value bi_norm(Interp *I, Value *args, uint32_t n)
+{
+    if ((is_array(args[0]) && as_arr(args[0])->elt == ELT_STRING) || args[0].kind == VAL_STRING)
+        runtime_error(I, "norm: undefined for strings");
+    Value v = args[0];
+    if (is_num(v)) return val_float(vmag(v));
+    if (!is_array(v)) runtime_error(I, "norm: expected a number or array");
+    ArrObj *a = as_arr(v);
+    size_t nn = (size_t)a->rows * a->cols;
+    int p = 2;
+    if (n == 2) {
+        if (args[1].kind != VAL_INT) runtime_error(I, "norm: p must be 1 or 2");
+        p = (int)args[1].as.i;
+    }
+    bool vec = a->rows == 1 || a->cols == 1;
+    if (!vec || p == 2) {                            /* Frobenius for matrices; 2-norm for vectors */
+        double s = 0; for (size_t k = 0; k < nn; k++) { double m = vmag(arr_get(a, k)); s += m * m; }
+        return val_float(sqrt(s));
+    }
+    if (p == 1) { double s = 0; for (size_t k = 0; k < nn; k++) s += vmag(arr_get(a, k)); return val_float(s); }
+    runtime_error(I, "norm: only p = 1 or 2 supported");
+}
+
+static Value bi_reshape(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_array(args[0])) runtime_error(I, "reshape: first argument must be an array");
+    if (args[1].kind != VAL_INT || args[2].kind != VAL_INT) runtime_error(I, "reshape: dimensions must be Int");
+    ArrObj *a = as_arr(args[0]);
+    int64_t r = args[1].as.i, c = args[2].as.i;
+    if (r < 0 || c < 0) runtime_error(I, "reshape: dimensions must be non-negative");
+    size_t total = (size_t)a->rows * a->cols;
+    if ((size_t)r * (size_t)c != total)
+        runtime_error(I, "reshape: cannot fit %zu elements into %lldx%lld", total, (long long)r, (long long)c);
+    Value out = val_array(a->elt, (uint32_t)r, (uint32_t)c);
+    memcpy(as_arr(out)->data, a->data, total * elt_size(a->elt));   /* row-major reinterpretation */
+    if (a->elt == ELT_STRING) {                        /* cells are refcounted pointers */
+        StrObj **cells = (StrObj **)as_arr(out)->data;
+        for (size_t k = 0; k < total; k++)
+            if (cells[k]) cells[k]->obj.rc++;
+    }
+    return out;
+}
+
+static Value bi_linspace(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (!is_num(args[0]) || args[0].kind == VAL_COMPLEX || !is_num(args[1]) || args[1].kind == VAL_COMPLEX)
+        runtime_error(I, "linspace: endpoints must be real numbers");
+    if (args[2].kind != VAL_INT || args[2].as.i < 1) runtime_error(I, "linspace: count must be a positive Int");
+    if (args[2].as.i > DIM_MAX)
+        runtime_error(I, "linspace: count %lld too large (limit %lld)", (long long)args[2].as.i, (long long)DIM_MAX);
+    double a = as_double(args[0]), b = as_double(args[1]);
+    uint32_t cnt = (uint32_t)args[2].as.i;
+    Value out = val_array(ELT_FLOAT, 1, cnt);
+    double *d = (double *)as_arr(out)->data;
+    if (cnt == 1) d[0] = b;
+    else for (uint32_t k = 0; k < cnt; k++) d[k] = a + (b - a) * ((double)k / (double)(cnt - 1));
+    return out;
+}
+
+/* complex Householder least squares: overdetermined A x ~= b (m>=n) via QR */
+static Value lstsq(Interp *I, Value A, Value B)
+{
+    uint32_t m, nn;   Cplx *R  = to_cplx(I, A, &m, &nn, "left division");
+    uint32_t bm, nrhs; Cplx *Bd = to_cplx(I, B, &bm, &nrhs, "left division");
+    bool ro = arr_real(A) && arr_real(B);
+    if (bm != m) { free(R); free(Bd); runtime_error(I, "left division dimensions disagree: %ux%u \\ %ux%u", m, nn, bm, nrhs); }
+    if (m < nn) {
+        /* Underdetermined: minimum-norm solution. With A^H = Q1 R1 (Q1 is n x m,
+         * R1 is m x m upper-triangular), solve R1^H y = b, then x = Q1 y lies in
+         * the row space of A, giving the least-norm solution of A x = b. */
+        uint32_t P = nn;                                  /* C = A^H is P x m, P > m */
+        Cplx   *C    = malloc((size_t)P * m * sizeof *C);
+        Cplx   *Vv   = calloc((size_t)P * m, sizeof *Vv); /* stored reflectors */
+        double *beta = calloc(m ? m : 1, sizeof *beta);
+        Cplx   *vv   = malloc((P ? P : 1) * sizeof *vv);
+        for (uint32_t i = 0; i < P; i++)
+            for (uint32_t j = 0; j < m; j++) C[(size_t)i*m+j] = c_conj(R[(size_t)j*nn+i]);
+        for (uint32_t k = 0; k < m; k++) {                /* Householder QR of C */
+            double nrm = 0; for (uint32_t i = k; i < P; i++) { double a = c_abs(C[(size_t)i*m+k]); nrm += a*a; }
+            nrm = sqrt(nrm);
+            if (nrm == 0.0) continue;
+            Cplx xk = C[(size_t)k*m+k]; double axk = c_abs(xk);
+            Cplx alpha = axk > 0 ? c_scale(-nrm/axk, xk) : (Cplx){ -nrm, 0 };
+            for (uint32_t i = 0; i < P; i++) vv[i] = (Cplx){0,0};
+            for (uint32_t i = k; i < P; i++) vv[i] = C[(size_t)i*m+k];
+            vv[k] = c_sub(vv[k], alpha);
+            double vn2 = 0; for (uint32_t i = k; i < P; i++) { double a = c_abs(vv[i]); vn2 += a*a; }
+            if (vn2 == 0.0) continue;
+            beta[k] = 2.0 / vn2;
+            for (uint32_t i = k; i < P; i++) Vv[(size_t)i*m+k] = vv[i];
+            for (uint32_t j = k; j < m; j++) {
+                Cplx w = {0,0}; for (uint32_t i = k; i < P; i++) w = c_add(w, c_mul(c_conj(vv[i]), C[(size_t)i*m+j]));
+                w = c_scale(beta[k], w);
+                for (uint32_t i = k; i < P; i++) C[(size_t)i*m+j] = c_sub(C[(size_t)i*m+j], c_mul(vv[i], w));
+            }
+        }
+        Cplx *X = malloc((size_t)(nn ? nn : 1) * (nrhs ? nrhs : 1) * sizeof *X);
+        Cplx *y = malloc((m ? m : 1) * sizeof *y);
+        Cplx *xx = malloc((P ? P : 1) * sizeof *xx);
+        for (uint32_t col = 0; col < nrhs; col++) {
+            for (uint32_t i = 0; i < m; i++) {            /* forward subst: R1^H y = b */
+                Cplx s = Bd[(size_t)i*nrhs+col];
+                for (uint32_t j = 0; j < i; j++) s = c_sub(s, c_mul(c_conj(C[(size_t)j*m+i]), y[j]));
+                Cplx rii = c_conj(C[(size_t)i*m+i]);
+                if (c_abs(rii) == 0.0) { free(C); free(Vv); free(beta); free(vv); free(X); free(y); free(xx); free(R); free(Bd); runtime_error(I, "left division: matrix is rank-deficient"); }
+                y[i] = c_div(s, rii);
+            }
+            for (uint32_t i = 0; i < P; i++) xx[i] = i < m ? y[i] : (Cplx){0,0};
+            for (int kk = (int)m - 1; kk >= 0; kk--) {    /* x = Q1 y = Q [y; 0] */
+                uint32_t k = (uint32_t)kk;
+                if (beta[k] == 0.0) continue;
+                Cplx w = {0,0}; for (uint32_t i = k; i < P; i++) w = c_add(w, c_mul(c_conj(Vv[(size_t)i*m+k]), xx[i]));
+                w = c_scale(beta[k], w);
+                for (uint32_t i = k; i < P; i++) xx[i] = c_sub(xx[i], c_mul(Vv[(size_t)i*m+k], w));
+            }
+            for (uint32_t i = 0; i < nn; i++) X[(size_t)i*nrhs+col] = xx[i];
+        }
+        Value out = from_cplx(X, nn, nrhs, ro);
+        free(C); free(Vv); free(beta); free(vv); free(X); free(y); free(xx); free(R); free(Bd);
+        return out;
+    }
+    Cplx *v = malloc((m ? m : 1) * sizeof *v);
+    for (uint32_t k = 0; k < nn; k++) {
+        double nrm = 0; for (uint32_t i = k; i < m; i++) { double a = c_abs(R[(size_t)i*nn+k]); nrm += a*a; }
+        nrm = sqrt(nrm);
+        if (nrm == 0.0) continue;
+        Cplx xk = R[(size_t)k*nn+k]; double axk = c_abs(xk);
+        Cplx alpha = axk > 0 ? c_scale(-nrm/axk, xk) : (Cplx){ -nrm, 0 };
+        for (uint32_t i = 0; i < m; i++) v[i] = (Cplx){0,0};
+        for (uint32_t i = k; i < m; i++) v[i] = R[(size_t)i*nn+k];
+        v[k] = c_sub(v[k], alpha);
+        double vn2 = 0; for (uint32_t i = k; i < m; i++) { double a = c_abs(v[i]); vn2 += a*a; }
+        if (vn2 == 0.0) continue;
+        double beta = 2.0 / vn2;
+        for (uint32_t j = k; j < nn; j++) {           /* R <- (I - beta v v^H) R */
+            Cplx w = {0,0}; for (uint32_t i = k; i < m; i++) w = c_add(w, c_mul(c_conj(v[i]), R[(size_t)i*nn+j]));
+            w = c_scale(beta, w);
+            for (uint32_t i = k; i < m; i++) R[(size_t)i*nn+j] = c_sub(R[(size_t)i*nn+j], c_mul(v[i], w));
+        }
+        for (uint32_t j = 0; j < nrhs; j++) {          /* same reflector applied to B */
+            Cplx w = {0,0}; for (uint32_t i = k; i < m; i++) w = c_add(w, c_mul(c_conj(v[i]), Bd[(size_t)i*nrhs+j]));
+            w = c_scale(beta, w);
+            for (uint32_t i = k; i < m; i++) Bd[(size_t)i*nrhs+j] = c_sub(Bd[(size_t)i*nrhs+j], c_mul(v[i], w));
+        }
+    }
+    Cplx *X = malloc((size_t)(nn ? nn : 1) * (nrhs ? nrhs : 1) * sizeof *X);
+    for (uint32_t c = 0; c < nrhs; c++)
+        for (int64_t ii = (int64_t)nn - 1; ii >= 0; ii--) {
+            uint32_t i = (uint32_t)ii;
+            Cplx s = Bd[(size_t)i*nrhs+c];
+            for (uint32_t j = i+1; j < nn; j++) s = c_sub(s, c_mul(R[(size_t)i*nn+j], X[(size_t)j*nrhs+c]));
+            Cplx rii = R[(size_t)i*nn+i];
+            if (c_abs(rii) == 0.0) { free(R); free(Bd); free(v); free(X); runtime_error(I, "left division: matrix is rank-deficient"); }
+            X[(size_t)i*nrhs+c] = c_div(s, rii);
+        }
+    Value out = from_cplx(X, nn, nrhs, ro);
+    free(R); free(Bd); free(v); free(X);
+    return out;
+}
+
+static Value bi_lu(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    uint32_t N, c; Cplx *M = to_cplx(I, args[0], &N, &c, "lu");
+    bool ro = arr_real(args[0]);
+    if (c != N) { free(M); runtime_error(I, "lu: matrix must be square (got %ux%u)", N, c); }
+    uint32_t *piv = malloc((N ? N : 1) * sizeof *piv);
+    for (uint32_t i = 0; i < N; i++) piv[i] = i;
+    for (uint32_t k = 0; k < N; k++) {
+        uint32_t p = k; double best = c_abs(M[(size_t)k*N+k]);
+        for (uint32_t i = k+1; i < N; i++) { double mg = c_abs(M[(size_t)i*N+k]); if (mg > best) { best = mg; p = i; } }
+        if (p != k) { for (uint32_t j = 0; j < N; j++) { Cplx t = M[(size_t)k*N+j]; M[(size_t)k*N+j] = M[(size_t)p*N+j]; M[(size_t)p*N+j] = t; } uint32_t t = piv[k]; piv[k] = piv[p]; piv[p] = t; }
+        Cplx akk = M[(size_t)k*N+k];
+        if (c_abs(akk) > 0)
+            for (uint32_t i = k+1; i < N; i++) {
+                Cplx f = c_div(M[(size_t)i*N+k], akk);
+                M[(size_t)i*N+k] = f;
+                for (uint32_t j = k+1; j < N; j++) M[(size_t)i*N+j] = c_sub(M[(size_t)i*N+j], c_mul(f, M[(size_t)k*N+j]));
+            }
+    }
+    Cplx *Lb = calloc((size_t)(N ? N*N : 1), sizeof *Lb), *Ub = calloc((size_t)(N ? N*N : 1), sizeof *Ub);
+    for (uint32_t i = 0; i < N; i++)
+        for (uint32_t j = 0; j < N; j++) {
+            if (i > j)       { Lb[(size_t)i*N+j] = M[(size_t)i*N+j]; Ub[(size_t)i*N+j] = (Cplx){0,0}; }
+            else if (i == j) { Lb[(size_t)i*N+j] = (Cplx){1,0};     Ub[(size_t)i*N+j] = M[(size_t)i*N+j]; }
+            else             { Lb[(size_t)i*N+j] = (Cplx){0,0};     Ub[(size_t)i*N+j] = M[(size_t)i*N+j]; }
+        }
+    Value L = from_cplx(Lb, N, N, ro), U = from_cplx(Ub, N, N, ro);
+    Value P = val_array(ELT_INT, N, 1);
+    for (uint32_t i = 0; i < N; i++) ((int64_t *)as_arr(P)->data)[i] = piv[i] + 1;
+    free(M); free(Lb); free(Ub); free(piv);
+    return record3("L", L, "U", U, "p", P);     /* P*A = L*U; p is the 1-based row permutation */
+}
+
+static Value bi_qr(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    uint32_t m, nn; Cplx *R = to_cplx(I, args[0], &m, &nn, "qr");
+    bool ro = arr_real(args[0]);
+    Cplx *Q = calloc((size_t)(m ? m*m : 1), sizeof *Q);
+    for (uint32_t i = 0; i < m; i++) Q[(size_t)i*m+i] = (Cplx){1,0};
+    Cplx *v = malloc((m ? m : 1) * sizeof *v);
+    uint32_t steps = nn < m ? nn : m;
+    for (uint32_t k = 0; k < steps; k++) {
+        double nrm = 0; for (uint32_t i = k; i < m; i++) { double a = c_abs(R[(size_t)i*nn+k]); nrm += a*a; }
+        nrm = sqrt(nrm);
+        if (nrm == 0.0) continue;
+        Cplx xk = R[(size_t)k*nn+k]; double axk = c_abs(xk);
+        Cplx alpha = axk > 0 ? c_scale(-nrm/axk, xk) : (Cplx){ -nrm, 0 };
+        for (uint32_t i = 0; i < m; i++) v[i] = (Cplx){0,0};
+        for (uint32_t i = k; i < m; i++) v[i] = R[(size_t)i*nn+k];
+        v[k] = c_sub(v[k], alpha);
+        double vn2 = 0; for (uint32_t i = k; i < m; i++) { double a = c_abs(v[i]); vn2 += a*a; }
+        if (vn2 == 0.0) continue;
+        double beta = 2.0 / vn2;
+        for (uint32_t j = k; j < nn; j++) {           /* R <- H R */
+            Cplx w = {0,0}; for (uint32_t i = k; i < m; i++) w = c_add(w, c_mul(c_conj(v[i]), R[(size_t)i*nn+j]));
+            w = c_scale(beta, w);
+            for (uint32_t i = k; i < m; i++) R[(size_t)i*nn+j] = c_sub(R[(size_t)i*nn+j], c_mul(v[i], w));
+        }
+        for (uint32_t i = 0; i < m; i++) {            /* Q <- Q H */
+            Cplx u = {0,0}; for (uint32_t l = k; l < m; l++) u = c_add(u, c_mul(Q[(size_t)i*m+l], v[l]));
+            u = c_scale(beta, u);
+            for (uint32_t l = k; l < m; l++) Q[(size_t)i*m+l] = c_sub(Q[(size_t)i*m+l], c_mul(u, c_conj(v[l])));
+        }
+    }
+    Value Qv = from_cplx(Q, m, m, ro), Rv = from_cplx(R, m, nn, ro);
+    free(R); free(Q); free(v);
+    return record2("Q", Qv, "R", Rv);
+}
+
+static Value bi_chol(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    uint32_t N, c; Cplx *A = to_cplx(I, args[0], &N, &c, "chol");
+    bool ro = arr_real(args[0]);
+    if (c != N) { free(A); runtime_error(I, "chol: matrix must be square (got %ux%u)", N, c); }
+    Cplx *L = malloc((size_t)(N ? N*N : 1) * sizeof *L);
+    if (cozy_linalg()->chol(A, N, L) != 0)
+        { free(A); free(L); runtime_error(I, "chol: matrix is not positive definite"); }
+    Value Lv = from_cplx(L, N, N, ro);     /* lower-triangular: L * L' = A  (Hermitian for complex) */
+    free(A); free(L);
+    return Lv;
+}
+
+/* Eigendecomposition -> {values, vectors}. Dispatch policy (Hermitian test),
+ * pair ordering (Hermitian: ascending real; general: by (re, im)), and the
+ * general path's phase convention (largest entry real > 0) are observable
+ * language behavior and live here, above the seam; the kernels answer in
+ * backend order. */
+static Value bi_eig(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    uint32_t N, c; Cplx *A = to_cplx(I, args[0], &N, &c, "eig");
+    if (c != N) { free(A); runtime_error(I, "eig: matrix must be square (got %ux%u)", N, c); }
+    bool real_in = arr_real(args[0]);
+
+    bool hermitian = true;                              /* detect symmetric/Hermitian */
+    for (uint32_t i = 0; i < N && hermitian; i++)
+        for (uint32_t j = i+1; j < N; j++) {
+            Cplx d = c_sub(A[(size_t)i*N+j], c_conj(A[(size_t)j*N+i]));
+            if (c_abs(d) > 1e-9 * (1.0 + c_abs(A[(size_t)i*N+j]))) { hermitian = false; break; }
+        }
+
+    size_t cells = (size_t)(N ? N*N : 1);
+    Cplx *V = malloc(cells * sizeof *V);
+    uint32_t *ord = malloc((N ? N : 1) * sizeof *ord);
+    Cplx *Vc = malloc(cells * sizeof *Vc);
+
+    if (hermitian) {
+        double *ev = malloc((N ? N : 1) * sizeof *ev);
+        cozy_linalg()->eig_herm(A, N, ev, V);
+        for (uint32_t i = 0; i < N; i++) ord[i] = i;
+        for (uint32_t i = 1; i < N; i++) {                 /* sort pairs by ascending eigenvalue */
+            uint32_t oi = ord[i]; double x = ev[oi]; uint32_t j = i;
+            while (j > 0 && ev[ord[j-1]] > x) { ord[j] = ord[j-1]; j--; }
+            ord[j] = oi;
+        }
+        Value vals = val_array(ELT_FLOAT, N, 1);
+        for (uint32_t i = 0; i < N; i++) {
+            ((double *)as_arr(vals)->data)[i] = ev[ord[i]];
+            for (uint32_t r = 0; r < N; r++) Vc[(size_t)r*N+i] = V[(size_t)r*N+ord[i]];
+        }
+        Value vecs = from_cplx(Vc, N, N, real_in);
+        free(A); free(V); free(Vc); free(ev); free(ord);
+        return record2("values", vals, "vectors", vecs);
+    }
+
+    /* general: kernels return matched (value, vector-column) pairs */
+    Cplx *w = malloc((N ? N : 1) * sizeof *w);
+    cozy_linalg()->eig_gen(A, N, w, V);
+
+    for (uint32_t i = 0; i < N; i++) ord[i] = i;
+    for (uint32_t i = 1; i < N; i++) {                     /* sort pairs by (re, im) for determinism */
+        uint32_t oi = ord[i]; Cplx e = w[oi]; uint32_t j = i;
+        while (j > 0 && (w[ord[j-1]].re > e.re ||
+                         (w[ord[j-1]].re == e.re && w[ord[j-1]].im > e.im))) { ord[j] = ord[j-1]; j--; }
+        ord[j] = oi;
+    }
+
+    bool eig_real = real_in;
+    for (uint32_t jj = 0; jj < N; jj++) {
+        uint32_t src = ord[jj];
+        Cplx lam = w[src];
+        if (fabs(lam.im) > 1e-12 * (1.0 + c_abs(lam))) eig_real = false;
+        uint32_t pmax = 0; double bmax = 0;                /* normalize phase: largest entry real>0 */
+        for (uint32_t i = 0; i < N; i++) { double a = c_abs(V[(size_t)i*N+src]); if (a > bmax) { bmax = a; pmax = i; } }
+        Cplx ph = { 1, 0 };
+        if (bmax > 0) { ph = c_scale(1.0/c_abs(V[(size_t)pmax*N+src]), V[(size_t)pmax*N+src]); ph = c_conj(ph); }
+        for (uint32_t i = 0; i < N; i++) Vc[(size_t)i*N+jj] = c_mul(V[(size_t)i*N+src], ph);
+    }
+
+    Value vals = val_array(eig_real ? ELT_FLOAT : ELT_COMPLEX, N, 1);
+    if (eig_real) for (uint32_t i = 0; i < N; i++) ((double *)as_arr(vals)->data)[i] = w[ord[i]].re;
+    else          for (uint32_t i = 0; i < N; i++) ((Cplx   *)as_arr(vals)->data)[i] = w[ord[i]];
+    Value vecs = from_cplx(Vc, N, N, eig_real && real_in);
+    free(A); free(V); free(Vc); free(w); free(ord);
+    return record2("values", vals, "vectors", vecs);
+}
+
+/* thin SVD -> {U, S, V}, A = U * diag(S) * V' with S descending (part of the
+ * seam contract, so every backend agrees). Marshalling here; math behind the
+ * kernel table. */
+static Value bi_svd(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    uint32_t m, nc; Cplx *Araw = to_cplx(I, args[0], &m, &nc, "svd");
+    bool ro = arr_real(args[0]);
+    uint32_t k = m < nc ? m : nc;                        /* thin: k = min(m, n) */
+    Cplx   *U = malloc((size_t)(m  ? m  : 1) * (k ? k : 1) * sizeof *U);
+    Cplx   *V = malloc((size_t)(nc ? nc : 1) * (k ? k : 1) * sizeof *V);
+    double *s = malloc((k ? k : 1) * sizeof *s);
+    cozy_linalg()->svd(Araw, m, nc, U, s, V);
+    free(Araw);
+    Value Uval = from_cplx(U, m,  k, ro);
+    Value Vval = from_cplx(V, nc, k, ro);
+    Value Sval = val_array(ELT_FLOAT, k, 1);
+    for (uint32_t i = 0; i < k; i++) ((double *)as_arr(Sval)->data)[i] = s[i];
+    free(U); free(V); free(s);
+    return record3("U", Uval, "S", Sval, "V", Vval);
+}
+
+/* ---- elementwise math (scalar or array) --------------------------------- *
+ * Transcendentals follow the numeric tower: real input that stays in the real
+ * domain returns real; real input outside it (log of a negative, asin of |x|>1)
+ * and complex input return complex, matching sqrt. Complex branches are hand-
+ * rolled because <complex.h> would redefine `I`, which we use for Interp*. */
+static const double NEU_PI = 3.14159265358979323846;
+
+static Cplx c_expz(Cplx z)  { double e = exp(z.re); return (Cplx){ e*cos(z.im), e*sin(z.im) }; }
+static Cplx c_logz(Cplx z)  { return (Cplx){ log(hypot(z.re, z.im)), atan2(z.im, z.re) }; }
+static Cplx c_sinz(Cplx z)  { return (Cplx){ sin(z.re)*cosh(z.im),  cos(z.re)*sinh(z.im) }; }
+static Cplx c_cosz(Cplx z)  { return (Cplx){ cos(z.re)*cosh(z.im), -sin(z.re)*sinh(z.im) }; }
+static Cplx c_tanz(Cplx z)  { return c_div(c_sinz(z), c_cosz(z)); }
+static Cplx c_sinhz(Cplx z) { return (Cplx){ sinh(z.re)*cos(z.im), cosh(z.re)*sin(z.im) }; }
+static Cplx c_coshz(Cplx z) { return (Cplx){ cosh(z.re)*cos(z.im), sinh(z.re)*sin(z.im) }; }
+static Cplx c_tanhz(Cplx z) { return c_div(c_sinhz(z), c_coshz(z)); }
+static Cplx c_imul(Cplx z)  { return (Cplx){ -z.im, z.re }; }   /* i * z */
+static Cplx c_asinz(Cplx z) {
+    Cplx w = c_sqrtz(c_sub((Cplx){1,0}, c_mul(z, z)));          /* sqrt(1 - z^2) */
+    Cplx L = c_logz(c_add(c_imul(z), w));
+    return (Cplx){ L.im, -L.re };                               /* -i * log(...) */
+}
+static Cplx c_acosz(Cplx z) { Cplx s = c_asinz(z); return (Cplx){ NEU_PI*0.5 - s.re, -s.im }; }
+static Cplx c_atanz(Cplx z) {
+    Cplx iz = c_imul(z);
+    Cplx d  = c_sub(c_logz(c_sub((Cplx){1,0}, iz)), c_logz(c_add((Cplx){1,0}, iz)));
+    return (Cplx){ -d.im*0.5, d.re*0.5 };                       /* (i/2) * (...) */
+}
+static Cplx c_asinhz(Cplx z) { return c_logz(c_add(z, c_sqrtz(c_add(c_mul(z,z), (Cplx){1,0})))); }
+static Cplx c_acoshz(Cplx z) { return c_logz(c_add(z, c_sqrtz(c_sub(c_mul(z,z), (Cplx){1,0})))); }
+static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0}, z), c_sub((Cplx){1,0}, z)))); }
+
+/* entire on the reals: real -> real, complex -> complex */
+#define ENTIRE_UNARY(name, rfn, cfn)                                                  \
+    static Value sc_##name(Interp *I, Value v) { (void)I;                             \
+        if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
+        return val_float(rfn(as_double(v))); }                                        \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+ENTIRE_UNARY(exp,   exp,   c_expz)
+ENTIRE_UNARY(sin,   sin,   c_sinz)
+ENTIRE_UNARY(cos,   cos,   c_cosz)
+ENTIRE_UNARY(tan,   tan,   c_tanz)
+ENTIRE_UNARY(sinh,  sinh,  c_sinhz)
+ENTIRE_UNARY(cosh,  cosh,  c_coshz)
+ENTIRE_UNARY(tanh,  tanh,  c_tanhz)
+ENTIRE_UNARY(atan,  atan,  c_atanz)
+ENTIRE_UNARY(asinh, asinh, c_asinhz)
+#undef ENTIRE_UNARY
+
+/* tower: real in domain -> real; real out of domain or complex -> complex */
+#define TOWER_UNARY(name, rfn, cfn, indomain)                                         \
+    static Value sc_##name(Interp *I, Value v) { (void)I;                             \
+        if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
+        double x = as_double(v);                                                      \
+        if (indomain) return val_float(rfn(x));                                       \
+        Cplx r = cfn((Cplx){ x, 0.0 }); return val_complex(r.re, r.im); }             \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+TOWER_UNARY(log,   log,   c_logz,   x >= 0.0)
+TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0)
+TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0)
+TOWER_UNARY(acosh, acosh, c_acoshz, x >= 1.0)
+TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0)
+#undef TOWER_UNARY
+
+/* log base b via the tower-aware natural log */
+#define LOGB_UNARY(name, base)                                                        \
+    static Value sc_##name(Interp *I, Value v) { (void)I; double l = log((double)base);\
+        if (v.kind == VAL_COMPLEX) { Cplx r = c_logz(v.as.z); return val_complex(r.re/l, r.im/l); } \
+        double x = as_double(v);                                                      \
+        if (x >= 0.0) return val_float(log(x)/l);                                      \
+        Cplx r = c_logz((Cplx){ x, 0.0 }); return val_complex(r.re/l, r.im/l); }       \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+LOGB_UNARY(log10, 10.0)
+LOGB_UNARY(log2,   2.0)
+#undef LOGB_UNARY
+
+/* rounding: real or (componentwise) complex; Int passes through unchanged */
+#define ROUND_UNARY(name, rfn)                                                        \
+    static Value sc_##name(Interp *I, Value v) { (void)I;                             \
+        if (v.kind == VAL_COMPLEX) return val_complex(rfn(v.as.z.re), rfn(v.as.z.im)); \
+        if (v.kind == VAL_INT) return v;                                              \
+        return val_float(rfn(as_double(v))); }                                        \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+ROUND_UNARY(floor, floor)
+ROUND_UNARY(ceil,  ceil)
+ROUND_UNARY(round, round)
+ROUND_UNARY(trunc, trunc)
+#undef ROUND_UNARY
+
+/* real-domain only (error on complex) */
+#define REAL_ONLY(name, rfn)                                                          \
+    static Value sc_##name(Interp *I, Value v) {                                      \
+        if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(rfn(as_double(v))); \
+        runtime_error(I, #name ": expected a real number, got %s", type_name(v.kind)); } \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+REAL_ONLY(cbrt,   cbrt)
+REAL_ONLY(gamma,  tgamma)
+REAL_ONLY(lgamma, lgamma)
+REAL_ONLY(erf,    erf)
+REAL_ONLY(erfc,   erfc)
+#undef REAL_ONLY
+
+/* ---- special functions (real domain, elementwise via map_unary/map_binary) ---- */
+static Value map_binary(Interp *I, Value a, Value b, Value (*f)(Interp *, Value, Value));
+
+static double want_real(Interp *I, Value v, const char *who)
+{
+    if (v.kind != VAL_INT && v.kind != VAL_FLOAT)
+        runtime_error(I, "%s: expected a real number, got %s", who, type_name(v.kind));
+    return as_double(v);
+}
+
+/* Regularized lower incomplete gamma P(a, x): series for x < a+1, else
+ * 1 - continued fraction for Q (Lentz). Numerical Recipes structure. */
+static double gammainc_P(Interp *I, double x, double a)
+{
+    if (x < 0.0 || a <= 0.0) runtime_error(I, "gammainc: requires x >= 0 and a > 0");
+    if (x == 0.0) return 0.0;
+    double lg = lgamma(a);
+    if (x < a + 1.0) {                       /* series: P = e^{-x} x^a / Gamma(a) * sum */
+        double ap = a, sum = 1.0 / a, del = sum;
+        for (int i = 0; i < 500; i++) {
+            ap += 1.0; del *= x / ap; sum += del;
+            if (fabs(del) < fabs(sum) * 1e-16) break;
+        }
+        return sum * exp(-x + a * log(x) - lg);
+    }
+    double b = x + 1.0 - a, c = 1e300, d = 1.0 / b, h = d;   /* Lentz for Q */
+    for (int i = 1; i < 500; i++) {
+        double an = -i * (i - a);
+        b += 2.0;
+        d = an * d + b; if (fabs(d) < 1e-300) d = 1e-300;
+        c = b + an / c; if (fabs(c) < 1e-300) c = 1e-300;
+        d = 1.0 / d;
+        double del = d * c; h *= del;
+        if (fabs(del - 1.0) < 1e-16) break;
+    }
+    return 1.0 - exp(-x + a * log(x) - lg) * h;
+}
+
+/* Regularized incomplete beta I_x(a, b): Lentz continued fraction with the
+ * symmetry I_x(a,b) = 1 - I_{1-x}(b,a) for convergence. */
+static double betacf(double x, double a, double b)
+{
+    double qab = a + b, qap = a + 1.0, qam = a - 1.0;
+    double c = 1.0, d = 1.0 - qab * x / qap;
+    if (fabs(d) < 1e-300) d = 1e-300;
+    d = 1.0 / d;
+    double h = d;
+    for (int m = 1; m <= 500; m++) {
+        int m2 = 2 * m;
+        double aa = m * (b - m) * x / ((qam + m2) * (a + m2));
+        d = 1.0 + aa * d; if (fabs(d) < 1e-300) d = 1e-300;
+        c = 1.0 + aa / c; if (fabs(c) < 1e-300) c = 1e-300;
+        d = 1.0 / d; h *= d * c;
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
+        d = 1.0 + aa * d; if (fabs(d) < 1e-300) d = 1e-300;
+        c = 1.0 + aa / c; if (fabs(c) < 1e-300) c = 1e-300;
+        d = 1.0 / d;
+        double del = d * c; h *= del;
+        if (fabs(del - 1.0) < 1e-16) break;
+    }
+    return h;
+}
+static double betainc_I(Interp *I, double x, double a, double b)
+{
+    if (a <= 0.0 || b <= 0.0) runtime_error(I, "betainc: requires a > 0 and b > 0");
+    if (x < 0.0 || x > 1.0)   runtime_error(I, "betainc: requires 0 <= x <= 1");
+    if (x == 0.0) return 0.0;
+    if (x == 1.0) return 1.0;
+    double front = exp(lgamma(a + b) - lgamma(a) - lgamma(b)
+                       + a * log(x) + b * log(1.0 - x));
+    if (x < (a + 1.0) / (a + b + 2.0)) return front * betacf(x, a, b) / a;
+    return 1.0 - front * betacf(1.0 - x, b, a) / b;
+}
+
+/* Normal quantile: Acklam's rational approximation refined by one Halley
+ * step against erfc, giving ~1e-15 accuracy across (0, 1). */
+static double norminv_d(Interp *I, double p)
+{
+    if (p < 0.0 || p > 1.0) runtime_error(I, "norminv: requires 0 <= p <= 1");
+    if (p == 0.0) return -INFINITY;
+    if (p == 1.0) return  INFINITY;
+    static const double A[] = { -3.969683028665376e+01,  2.209460984245205e+02,
+        -2.759285104469687e+02,  1.383577518672690e+02, -3.066479806614716e+01,
+         2.506628277459239e+00 };
+    static const double B[] = { -5.447609879822406e+01,  1.615858368580409e+02,
+        -1.556989798598866e+02,  6.680131188771972e+01, -1.328068155288572e+01 };
+    static const double C[] = { -7.784894002430293e-03, -3.223964580411365e-01,
+        -2.400758277161838e+00, -2.549732539343734e+00,  4.374664141464968e+00,
+         2.938163982698783e+00 };
+    static const double D[] = {  7.784695709041462e-03,  3.224671290700398e-01,
+         2.445134137142996e+00,  3.754408661907416e+00 };
+    double q, r, xx;
+    if (p < 0.02425) {
+        q = sqrt(-2.0 * log(p));
+        xx = (((((C[0]*q+C[1])*q+C[2])*q+C[3])*q+C[4])*q+C[5]) /
+             ((((D[0]*q+D[1])*q+D[2])*q+D[3])*q+1.0);
+    } else if (p <= 0.97575) {
+        q = p - 0.5; r = q * q;
+        xx = (((((A[0]*r+A[1])*r+A[2])*r+A[3])*r+A[4])*r+A[5])*q /
+             (((((B[0]*r+B[1])*r+B[2])*r+B[3])*r+B[4])*r+1.0);
+    } else {
+        q = sqrt(-2.0 * log(1.0 - p));
+        xx = -(((((C[0]*q+C[1])*q+C[2])*q+C[3])*q+C[4])*q+C[5]) /
+              ((((D[0]*q+D[1])*q+D[2])*q+D[3])*q+1.0);
+    }
+    double e = 0.5 * erfc(-xx / M_SQRT2) - p;                 /* one Halley step */
+    double u = e * sqrt(2.0 * M_PI) * exp(xx * xx / 2.0);
+    return xx - u / (1.0 + xx * u / 2.0);
+}
+
+/* Digamma psi(x): reflection for x < 0.5, recurrence up to x >= 6,
+ * then the asymptotic series. */
+static double digamma_d(Interp *I, double x)
+{
+    if (x <= 0.0 && x == floor(x)) runtime_error(I, "digamma: pole at non-positive integer");
+    double result = 0.0;
+    if (x < 0.5) {                            /* psi(x) = psi(1-x) - pi*cot(pi*x) */
+        result -= M_PI / tan(M_PI * x);
+        x = 1.0 - x;
+    }
+    while (x < 10.0) { result -= 1.0 / x; x += 1.0; }
+    double inv = 1.0 / x, inv2 = inv * inv;
+    result += log(x) - 0.5 * inv
+            - inv2 * (1.0/12.0 - inv2 * (1.0/120.0 - inv2 * (1.0/252.0
+              - inv2 * (1.0/240.0 - inv2 * (1.0/132.0)))));
+    return result;
+}
+
+static Value sc_digamma(Interp *I, Value v) { return val_float(digamma_d(I, want_real(I, v, "digamma"))); }
+static Value bi_digamma(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_digamma); }
+
+static Value sc_norminv(Interp *I, Value v) { return val_float(norminv_d(I, want_real(I, v, "norminv"))); }
+static Value bi_norminv(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_norminv); }
+
+static Value sc_lbeta(Interp *I, Value a, Value b)
+{
+    double x = want_real(I, a, "lbeta"), y = want_real(I, b, "lbeta");
+    if (x <= 0.0 || y <= 0.0) runtime_error(I, "lbeta: requires a > 0 and b > 0");
+    return val_float(lgamma(x) + lgamma(y) - lgamma(x + y));
+}
+static Value bi_lbeta(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_lbeta); }
+static Value sc_beta(Interp *I, Value a, Value b)
+{
+    Value l = sc_lbeta(I, a, b);
+    return val_float(exp(l.as.f));
+}
+static Value bi_beta(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_beta); }
+
+static Value sc_gammainc(Interp *I, Value xv, Value av)
+{
+    return val_float(gammainc_P(I, want_real(I, xv, "gammainc"), want_real(I, av, "gammainc")));
+}
+static Value bi_gammainc(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_gammainc); }
+
+/* betainc(x, a, b): 3-arg — x may be an array; a, b are real scalars. */
+static Value bi_betainc(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    double a = want_real(I, args[1], "betainc"), b = want_real(I, args[2], "betainc");
+    Value xv = args[0];
+    if (is_num(xv)) return val_float(betainc_I(I, want_real(I, xv, "betainc"), a, b));
+    if (!is_array(xv)) runtime_error(I, "betainc: expected a real x, got %s", type_name(xv.kind));
+    ArrObj *xa = as_arr(xv);
+    if (xa->elt == ELT_COMPLEX) runtime_error(I, "betainc: expected real x");
+    if (xa->elt == ELT_STRING) runtime_error(I, "betainc: undefined for strings");
+    size_t nn = (size_t)xa->rows * xa->cols;
+    Value out = val_array(ELT_FLOAT, xa->rows, xa->cols);
+    for (size_t k = 0; k < nn; k++)
+        ((double *)as_arr(out)->data)[k] = betainc_I(I, as_double(arr_get(xa, k)), a, b);
+    return out;
+}
+
+/* Bessel J_n / Y_n: integer order n (scalar), elementwise over x. */
+static Value sc_besselj(Interp *I, Value nv, Value xv)
+{
+    double nd = want_real(I, nv, "besselj");
+    if (nd != floor(nd)) runtime_error(I, "besselj: order must be an integer");
+    return val_float(jn((int)nd, want_real(I, xv, "besselj")));
+}
+static Value bi_besselj(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_besselj); }
+static Value sc_bessely(Interp *I, Value nv, Value xv)
+{
+    double nd = want_real(I, nv, "bessely");
+    if (nd != floor(nd)) runtime_error(I, "bessely: order must be an integer");
+    double x = want_real(I, xv, "bessely");
+    if (x <= 0.0) runtime_error(I, "bessely: requires x > 0");
+    return val_float(yn((int)nd, x));
+}
+static Value bi_bessely(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_bessely); }
+
+/* Kronecker product: (m x n) kron (p x q) -> (mp x nq), any numeric element types. */
+static Value bi_kron(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value av = args[0], bv = args[1];
+    if (is_num(av) && is_num(bv)) return scalar_arith_k(I, AR_MUL, numify(av), numify(bv));
+    if (is_num(av)) return map_binary(I, av, bv, fold_mul);   /* scalar (x) B == scaling */
+    if (is_num(bv)) return map_binary(I, av, bv, fold_mul);
+    if (!is_array(av) || !is_array(bv))
+        runtime_error(I, "kron: expected numeric arrays");
+    ArrObj *A = as_arr(av), *B = as_arr(bv);
+    uint64_t R = (uint64_t)A->rows * B->rows, C = (uint64_t)A->cols * B->cols;
+    if (R > 100000000ULL || C > 100000000ULL || R * C > 100000000ULL)
+        runtime_error(I, "kron: result too large (%llux%llu)", (unsigned long long)R, (unsigned long long)C);
+    size_t cells = (size_t)(R * C);
+    Value *tmp = malloc((cells ? cells : 1) * sizeof *tmp);
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    volatile size_t done = 0;
+    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);
+    for (size_t r = 0; r < R; r++) {                    /* output order: done stays exact */
+        uint32_t i = (uint32_t)(r / B->rows), k = (uint32_t)(r % B->rows);
+        for (size_t cc = 0; cc < C; cc++) {
+            uint32_t j = (uint32_t)(cc / B->cols), l = (uint32_t)(cc % B->cols);
+            Value aij = numify(arr_get(A, (size_t)i * A->cols + j));
+            Value bkl = numify(arr_get(B, (size_t)k * B->cols + l));
+            tmp[r * C + cc] = scalar_arith_k(I, AR_MUL, aij, bkl);
+            done = r * C + cc + 1;
+        }
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value out = pack_array(tmp, cells, (uint32_t)R, (uint32_t)C);
+    free(tmp);
+    return out;
+}
+
+static Value sc_sign(Interp *I, Value v) { (void)I;
+    if (v.kind == VAL_INT)   return val_int((v.as.i > 0) - (v.as.i < 0));
+    if (v.kind == VAL_FLOAT) { double x = v.as.f; return val_float((double)((x > 0) - (x < 0))); }
+    if (v.kind == VAL_COMPLEX) { double m = hypot(v.as.z.re, v.as.z.im);
+        return m == 0.0 ? val_complex(0, 0) : val_complex(v.as.z.re/m, v.as.z.im/m); }
+    runtime_error(I, "sign: expected a number, got %s", type_name(v.kind)); }
+static Value bi_sign(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_sign); }
+
+/* complex accessors (real numbers behave as z with a zero imaginary part) */
+static Value sc_real(Interp *I, Value v) { (void)I;
+    if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.re);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
+    runtime_error(I, "real: expected a number, got %s", type_name(v.kind)); }
+static Value sc_imag(Interp *I, Value v) { (void)I;
+    if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.im);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return val_float(0.0);
+    runtime_error(I, "imag: expected a number, got %s", type_name(v.kind)); }
+static Value sc_conj(Interp *I, Value v) { (void)I;
+    if (v.kind == VAL_COMPLEX)                       return val_complex(v.as.z.re, -v.as.z.im);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
+    runtime_error(I, "conj: expected a number, got %s", type_name(v.kind)); }
+static Value sc_angle(Interp *I, Value v) { (void)I;
+    if (v.kind == VAL_COMPLEX)                       return val_float(atan2(v.as.z.im, v.as.z.re));
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return val_float(atan2(0.0, as_double(v)));
+    runtime_error(I, "angle: expected a number, got %s", type_name(v.kind)); }
+static Value bi_real (Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_real); }
+static Value bi_imag (Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_imag); }
+static Value bi_conj (Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_conj); }
+static Value bi_angle(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_angle); }
+
+/* binary elementwise (broadcasts array/scalar like the arithmetic ops) */
+static Value map_binary(Interp *I, Value a, Value b, Value (*f)(Interp *, Value, Value))
+{
+    if (a.kind == VAL_STRING || b.kind == VAL_STRING
+        || (is_array(a) && as_arr(a)->elt == ELT_STRING)
+        || (is_array(b) && as_arr(b)->elt == ELT_STRING))
+        runtime_error(I, "min/max: undefined for strings");
+    if (!is_array(a) && !is_array(b)) return f(I, a, b);
+    bool aa, ba; uint32_t rows, cols;
+    ew_dims(I, a, b, &aa, &ba, &rows, &cols);
+    size_t nn = (size_t)rows * cols;
+    Value *tmp = nn ? malloc(nn * sizeof *tmp) : nullptr;
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    volatile size_t done = 0;
+    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);
+    for (size_t k = 0; k < nn; k++) {
+        Value av = aa ? arr_get(as_arr(a), k) : a;
+        Value bv = ba ? arr_get(as_arr(b), k) : b;
+        tmp[k] = f(I, av, bv); done = k + 1;
+    }
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    Value r = pack_array(tmp, nn, rows, cols);
+    free(tmp);
+    return r;
+}
+static Value sc_atan2(Interp *I, Value y, Value x) {
+    if (y.kind == VAL_COMPLEX || x.kind == VAL_COMPLEX) runtime_error(I, "atan2: expected real numbers");
+    return val_float(atan2(as_double(y), as_double(x))); }
+static Value sc_hypot(Interp *I, Value a, Value b) {
+    if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "hypot: expected real numbers");
+    return val_float(hypot(as_double(a), as_double(b))); }
+static Value sc_mod(Interp *I, Value a, Value b) {
+    if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "mod: expected real numbers");
+    double x = as_double(a), y = as_double(b);
+    double r = (y == 0.0) ? x : x - y * floor(x / y);
+    if (a.kind == VAL_INT && b.kind == VAL_INT) return val_int((int64_t)llround(r));
+    return val_float(r); }
+static Value sc_rem(Interp *I, Value a, Value b) {
+    if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "rem: expected real numbers");
+    double x = as_double(a), y = as_double(b);
+    double r = (y == 0.0) ? nan("") : fmod(x, y);
+    if (a.kind == VAL_INT && b.kind == VAL_INT && y != 0.0) return val_int((int64_t)r);
+    return val_float(r); }
+static Value bi_atan2(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_atan2); }
+static Value bi_hypot(Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_hypot); }
+static Value bi_mod  (Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_mod); }
+static Value bi_rem  (Interp *I, Value *a, uint32_t n) { (void)n; return map_binary(I, a[0], a[1], sc_rem); }
+
+/* reductions over all elements */
+static Value bi_min(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 3) {                                     /* min(A, [], dim): axis reduction */
+        if (!(is_array(args[1]) && (size_t)as_arr(args[1])->rows * as_arr(args[1])->cols == 0))
+            runtime_error(I, "min: the 3-argument form is min(A, [], dim)");
+        if (!is_array(args[0])) runtime_error(I, "min: the dim form needs an array");
+        if (as_arr(args[0])->elt == ELT_COMPLEX) runtime_error(I, "min: undefined for complex");
+        return reduce_dim(I, as_arr(args[0]), dim_arg(I, args[2], "min"), val_null(), fold_min);
+    }
+    if (n == 2) return map_binary(I, args[0], args[1], sc_min);
+    Value v = args[0];
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "min: expected an array or number");
+    ArrObj *a = as_arr(v);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "min: undefined for complex");
+    if (a->elt == ELT_STRING) runtime_error(I, "min: undefined for strings");
+    size_t nn = (size_t)a->rows * a->cols;
+    if (nn == 0) runtime_error(I, "min: empty array");
+    Value best = arr_get(a, 0);
+    for (size_t k = 1; k < nn; k++) { Value e = arr_get(a, k); if (as_double(e) < as_double(best)) best = e; }
+    return best;
+}
+static Value bi_max(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 3) {                                     /* max(A, [], dim): axis reduction */
+        if (!(is_array(args[1]) && (size_t)as_arr(args[1])->rows * as_arr(args[1])->cols == 0))
+            runtime_error(I, "max: the 3-argument form is max(A, [], dim)");
+        if (!is_array(args[0])) runtime_error(I, "max: the dim form needs an array");
+        if (as_arr(args[0])->elt == ELT_COMPLEX) runtime_error(I, "max: undefined for complex");
+        return reduce_dim(I, as_arr(args[0]), dim_arg(I, args[2], "max"), val_null(), fold_max);
+    }
+    if (n == 2) return map_binary(I, args[0], args[1], sc_max);
+    Value v = args[0];
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "max: expected an array or number");
+    ArrObj *a = as_arr(v);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "max: undefined for complex");
+    if (a->elt == ELT_STRING) runtime_error(I, "max: undefined for strings");
+    size_t nn = (size_t)a->rows * a->cols;
+    if (nn == 0) runtime_error(I, "max: empty array");
+    Value best = arr_get(a, 0);
+    for (size_t k = 1; k < nn; k++) { Value e = arr_get(a, k); if (as_double(e) > as_double(best)) best = e; }
+    return best;
+}
+/* ------------------------------------------------------------------ */
+/* tic / toc                                                           */
+/* ------------------------------------------------------------------ */
+
+static double g_tic_when;
+static bool   g_tic_set;
+
+static double mono_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+static Value bi_tic(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)args; (void)n;
+    g_tic_when = mono_now();
+    g_tic_set = true;
+    return val_null();
+}
+static Value bi_toc(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    if (!g_tic_set) runtime_error(I, "toc: no timer started (call tic first)");
+    return val_float(mono_now() - g_tic_when);
+}
+
+/* ------------------------------------------------------------------ */
+/* unique                                                              */
+/* ------------------------------------------------------------------ */
+
+static int dbl_cmp(const void *a, const void *b)
+{
+    double x = *(const double *)a, y = *(const double *)b;
+    if (isnan(x)) return isnan(y) ? 0 : 1;      /* NaNs sort last (total order: */
+    if (isnan(y)) return -1;                    /* qsort needs transitivity)    */
+    return (x > y) - (x < y);
+}
+
+static int i64_cmp(const void *a, const void *b)
+{
+    int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
+    return (x > y) - (x < y);
+}
+
+/* unique(A): sorted distinct elements. A vector keeps its orientation; a
+ * matrix flattens to a row vector. NaNs compare unequal to everything,
+ * themselves included, so they are all kept (Octave-compatible). */
+static int str_val_cmp(Value a, Value b);
+static int cmp_val_asc(const void *x, const void *y);
+
+static Value bi_unique(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value v = args[0];
+    if (is_num(v) || v.kind == VAL_BOOL) return v;      /* scalar: already unique */
+    if (!is_array(v)) runtime_error(I, "unique: expected numeric data, got %s", type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "unique: complex data has no ordering");
+    size_t nn = (size_t)a->rows * a->cols;
+    if (nn == 0) return val_array(a->elt, 0, 0);
+    bool col = (a->cols == 1 && a->rows > 1);           /* column vector keeps shape */
+
+    if (a->elt == ELT_STRING) {                        /* sort borrowed Values, dedupe, pack */
+        Value *buf = malloc(nn * sizeof *buf);
+        if (!buf) abort();
+        for (size_t i = 0; i < nn; i++) buf[i] = arr_get(a, i);
+        qsort(buf, nn, sizeof *buf, cmp_val_asc);
+        size_t k = 0;
+        for (size_t i = 0; i < nn; i++)
+            if (i == 0 || str_val_cmp(buf[i], buf[k-1]) != 0) buf[k++] = buf[i];
+        Value out = val_array(ELT_STRING, col ? (uint32_t)k : 1, col ? 1 : (uint32_t)k);
+        for (size_t i = 0; i < k; i++) arr_set(as_arr(out), i, buf[i]);   /* arr_set retains */
+        free(buf);
+        return out;
+    }
+    if (a->elt == ELT_INT) {
+        int64_t *buf = malloc(nn * sizeof *buf);
+        if (!buf) abort();
+        memcpy(buf, a->data, nn * sizeof *buf);
+        qsort(buf, nn, sizeof *buf, i64_cmp);
+        size_t k = 0;
+        for (size_t i = 0; i < nn; i++)
+            if (i == 0 || buf[i] != buf[k-1]) buf[k++] = buf[i];
+        Value out = val_array(ELT_INT, col ? (uint32_t)k : 1, col ? 1 : (uint32_t)k);
+        memcpy(as_arr(out)->data, buf, k * sizeof *buf);
+        free(buf);
+        return out;
+    }
+    if (a->elt == ELT_BOOL) {
+        bool seen_f = false, seen_t = false;
+        const uint8_t *bd = (const uint8_t *)a->data;
+        for (size_t i = 0; i < nn; i++) { if (bd[i]) seen_t = true; else seen_f = true; }
+        uint32_t k = (uint32_t)seen_f + (uint32_t)seen_t;
+        Value out = val_array(ELT_BOOL, col ? k : 1, col ? 1 : k);
+        uint8_t *od = (uint8_t *)as_arr(out)->data;
+        uint32_t w = 0;
+        if (seen_f) od[w++] = 0;
+        if (seen_t) od[w++] = 1;
+        return out;
+    }
+    double *buf = malloc(nn * sizeof *buf);
+    if (!buf) abort();
+    memcpy(buf, a->data, nn * sizeof *buf);
+    qsort(buf, nn, sizeof *buf, dbl_cmp);
+    size_t k = 0;
+    for (size_t i = 0; i < nn; i++)
+        if (i == 0 || !(buf[i] == buf[k-1])) buf[k++] = buf[i];   /* NaN != NaN: kept */
+    Value out = val_array(ELT_FLOAT, col ? (uint32_t)k : 1, col ? 1 : (uint32_t)k);
+    memcpy(as_arr(out)->data, buf, k * sizeof *buf);
+    free(buf);
+    return out;
+}
+
+/* ------------------------------------------------------------------ */
+/* descriptive statistics: var, std, median, quantile                  */
+/* ------------------------------------------------------------------ */
+
+/* Copy a value's elements (or one dim-slice) into a double buffer.
+ * Rejects complex; Bool converts as 0/1 like the arithmetic folds. */
+static double stat_elt(Interp *I, Value e, const char *who)
+{
+    if (e.kind == VAL_BOOL) return e.as.b ? 1.0 : 0.0;
+    if (e.kind != VAL_INT && e.kind != VAL_FLOAT)
+        runtime_error(I, "%s: expected real data, got %s", who, type_name(e.kind));
+    return as_double(e);
+}
+
+typedef double (*StatKernel)(Interp *, double *, size_t, double);
+
+/* Two-pass variance. w = 0: sample (N-1, default); w = 1: population (N). */
+static double st_var(Interp *I, double *buf, size_t n, double w)
+{
+    (void)I;
+    if (n == 1) return 0.0;
+    double m = 0.0;
+    for (size_t k = 0; k < n; k++) m += buf[k];
+    m /= (double)n;
+    double ss = 0.0;
+    for (size_t k = 0; k < n; k++) { double d = buf[k] - m; ss += d * d; }
+    return ss / ((w == 1.0) ? (double)n : (double)(n - 1));
+}
+static double st_std(Interp *I, double *buf, size_t n, double w)
+{
+    return sqrt(st_var(I, buf, n, w));
+}
+static double st_median(Interp *I, double *buf, size_t n, double unused)
+{
+    (void)I; (void)unused;
+    qsort(buf, n, sizeof *buf, dbl_cmp);
+    return (n & 1) ? buf[n / 2] : 0.5 * (buf[n/2 - 1] + buf[n/2]);
+}
+/* Linear interpolation between order statistics (NumPy default / R type 7). */
+static double st_quantile(Interp *I, double *buf, size_t n, double p)
+{
+    (void)I;
+    qsort(buf, n, sizeof *buf, dbl_cmp);
+    if (n == 1) return buf[0];
+    double h = (double)(n - 1) * p;
+    size_t lo = (size_t)h;
+    if (lo >= n - 1) return buf[n - 1];
+    double frac = h - (double)lo;
+    return buf[lo] + frac * (buf[lo + 1] - buf[lo]);
+}
+
+/* Apply kernel to every element of v (scalar / whole array). */
+static Value stat_all(Interp *I, Value v, StatKernel f, double param, const char *who)
+{
+    if (is_num(v) && v.kind != VAL_COMPLEX) {
+        double d = stat_elt(I, v, who);
+        return val_float(f(I, &d, 1, param));
+    }
+    if (!is_array(v)) runtime_error(I, "%s: expected numeric data, got %s", who, type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "%s: complex data has no ordering", who);
+    size_t n = (size_t)a->rows * a->cols;
+    if (n == 0) runtime_error(I, "%s: empty data", who);
+    double *buf = malloc(n * sizeof *buf);
+    if (!buf) abort();
+    for (size_t k = 0; k < n; k++) buf[k] = stat_elt(I, arr_get(a, k), who);
+    double r = f(I, buf, n, param);
+    free(buf);
+    return val_float(r);
+}
+
+/* Apply kernel along dim (1 = down columns, 2 = across rows). */
+static Value stat_dim(Interp *I, ArrObj *a, int dim, StatKernel f, double param, const char *who)
+{
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "%s: complex data has no ordering", who);
+    uint32_t slices = (dim == 1) ? a->cols : a->rows;
+    uint32_t len    = (dim == 1) ? a->rows : a->cols;
+    if (len == 0) runtime_error(I, "%s: empty dimension", who);
+    double *buf = malloc((size_t)len * sizeof *buf);
+    if (!buf) abort();
+    Value out = val_array(ELT_FLOAT, dim == 1 ? 1 : a->rows, dim == 1 ? a->cols : 1);
+    double *od = (double *)as_arr(out)->data;
+    for (uint32_t s = 0; s < slices; s++) {
+        for (uint32_t k = 0; k < len; k++) {
+            size_t idx = (dim == 1) ? (size_t)k * a->cols + s : (size_t)s * a->cols + k;
+            buf[k] = stat_elt(I, arr_get(a, idx), who);
+        }
+        od[s] = f(I, buf, len, param);
+    }
+    free(buf);
+    return out;
+}
+
+/* Load column c of a into buf (real data only). */
+static void stat_col(Interp *I, ArrObj *a, uint32_t c, double *buf, const char *who)
+{
+    for (uint32_t r = 0; r < a->rows; r++)
+        buf[r] = stat_elt(I, arr_get(a, (size_t)r * a->cols + c), who);
+}
+
+/* Covariance matrix of X's columns (rows = observations), or of two vectors. */
+static Value cov_matrix(Interp *I, ArrObj *X, double w, const char *who, bool to_corr)
+{
+    if (X->elt == ELT_COMPLEX) runtime_error(I, "%s: complex data has no ordering", who);
+    uint32_t n = X->rows, p = X->cols;
+    if (n == 0 || p == 0) runtime_error(I, "%s: empty data", who);
+    double *cols = malloc((size_t)n * p * sizeof *cols);
+    double *mu   = malloc((size_t)p * sizeof *mu);
+    if (!cols || !mu) abort();
+    for (uint32_t c = 0; c < p; c++) {
+        stat_col(I, X, c, cols + (size_t)c * n, who);
+        double m = 0.0;
+        for (uint32_t r = 0; r < n; r++) m += cols[(size_t)c * n + r];
+        mu[c] = m / (double)n;
+    }
+    double denom = (n == 1) ? 1.0 : ((w == 1.0) ? (double)n : (double)(n - 1));
+    Value out = val_array(ELT_FLOAT, p, p);
+    double *od = (double *)as_arr(out)->data;
+    for (uint32_t i = 0; i < p; i++)
+        for (uint32_t j = i; j < p; j++) {
+            double s = 0.0;
+            const double *xi = cols + (size_t)i * n, *xj = cols + (size_t)j * n;
+            for (uint32_t r = 0; r < n; r++) s += (xi[r] - mu[i]) * (xj[r] - mu[j]);
+            double cij = (n == 1) ? 0.0 : s / denom;
+            od[(size_t)i * p + j] = od[(size_t)j * p + i] = cij;
+        }
+    free(cols); free(mu);
+    if (to_corr) {                             /* snapshot sds first: normalizing in place
+                                                  would corrupt diagonals still to be read */
+        double *sd = malloc((size_t)p * sizeof *sd);
+        if (!sd) abort();
+        for (uint32_t i = 0; i < p; i++) sd[i] = sqrt(od[(size_t)i * p + i]);
+        for (uint32_t i = 0; i < p; i++)
+            for (uint32_t j = 0; j < p; j++)
+                od[(size_t)i * p + j] = (i == j && sd[i] > 0.0)
+                                      ? 1.0
+                                      : od[(size_t)i * p + j] / (sd[i] * sd[j]);   /* 0-variance -> nan */
+        free(sd);
+    }
+    return out;
+}
+
+/* Validate a real vector argument; return its length (no allocation). */
+static size_t stat_veclen(Interp *I, Value v, const char *who)
+{
+    if (!is_array(v)) runtime_error(I, "%s: expected a vector, got %s", who, type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    if (a->rows != 1 && a->cols != 1) runtime_error(I, "%s: expected a vector, got %ux%u", who, a->rows, a->cols);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "%s: complex data has no ordering", who);
+    size_t n = (size_t)a->rows * a->cols;
+    if (n == 0) runtime_error(I, "%s: empty data", who);
+    return n;
+}
+
+/* Scalar covariance of two equal-length vectors. All validation happens
+ * before any allocation, so no error path needs cleanup. */
+static double cov_pair(Interp *I, Value xv, Value yv, double w, const char *who)
+{
+    size_t nx = stat_veclen(I, xv, who);
+    size_t ny = stat_veclen(I, yv, who);
+    if (nx != ny) runtime_error(I, "%s: vectors differ in length (%zu vs %zu)", who, nx, ny);
+    double *x = malloc(nx * sizeof *x), *y = malloc(nx * sizeof *y);
+    if (!x || !y) abort();
+    ArrObj *xa = as_arr(xv), *ya = as_arr(yv);
+    for (size_t k = 0; k < nx; k++) {
+        x[k] = stat_elt(I, arr_get(xa, k), who);   /* element kinds already vetted */
+        y[k] = stat_elt(I, arr_get(ya, k), who);
+    }
+    double mx = 0.0, my = 0.0;
+    for (size_t k = 0; k < nx; k++) { mx += x[k]; my += y[k]; }
+    mx /= (double)nx; my /= (double)nx;
+    double s = 0.0, sx = 0.0, sy = 0.0;
+    for (size_t k = 0; k < nx; k++) {
+        s  += (x[k] - mx) * (y[k] - my);
+        sx += (x[k] - mx) * (x[k] - mx);
+        sy += (y[k] - my) * (y[k] - my);
+    }
+    free(x); free(y);
+    if (who[2] == 'r') {                       /* "corr": normalize */
+        return s / sqrt(sx * sy);              /* 0-variance -> nan */
+    }
+    double denom = (nx == 1) ? 1.0 : ((w == 1.0) ? (double)nx : (double)(nx - 1));
+    return (nx == 1) ? 0.0 : s / denom;
+}
+
+/* cov(X[, w]) | cov(x, y[, w]);  corr(X) | corr(x, y). */
+static Value bi_cov(Interp *I, Value *args, uint32_t n)
+{
+    double w = 0.0;
+    bool pair = (n >= 2 && is_array(args[1]));
+    uint32_t wpos = pair ? 2 : 1;
+    if (n > wpos) {
+        double wv = stat_elt(I, args[wpos], "cov");
+        if (wv != 0.0 && wv != 1.0) runtime_error(I, "cov: normalization must be 0 (N-1) or 1 (N)");
+        w = wv;
+    }
+    if (pair) return val_float(cov_pair(I, args[0], args[1], w, "cov"));
+    if (!is_array(args[0])) runtime_error(I, "cov: expected numeric data, got %s", type_name(args[0].kind));
+    ArrObj *X = as_arr(args[0]);
+    if (X->rows == 1 || X->cols == 1) return val_float(cov_pair(I, args[0], args[0], w, "cov"));
+    return cov_matrix(I, X, w, "cov", false);
+}
+static Value bi_corr(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 2) return val_float(cov_pair(I, args[0], args[1], 0.0, "corr"));
+    if (!is_array(args[0])) runtime_error(I, "corr: expected numeric data, got %s", type_name(args[0].kind));
+    ArrObj *X = as_arr(args[0]);
+    if (X->rows == 1 || X->cols == 1) return val_float(cov_pair(I, args[0], args[0], 0.0, "corr"));
+    return cov_matrix(I, X, 0.0, "corr", true);
+}
+
+/* var(A) | var(A, w) | var(A, w, dim); w = 0 (N-1, default) or 1 (N). */
+static Value stat_var_common(Interp *I, Value *args, uint32_t n, StatKernel f, const char *who)
+{
+    double w = 0.0;
+    if (n >= 2) {
+        if (args[1].kind == VAL_NULL || (is_array(args[1]) && (size_t)as_arr(args[1])->rows * as_arr(args[1])->cols == 0)) w = 0.0;   /* [] placeholder */
+        else {
+            double wv = stat_elt(I, args[1], who);
+            if (wv != 0.0 && wv != 1.0) runtime_error(I, "%s: normalization must be 0 (N-1) or 1 (N)", who);
+            w = wv;
+        }
+    }
+    if (n == 3) {
+        if (!is_array(args[0])) runtime_error(I, "%s: the dim form needs an array", who);
+        return stat_dim(I, as_arr(args[0]), dim_arg(I, args[2], who), f, w, who);
+    }
+    return stat_all(I, args[0], f, w, who);
+}
+static Value bi_var(Interp *I, Value *args, uint32_t n) { return stat_var_common(I, args, n, st_var, "var"); }
+static Value bi_std(Interp *I, Value *args, uint32_t n) { return stat_var_common(I, args, n, st_std, "std"); }
+
+static Value bi_median(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 2) {
+        if (!is_array(args[0])) runtime_error(I, "median: the dim form needs an array");
+        return stat_dim(I, as_arr(args[0]), dim_arg(I, args[1], "median"), st_median, 0.0, "median");
+    }
+    return stat_all(I, args[0], st_median, 0.0, "median");
+}
+
+/* quantile(x, p): p a probability in [0, 1], scalar or vector -> matching shape. */
+static Value bi_quantile(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value pv = args[1];
+    if (is_num(pv)) {
+        double p = stat_elt(I, pv, "quantile");
+        if (p < 0.0 || p > 1.0) runtime_error(I, "quantile: p must be in [0, 1]");
+        return stat_all(I, args[0], st_quantile, p, "quantile");
+    }
+    if (!is_array(pv)) runtime_error(I, "quantile: p must be a probability or a vector of them");
+    ArrObj *pa = as_arr(pv);
+    if (pa->elt == ELT_COMPLEX || (pa->rows != 1 && pa->cols != 1))
+        runtime_error(I, "quantile: p must be a probability or a vector of them");
+    size_t np = (size_t)pa->rows * pa->cols;
+    if (np == 0) runtime_error(I, "quantile: empty p");
+    Value out = val_array(ELT_FLOAT, pa->rows, pa->cols);
+    double *od = (double *)as_arr(out)->data;
+    for (size_t k = 0; k < np; k++) {
+        double p = stat_elt(I, arr_get(pa, k), "quantile");
+        if (p < 0.0 || p > 1.0) runtime_error(I, "quantile: p must be in [0, 1]");
+        Value r = stat_all(I, args[0], st_quantile, p, "quantile");
+        od[k] = r.as.f;
+    }
+    return out;
+}
+
+static Value bi_mean(Interp *I, Value *args, uint32_t n)
+{
+    Value v = args[0];
+    if (n == 2) {
+        if (!is_array(v)) runtime_error(I, "mean: the dim form needs an array");
+        int dim = dim_arg(I, args[1], "mean");
+        ArrObj *a = as_arr(v);
+        int64_t len = (dim == 1) ? a->rows : a->cols;
+        if (len == 0) runtime_error(I, "mean: empty dimension");
+        Value sums = reduce_dim(I, a, dim, val_int(0), fold_add);
+        ArrObj *so = as_arr(sums);
+        size_t sn = (size_t)so->rows * so->cols;
+        Value *tmp = malloc(sizeof(Value) * (sn ? sn : 1));
+        for (size_t k = 0; k < sn; k++) tmp[k] = scalar_arith_k(I, AR_DIV, arr_get(so, k), val_int(len));
+        Value out = pack_array(tmp, sn, so->rows, so->cols);
+        free(tmp); value_release(sums);
+        return out;
+    }
+    if (is_num(v)) return value_retain(v);
+    if (v.kind == VAL_BOOL) return val_int(v.as.b ? 1 : 0);
+    if (!is_array(v)) runtime_error(I, "mean: expected an array or number");
+    ArrObj *a = as_arr(v);
+    size_t nn = (size_t)a->rows * a->cols;
+    if (nn == 0) runtime_error(I, "mean: empty array");
+    Value acc = val_int(0);
+    for (size_t k = 0; k < nn; k++) acc = scalar_arith_k(I, AR_ADD, acc, numify(arr_get(a, k)));   /* numify: masks mean their fraction, like every other reduction */
+    return scalar_arith_k(I, AR_DIV, acc, val_int((int64_t)nn));
+}
+static Value bi_prod(Interp *I, Value *args, uint32_t n)
+{
+    Value v = args[0];
+    if (n == 2) {
+        if (!is_array(v)) runtime_error(I, "prod: the dim form needs an array");
+        return reduce_dim(I, as_arr(v), dim_arg(I, args[1], "prod"), val_int(1), fold_mul);
+    }
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "prod: expected an array or number");
+    ArrObj *a = as_arr(v);
+    size_t nn = (size_t)a->rows * a->cols;
+    Value acc = val_int(1);
+    for (size_t k = 0; k < nn; k++) acc = scalar_arith_k(I, AR_MUL, acc, arr_get(a, k));
+    return acc;
+}
+
+/* ---------- array utilities ---------- */
+
+static bool elt_nonzero(Value e)
+{
+    switch (e.kind) {
+    case VAL_BOOL:    return e.as.b;
+    case VAL_INT:     return e.as.i != 0;
+    case VAL_FLOAT:   return e.as.f != 0.0;
+    case VAL_COMPLEX: return e.as.z.re != 0.0 || e.as.z.im != 0.0;
+    default:          return false;
+    }
+}
+
+static int64_t as_count(Interp *I, Value v, const char *name)
+{
+    if (v.kind == VAL_INT) return v.as.i;
+    if (v.kind == VAL_FLOAT
+        && v.as.f >= -9.2e18 && v.as.f <= 9.2e18          /* the cast is UB out of int64 range */
+        && v.as.f == (double)(int64_t)v.as.f) return (int64_t)v.as.f;
+    runtime_error(I, "%s: expected an integer count", name);
+}
+
+/* A single array dimension: integer, 0 <= d <= DIM_MAX. */
+static int64_t as_dim(Interp *I, Value v, const char *name)
+{
+    int64_t d = as_count(I, v, name);
+    if (d < 0) runtime_error(I, "%s: negative size", name);
+    if (d > DIM_MAX)
+        runtime_error(I, "%s: dimension %lld too large (limit %lld)", name, (long long)d, (long long)DIM_MAX);
+    return d;
+}
+
+/* Guard the r x c product before any allocation. */
+static void check_cells(Interp *I, int64_t r, int64_t c, const char *name)
+{
+    if ((uint64_t)r * (uint64_t)c > (uint64_t)DIM_MAX)
+        runtime_error(I, "%s: result too large (%lld x %lld, limit %lld elements)",
+                      name, (long long)r, (long long)c, (long long)DIM_MAX);
+}
+
+static Value bi_length(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n;
+    if (args[0].kind == VAL_STRING) return val_int(as_str(args[0])->len);
+    if (!is_array(args[0])) return val_int(1);
+    ArrObj *a = as_arr(args[0]);
+    if ((size_t)a->rows * a->cols == 0) return val_int(0);
+    return val_int(a->rows > a->cols ? a->rows : a->cols);
+}
+
+static Value bi_numel(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n;
+    if (!is_array(args[0])) return val_int(1);
+    ArrObj *a = as_arr(args[0]);
+    return val_int((int64_t)a->rows * a->cols);
+}
+
+static Value bi_find(Interp *I, Value *args, uint32_t n);
+static Value bi_pick(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value m = args[0], a = args[1], b = args[2];       /* pick(mask, a, b): a where true, else b */
+    Value src[3] = { m, a, b }; bool isa[3];
+    uint32_t rows = 0, cols = 0; bool have = false;
+    for (int i = 0; i < 3; i++) {
+        isa[i] = is_array(src[i]);
+        if (isa[i]) {
+            uint32_t r = as_arr(src[i])->rows, c = as_arr(src[i])->cols;
+            if (!have) { rows = r; cols = c; have = true; }
+            else if (r != rows || c != cols)
+                runtime_error(I, "pick: shape mismatch (%ux%u vs %ux%u)", rows, cols, r, c);
+        }
+    }
+    if (!have) return elt_nonzero(m) ? value_retain(a) : value_retain(b);
+    size_t nn = (size_t)rows * cols;
+    Value *tmp = nn ? malloc(nn * sizeof *tmp) : nullptr;
+    for (size_t k = 0; k < nn; k++) {
+        Value mv = isa[0] ? arr_get(as_arr(m), k) : m;
+        Value av = isa[1] ? arr_get(as_arr(a), k) : a;
+        Value bv = isa[2] ? arr_get(as_arr(b), k) : b;
+        tmp[k] = elt_nonzero(mv) ? av : bv;
+    }
+    Value r = pack_array(tmp, nn, rows, cols);
+    free(tmp);
+    return r;
+}
+
+static Value bi_find(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n; Value v = args[0];
+    if (!is_array(v)) {
+        if (!elt_nonzero(v)) return val_array(ELT_INT, 0, 0);
+        Value out = val_array(ELT_INT, 1, 1); ((int64_t *)as_arr(out)->data)[0] = 1; return out;
+    }
+    ArrObj *a = as_arr(v);
+    size_t nn = (size_t)a->rows * a->cols, cnt = 0;
+    for (size_t k = 0; k < nn; k++) if (elt_nonzero(arr_get(a, k))) cnt++;
+    bool row = (a->rows == 1);                         /* row vector -> row result, else column */
+    Value out = val_array(ELT_INT, row ? 1 : (uint32_t)cnt, row ? (uint32_t)cnt : 1);
+    int64_t *od = (int64_t *)as_arr(out)->data;
+    size_t w = 0;
+    for (size_t k = 0; k < nn; k++) if (elt_nonzero(arr_get(a, k))) od[w++] = (int64_t)(k + 1);
+    return out;
+}
+
+static int str_val_cmp(Value a, Value b)
+{
+    StrObj *x = as_str(a), *y = as_str(b);
+    uint32_t m = x->len < y->len ? x->len : y->len;
+    int c = memcmp(x->data, y->data, m);
+    if (c == 0) c = (x->len > y->len) - (x->len < y->len);
+    return c;
+}
+
+static int cmp_val_asc(const void *x, const void *y)
+{
+    Value vx = *(const Value *)x, vy = *(const Value *)y;
+    if (vx.kind == VAL_STRING && vy.kind == VAL_STRING) return str_val_cmp(vx, vy);
+    double a = as_double(vx), b = as_double(vy);
+    return (a < b) ? -1 : (a > b) ? 1 : 0;
+}
+
+static Value bi_sort(Interp *I, Value *args, uint32_t n)
+{
+    (void)n; Value v = args[0];
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "sort: expected an array or number");
+    ArrObj *a = as_arr(v);
+    if (a->elt == ELT_COMPLEX) runtime_error(I, "sort: undefined for complex");
+    uint32_t R = a->rows, C = a->cols;
+    Value out = val_array(a->elt, R, C); ArrObj *o = as_arr(out);
+    if (R == 1 || C == 1) {                            /* vector: one sequence */
+        size_t nn = (size_t)R * C;
+        Value *buf = nn ? malloc(nn * sizeof *buf) : nullptr;
+        for (size_t k = 0; k < nn; k++) buf[k] = arr_get(a, k);
+        qsort(buf, nn, sizeof *buf, cmp_val_asc);
+        for (size_t k = 0; k < nn; k++) arr_set(o, k, buf[k]);
+        free(buf);
+    } else {                                           /* matrix: sort each column */
+        Value *col = malloc(R * sizeof *col);
+        for (uint32_t c = 0; c < C; c++) {
+            for (uint32_t r = 0; r < R; r++) col[r] = arr_get(a, (size_t)r * C + c);
+            qsort(col, R, sizeof *col, cmp_val_asc);
+            for (uint32_t r = 0; r < R; r++) arr_set(o, (size_t)r * C + c, col[r]);
+        }
+        free(col);
+    }
+    return out;
+}
+
+static Value numify(Value e) { return e.kind == VAL_BOOL ? val_int(e.as.b ? 1 : 0) : e; }
+
+static Value cumulate(Interp *I, Value v, Arith op, const char *name)
+{
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "%s: expected an array or number", name);
+    ArrObj *a = as_arr(v);
+    uint32_t R = a->rows, C = a->cols;
+    Value out = val_array(a->elt == ELT_BOOL ? ELT_INT : a->elt, R, C);
+    ArrObj *o = as_arr(out);
+    Value id = (op == AR_MUL) ? val_int(1) : val_int(0);
+    if (R == 1 || C == 1) {
+        size_t nn = (size_t)R * C; Value acc = id;
+        for (size_t k = 0; k < nn; k++) { acc = scalar_arith_k(I, op, acc, numify(arr_get(a, k))); arr_set(o, k, acc); }
+    } else {
+        for (uint32_t c = 0; c < C; c++) {
+            Value acc = id;
+            for (uint32_t r = 0; r < R; r++) {
+                acc = scalar_arith_k(I, op, acc, numify(arr_get(a, (size_t)r * C + c)));
+                arr_set(o, (size_t)r * C + c, acc);
+            }
+        }
+    }
+    return out;
+}
+static Value bi_cumsum(Interp *I, Value *args, uint32_t n)  { (void)n; return cumulate(I, args[0], AR_ADD, "cumsum"); }
+static Value bi_cumprod(Interp *I, Value *args, uint32_t n) { (void)n; return cumulate(I, args[0], AR_MUL, "cumprod"); }
+
+static Value bi_diff(Interp *I, Value *args, uint32_t n)
+{
+    (void)n; Value v = args[0];
+    if (!is_array(v)) runtime_error(I, "diff: expected an array");
+    ArrObj *a = as_arr(v);
+    uint32_t R = a->rows, C = a->cols;
+    EltType relt = a->elt == ELT_BOOL ? ELT_INT : a->elt;
+    if (R == 1 || C == 1) {
+        size_t nn = (size_t)R * C, m = nn ? nn - 1 : 0;
+        Value out = val_array(relt, R == 1 ? 1 : (uint32_t)m, R == 1 ? (uint32_t)m : 1);
+        ArrObj *o = as_arr(out);
+        for (size_t k = 0; k + 1 < nn; k++)
+            arr_set(o, k, scalar_arith_k(I, AR_SUB, numify(arr_get(a, k + 1)), numify(arr_get(a, k))));
+        return out;
+    }
+    Value out = val_array(relt, R ? R - 1 : 0, C); ArrObj *o = as_arr(out);
+    for (uint32_t c = 0; c < C; c++)
+        for (uint32_t r = 0; r + 1 < R; r++)
+            arr_set(o, (size_t)r * C + c,
+                    scalar_arith_k(I, AR_SUB, numify(arr_get(a, (size_t)(r + 1) * C + c)),
+                                              numify(arr_get(a, (size_t)r * C + c))));
+    return out;
+}
+
+static Value bi_repmat(Interp *I, Value *args, uint32_t n)
+{
+    Value v = args[0];
+    int64_t M = as_dim(I, args[1], "repmat");
+    int64_t N = (n == 3) ? as_dim(I, args[2], "repmat") : M;
+    if (M < 0 || N < 0) runtime_error(I, "repmat: negative tile count");
+    bool arr = is_array(v);
+    uint32_t R = arr ? as_arr(v)->rows : 1, C = arr ? as_arr(v)->cols : 1;
+    EltType relt = arr ? as_arr(v)->elt : scalar_elt(I, v);
+    check_cells(I, (int64_t)R * M, (int64_t)C * N, "repmat");   /* also bounds each side */
+    uint32_t OR = (uint32_t)((int64_t)R * M), OC = (uint32_t)((int64_t)C * N);
+    Value out = val_array(relt, OR, OC); ArrObj *o = as_arr(out);
+    for (uint32_t i = 0; i < OR; i++)
+        for (uint32_t j = 0; j < OC; j++)
+            arr_set(o, (size_t)i * OC + j, arr ? arr_get(as_arr(v), (size_t)(i % R) * C + (j % C)) : v);
+    return out;
+}
+
+static Value bi_flipud(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n; Value v = args[0];
+    if (!is_array(v)) return value_retain(v);
+    ArrObj *a = as_arr(v); uint32_t R = a->rows, C = a->cols;
+    Value out = val_array(a->elt, R, C); ArrObj *o = as_arr(out);
+    for (uint32_t r = 0; r < R; r++)
+        for (uint32_t c = 0; c < C; c++)
+            arr_set(o, (size_t)r * C + c, arr_get(a, (size_t)(R - 1 - r) * C + c));
+    return out;
+}
+
+static Value bi_fliplr(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)n; Value v = args[0];
+    if (!is_array(v)) return value_retain(v);
+    ArrObj *a = as_arr(v); uint32_t R = a->rows, C = a->cols;
+    Value out = val_array(a->elt, R, C); ArrObj *o = as_arr(out);
+    for (uint32_t r = 0; r < R; r++)
+        for (uint32_t c = 0; c < C; c++)
+            arr_set(o, (size_t)r * C + c, arr_get(a, (size_t)r * C + (C - 1 - c)));
+    return out;
+}
+
+/* ---- random number generation ---- */
+static void rng_dims(Interp *I, Value *args, uint32_t n, uint32_t off,
+                     const char *name, uint32_t *rows, uint32_t *cols)
+{
+    uint32_t nd = n - off;
+    if (nd == 0) { *rows = *cols = 1; return; }
+    int64_t r = as_dim(I, args[off], name);
+    int64_t c = (nd >= 2) ? as_dim(I, args[off + 1], name) : r;   /* one dim -> square */
+    check_cells(I, r, c, name);
+    *rows = (uint32_t)r; *cols = (uint32_t)c;
+}
+
+static Value bi_rng(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    rng_seed(I, (uint64_t)as_count(I, args[0], "rng"));
+    return val_null();
+}
+
+static Value bi_rand(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 0) return val_float(rng_uniform(I));
+    uint32_t R, C; rng_dims(I, args, n, 0, "rand", &R, &C);
+    Value out = val_array(ELT_FLOAT, R, C);
+    double *d = (double *)as_arr(out)->data;
+    size_t nn = (size_t)R * C;
+    for (size_t k = 0; k < nn; k++) d[k] = rng_uniform(I);
+    return out;
+}
+
+static Value bi_randn(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 0) { double z0, z1; rng_normal_pair(I, &z0, &z1); return val_float(z0); }
+    uint32_t R, C; rng_dims(I, args, n, 0, "randn", &R, &C);
+    Value out = val_array(ELT_FLOAT, R, C);
+    double *d = (double *)as_arr(out)->data;
+    size_t nn = (size_t)R * C;
+    for (size_t k = 0; k + 1 < nn; k += 2) rng_normal_pair(I, &d[k], &d[k + 1]);
+    if (nn & 1) { double z0, z1; rng_normal_pair(I, &z0, &z1); d[nn - 1] = z0; }
+    return out;
+}
+
+static Value bi_randi(Interp *I, Value *args, uint32_t n)
+{
+    int64_t lo = 1, hi;
+    if (is_array(args[0])) {
+        ArrObj *a = as_arr(args[0]);
+        if ((size_t)a->rows * a->cols != 2) runtime_error(I, "randi: range must be [lo, hi]");
+        lo = as_count(I, arr_get(a, 0), "randi");
+        hi = as_count(I, arr_get(a, 1), "randi");
+    } else {
+        hi = as_count(I, args[0], "randi");
+    }
+    if (hi < lo) runtime_error(I, "randi: empty range");
+    int64_t span = hi - lo + 1;
+    if (n == 1) return val_int(lo + (int64_t)(rng_uniform(I) * (double)span));
+    uint32_t R, C; rng_dims(I, args, n, 1, "randi", &R, &C);
+    Value out = val_array(ELT_INT, R, C);
+    int64_t *d = (int64_t *)as_arr(out)->data;
+    size_t nn = (size_t)R * C;
+    for (size_t k = 0; k < nn; k++) d[k] = lo + (int64_t)(rng_uniform(I) * (double)span);
+    return out;
+}
+
+/* ---- floating-point predicates (elementwise -> logical) ---- */
+static Value sc_isnan(Interp *I, Value v)
+{
+    (void)I;
+    switch (v.kind) {
+    case VAL_FLOAT:   return val_bool(isnan(v.as.f));
+    case VAL_COMPLEX: return val_bool(isnan(v.as.z.re) || isnan(v.as.z.im));
+    default:          return val_bool(false);            /* int, bool: never NaN */
+    }
+}
+static Value sc_isinf(Interp *I, Value v)
+{
+    (void)I;
+    switch (v.kind) {
+    case VAL_FLOAT:   return val_bool(isinf(v.as.f));
+    case VAL_COMPLEX: return val_bool(isinf(v.as.z.re) || isinf(v.as.z.im));
+    default:          return val_bool(false);
+    }
+}
+static Value sc_isfinite(Interp *I, Value v)
+{
+    (void)I;
+    switch (v.kind) {
+    case VAL_FLOAT:   return val_bool(isfinite(v.as.f));
+    case VAL_COMPLEX: return val_bool(isfinite(v.as.z.re) && isfinite(v.as.z.im));
+    default:          return val_bool(true);             /* int, bool: always finite */
+    }
+}
+static Value bi_isnan(Interp *I, Value *args, uint32_t n)    { (void)n; return map_unary(I, args[0], sc_isnan); }
+static Value bi_isinf(Interp *I, Value *args, uint32_t n)    { (void)n; return map_unary(I, args[0], sc_isinf); }
+static Value bi_isfinite(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_isfinite); }
+
+static double cmp_key(Interp *I, Value v)
+{
+    switch (v.kind) {
+    case VAL_INT:   return (double)v.as.i;
+    case VAL_FLOAT: return v.as.f;
+    case VAL_BOOL:  return v.as.b ? 1.0 : 0.0;
+    default:        runtime_error(I, "min/max: undefined for %s", type_name(v.kind));
+    }
+}
+static Value sc_min(Interp *I, Value a, Value b) { return cmp_key(I, a) <= cmp_key(I, b) ? a : b; }
+static Value sc_max(Interp *I, Value a, Value b) { return cmp_key(I, a) >= cmp_key(I, b) ? a : b; }
+
+static void def_builtin(EnvObj *e, const char *name, BuiltinFn fn, uint32_t lo, uint32_t hi)
+{
+    Value b = val_builtin(name, fn, lo, hi);
+    env_define(e, name, (uint32_t)strlen(name), b);
+    value_release(b);
+}
+
+EnvObj *globals_new(void)
+{
+    EnvObj *e = env_new(nullptr);
+    def_builtin(e, "print", bi_print, 0, UINT32_MAX);
+    def_builtin(e, "sum",   bi_sum,   1, 2);
+    def_builtin(e, "size",  bi_size,  1, 1);
+    def_builtin(e, "map",   bi_map,   2, 2);
+    def_builtin(e, "abs",   bi_abs,   1, 1);
+    def_builtin(e, "sqrt",  bi_sqrt,  1, 1);
+    def_builtin(e, "zeros", bi_zeros, 2, 2);
+    def_builtin(e, "ones",  bi_ones,  2, 2);
+    def_builtin(e, "any",   bi_any,   1, 2);
+    def_builtin(e, "all",   bi_all,   1, 2);
+    def_builtin(e, "eye",     bi_eye,     1, 1);
+    def_builtin(e, "diag",    bi_diag,    1, 1);
+    def_builtin(e, "trace",   bi_trace,   1, 1);
+    def_builtin(e, "det",     bi_det,     1, 1);
+    def_builtin(e, "inv",     bi_inv,     1, 1);
+    def_builtin(e, "dot",     bi_dot,     2, 2);
+    def_builtin(e, "norm",    bi_norm,    1, 2);
+    def_builtin(e, "kron",    bi_kron,    2, 2);
+    def_builtin(e, "reshape", bi_reshape, 3, 3);
+    def_builtin(e, "linspace",bi_linspace,3, 3);
+    def_builtin(e, "lu",      bi_lu,      1, 1);
+    def_builtin(e, "qr",      bi_qr,      1, 1);
+    def_builtin(e, "chol",    bi_chol,    1, 1);
+    def_builtin(e, "eig",     bi_eig,     1, 1);
+    def_builtin(e, "svd",     bi_svd,     1, 1);
+    def_builtin(e, "exp",     bi_exp,     1, 1);
+    def_builtin(e, "log",     bi_log,     1, 1);
+    def_builtin(e, "sin",     bi_sin,     1, 1);
+    def_builtin(e, "cos",     bi_cos,     1, 1);
+    def_builtin(e, "tan",     bi_tan,     1, 1);
+    def_builtin(e, "floor",   bi_floor,   1, 1);
+    def_builtin(e, "ceil",    bi_ceil,    1, 1);
+    def_builtin(e, "round",   bi_round,   1, 1);
+    def_builtin(e, "trunc",   bi_trunc,   1, 1);
+    def_builtin(e, "ln",      bi_log,     1, 1);
+    def_builtin(e, "log10",   bi_log10,   1, 1);
+    def_builtin(e, "log2",    bi_log2,    1, 1);
+    def_builtin(e, "asin",    bi_asin,    1, 1);
+    def_builtin(e, "acos",    bi_acos,    1, 1);
+    def_builtin(e, "atan",    bi_atan,    1, 1);
+    def_builtin(e, "sinh",    bi_sinh,    1, 1);
+    def_builtin(e, "cosh",    bi_cosh,    1, 1);
+    def_builtin(e, "tanh",    bi_tanh,    1, 1);
+    def_builtin(e, "asinh",   bi_asinh,   1, 1);
+    def_builtin(e, "acosh",   bi_acosh,   1, 1);
+    def_builtin(e, "atanh",   bi_atanh,   1, 1);
+    def_builtin(e, "sign",    bi_sign,    1, 1);
+    def_builtin(e, "real",    bi_real,    1, 1);
+    def_builtin(e, "imag",    bi_imag,    1, 1);
+    def_builtin(e, "conj",    bi_conj,    1, 1);
+    def_builtin(e, "angle",   bi_angle,   1, 1);
+    def_builtin(e, "arg",     bi_angle,   1, 1);
+    def_builtin(e, "cbrt",    bi_cbrt,    1, 1);
+    def_builtin(e, "gamma",   bi_gamma,   1, 1);
+    def_builtin(e, "lgamma",  bi_lgamma,  1, 1);
+    def_builtin(e, "erf",     bi_erf,     1, 1);
+    def_builtin(e, "erfc",    bi_erfc,    1, 1);
+    def_builtin(e, "beta",    bi_beta,    2, 2);
+    def_builtin(e, "lbeta",   bi_lbeta,   2, 2);
+    def_builtin(e, "gammainc",bi_gammainc,2, 2);
+    def_builtin(e, "betainc", bi_betainc, 3, 3);
+    def_builtin(e, "norminv", bi_norminv, 1, 1);
+    def_builtin(e, "digamma", bi_digamma, 1, 1);
+    def_builtin(e, "besselj", bi_besselj, 2, 2);
+    def_builtin(e, "bessely", bi_bessely, 2, 2);
+    def_builtin(e, "atan2",   bi_atan2,   2, 2);
+    def_builtin(e, "hypot",   bi_hypot,   2, 2);
+    def_builtin(e, "mod",     bi_mod,     2, 2);
+    def_builtin(e, "rem",     bi_rem,     2, 2);
+    def_builtin(e, "min",     bi_min,     1, 3);
+    def_builtin(e, "max",     bi_max,     1, 3);
+    /* mathematical constants (values, not functions; shadowable like builtins) */
+    env_define(e, "pi",  2, val_float(3.14159265358979323846));
+    env_define(e, "e",   1, val_float(2.71828182845904523536));
+    env_define(e, "eulergamma", 10, val_float(0.57721566490153286061));
+    env_define(e, "phi", 3, val_float(1.61803398874989484820));
+    env_define(e, "eps", 3, val_float(2.2204460492503131e-16));
+    env_define(e, "inf", 3, val_float(INFINITY));
+    env_define(e, "nan", 3, val_float(NAN));
+    def_builtin(e, "pwd",   bi_pwd,   0, 0);
+    def_builtin(e, "cd",    bi_cd,    0, 1);
+    def_builtin(e, "ls",    bi_ls,    0, 1);
+    def_builtin(e, "load",    bi_load,    1, 1);
+    def_builtin(e, "eval",    bi_eval_str, 1, 1);
+    def_builtin(e, "names",   bi_names,   0, 1);
+    def_builtin(e, "input",   bi_input,   0, 1);
+    def_builtin(e, "pause",   bi_pause,   0, 1);
+    def_builtin(e, "save",    bi_save,    1, 1);
+    def_builtin(e, "body",    bi_body,    1, 1);
+    def_builtin(e, "clear",   bi_clear,   0, UINT32_MAX);
+    def_builtin(e, "keep" ,   bi_keep ,   1, UINT32_MAX);
+    def_builtin(e, "mem",     bi_mem,     0, 0);
+    def_builtin(e, "tic",     bi_tic,     0, 0);
+    def_builtin(e, "toc",     bi_toc,     0, 0);
+    def_builtin(e, "unique",  bi_unique,  1, 1);
+    def_builtin(e, "cov",     bi_cov,     1, 3);
+    def_builtin(e, "corr",    bi_corr,    1, 2);
+    def_builtin(e, "var",     bi_var,     1, 3);
+    def_builtin(e, "std",     bi_std,     1, 3);
+    def_builtin(e, "median",  bi_median,  1, 2);
+    def_builtin(e, "quantile",bi_quantile,2, 2);
+    def_builtin(e, "mean",    bi_mean,    1, 2);
+    def_builtin(e, "prod",    bi_prod,    1, 2);
+    def_builtin(e, "length",  bi_length,  1, 1);
+    def_builtin(e, "numel",   bi_numel,   1, 1);
+    def_builtin(e, "find",    bi_find,    1, 1);
+    def_builtin(e, "pick",    bi_pick,    3, 3);
+    def_builtin(e, "sort",    bi_sort,    1, 1);
+    def_builtin(e, "cumsum",  bi_cumsum,  1, 1);
+    def_builtin(e, "cumprod", bi_cumprod, 1, 1);
+    def_builtin(e, "diff",    bi_diff,    1, 1);
+    def_builtin(e, "repmat",  bi_repmat,  2, 3);
+    def_builtin(e, "flipud",  bi_flipud,  1, 1);
+    def_builtin(e, "fliplr",  bi_fliplr,  1, 1);
+    def_builtin(e, "rng",     bi_rng,     1, 1);
+    def_builtin(e, "rand",    bi_rand,    0, 2);
+    def_builtin(e, "randn",   bi_randn,   0, 2);
+    def_builtin(e, "randi",   bi_randi,   1, 3);
+    def_builtin(e, "isnan",    bi_isnan,    1, 1);
+    def_builtin(e, "isinf",    bi_isinf,    1, 1);
+    def_builtin(e, "isfinite", bi_isfinite, 1, 1);
+    def_builtin(e, "upper",      bi_upper,      1, 1);
+    def_builtin(e, "lower",      bi_lower,      1, 1);
+    def_builtin(e, "trim",       bi_trim,       1, 1);
+    def_builtin(e, "contains",   bi_contains,   2, 2);
+    def_builtin(e, "startswith", bi_startswith, 2, 2);
+    def_builtin(e, "endswith",   bi_endswith,   2, 2);
+    def_builtin(e, "strrep",     bi_strrep,     3, 3);
+    def_builtin(e, "str",        bi_str,        1, 1);
+    def_builtin(e, "num",        bi_num,        1, 1);
+    def_builtin(e, "fmt",        bi_fmt,        1, UINT32_MAX);
+    def_builtin(e, "error",     bi_error,    1, UINT32_MAX);
+    def_builtin(e, "assert",    bi_assert,   1, UINT32_MAX);
+    def_builtin(e, "strsplit",  bi_strsplit, 2, 2);
+    def_builtin(e, "strjoin",   bi_strjoin,  2, 2);
+    def_builtin(e, "fields", bi_fields, 1, 1);
+    def_builtin(e, "exit",   bi_exit,        0, 1);
+    def_builtin(e, "quit",   bi_exit,        0, 1);
+    def_builtin(e, "manual", bi_manual_stub, 0, 1);
+    def_builtin(e, "pretty", bi_pretty_stub, 0, 1);
+    def_builtin(e, "more",   bi_more_stub,   0, 1);
+    def_builtin(e, "who",   bi_who,   0, 2);
+    def_builtin(e, "whov",  bi_whov,  0, 1);
+    def_builtin(e, "whof",  bi_whof,  0, 1);
+    def_builtin(e, "whor",  bi_whor,  0, 1);
+    def_builtin(e, "whos",  bi_whos,  0, 0);
+    def_builtin(e, "version", bi_version, 0, 0);
+    def_builtin(e, "buildinfo", bi_buildinfo, 0, 0);
+    def_builtin(e, "now",   bi_now,   0, 0);
+    def_builtin(e, "help",  bi_help,  0, 1);
+    def_builtin(e, "system",bi_system,1, 1);
+    def_builtin(e, "dis",   bi_dis,   1, 1);
+    def_builtin(e, "fzero",    bi_fzero,    3, 3);
+    def_builtin(e, "fminbnd",  bi_fminbnd,  3, 3);
+    def_builtin(e, "integral", bi_integral, 3, 4);
+    def_builtin(e, "readcsv",  bi_readcsv,  1, 2);
+    def_builtin(e, "writecsv", bi_writecsv, 2, 3);
+    def_builtin(e, "readtable",bi_readtable,1, 2);
+    def_builtin(e, "plot",  bi_plot,  1, 3);
+    def_builtin(e, "hist",  bi_hist,  1, 3);
+    def_builtin(e, "format",bi_format,0, 2);
+    e->n_protected = e->count;   /* everything above is the standard library */
+    return e;
+}
+
+Value eval_map_builtin(void)
+{
+    return val_builtin("map", bi_map, 2, 2);
+}

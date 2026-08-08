@@ -1,0 +1,924 @@
+/* parser.c */
+#include "parser.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* token cursor                                                        */
+/* ------------------------------------------------------------------ */
+[[noreturn]] static void parse_error(Parser *p, const char *msg)
+{
+    p->had_error = true;
+    p->err_msg   = msg;
+    p->err_tok   = p->cur;
+    longjmp(p->jmp, 1);
+}
+
+static void advance(Parser *p)
+{
+    p->prev = p->cur;
+    p->cur  = lexer_next(&p->lex);
+    if (p->cur.kind == TOK_ERROR)
+        parse_error(p, p->lex.error ? p->lex.error : "lex error");
+}
+
+static bool check(Parser *p, enum TokenKind k) { return p->cur.kind == k; }
+
+static bool accept(Parser *p, enum TokenKind k)
+{
+    if (p->cur.kind == k) { advance(p); return true; }
+    return false;
+}
+
+static Token expect(Parser *p, enum TokenKind k, const char *what)
+{
+    if (p->cur.kind != k) {
+        snprintf(p->msgbuf, sizeof p->msgbuf, "expected %s", what);
+        parse_error(p, p->msgbuf);
+    }
+    Token t = p->cur;
+    advance(p);
+    return t;
+}
+
+static void skip_newlines(Parser *p) { while (p->cur.kind == TOK_NEWLINE) advance(p); }
+
+/* ------------------------------------------------------------------ */
+/* node helpers                                                        */
+/* ------------------------------------------------------------------ */
+static AstNode *node(Parser *p, AstKind k, Token at)
+{
+    return ast_alloc(p->arena, k, at.line, at.col);
+}
+
+/* growable scratch vector of node pointers, copied into the arena at close.
+ * Every live buffer is registered in p->scratch so that a parse_error longjmp
+ * can free in-flight vectors (found by fuzzing: every parse error leaked). */
+typedef struct { AstNode **data; uint32_t len, cap, reg; } Vec;
+#define VEC_INIT { nullptr, 0, 0, UINT32_MAX }
+
+static void scratch_set(Parser *p, Vec *v)
+{
+    if (v->reg == UINT32_MAX) {
+        if (p->scr_len == p->scr_cap) {
+            p->scr_cap = p->scr_cap ? p->scr_cap * 2 : 16;
+            p->scratch = realloc(p->scratch, p->scr_cap * sizeof *p->scratch);
+            if (!p->scratch) abort();
+        }
+        v->reg = p->scr_len++;
+    }
+    p->scratch[v->reg] = v->data;
+}
+
+static void vec_push(Parser *p, Vec *v, AstNode *n)
+{
+    if (v->len == v->cap) {
+        v->cap = v->cap ? v->cap * 2 : 8;
+        v->data = realloc(v->data, v->cap * sizeof *v->data);
+        if (!v->data) abort();
+        scratch_set(p, v);
+    }
+    v->data[v->len++] = n;
+}
+
+static AstList vec_seal(Parser *p, Vec *v)
+{
+    if (v->reg != UINT32_MAX) p->scratch[v->reg] = nullptr;
+    AstList list = { .items = nullptr, .count = v->len };
+    if (v->len) {
+        list.items = arena_alloc(p->arena, v->len * sizeof *list.items);
+        memcpy(list.items, v->data, v->len * sizeof *list.items);
+    }
+    free(v->data);
+    return list;
+}
+
+/* ------------------------------------------------------------------ */
+/* precedence                                                          */
+/* ------------------------------------------------------------------ */
+enum {
+    BP_WHERE = 5, BP_PIPE = 10, BP_OR = 20, BP_AND = 30, BP_BITOR = 40, BP_BITAND = 50,
+    BP_CMP = 60, BP_RANGE = 70, BP_ADD = 80, BP_MUL = 90,
+    BP_UNARY = 100, BP_POW = 110, BP_POSTFIX = 120, BP_CALL = 130,
+};
+
+static int infix_bp(enum TokenKind k)
+{
+    switch (k) {
+    case TOK_KW_WHERE:  return BP_WHERE;
+    case TOK_PIPE_GT:   return BP_PIPE;
+    case TOK_PIPE_GTGT: return BP_PIPE;
+    case TOK_TILDE_GT:  return BP_PIPE;
+    case TOK_OR:        return BP_OR;
+    case TOK_AND:       return BP_AND;
+    case TOK_PIPE:      return BP_BITOR;
+    case TOK_AMP:       return BP_BITAND;
+    case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
+                        return BP_CMP;
+    case TOK_COLON:     return BP_RANGE;
+    case TOK_PLUS: case TOK_MINUS: return BP_ADD;
+    case TOK_STAR: case TOK_SLASH: case TOK_BACKSLASH:
+    case TOK_DOT_STAR: case TOK_DOT_SLASH: case TOK_DOT_BACKSLASH:
+                        return BP_MUL;
+    case TOK_CARET: case TOK_DOT_CARET: return BP_POW;
+    case TOK_CTRANSPOSE: case TOK_TRANSPOSE: return BP_POSTFIX;
+    case TOK_LPAREN: case TOK_LBRACK: case TOK_DOT: return BP_CALL;
+    default:            return 0;
+    }
+}
+
+static AstNode *parse_expr(Parser *p, int min_bp);
+static AstNode *parse_statement(Parser *p);
+
+/* literal / ident node from the current token, then advance */
+static AstNode *lit_node(Parser *p, AstKind k)
+{
+    AstNode *n = node(p, k, p->cur);
+    n->as.lit.text = p->cur.start;
+    n->as.lit.len  = p->cur.len;
+    advance(p);
+    return n;
+}
+
+/* ------------------------------------------------------------------ */
+/* nud handlers (prefix position)                                      */
+/* ------------------------------------------------------------------ */
+static AstNode *parse_matrix(Parser *p)
+{
+    Token open = p->cur;
+    expect(p, TOK_LBRACK, "'['");
+    AstNode *m = node(p, AST_MATRIX, open);
+    Vec rows = VEC_INIT;
+    skip_newlines(p);
+
+    while (!check(p, TOK_RBRACK)) {
+        AstNode *row = node(p, AST_ROW, p->cur);
+        Vec elems = VEC_INIT;
+        vec_push(p, &elems, parse_expr(p, 0));
+        while (accept(p, TOK_COMMA)) {        /* comma continues the row (absorbs newlines) */
+            skip_newlines(p);
+            vec_push(p, &elems, parse_expr(p, 0));
+        }
+        row->as.list = vec_seal(p, &elems);
+        vec_push(p, &rows, row);
+
+        if (check(p, TOK_SEMI) || check(p, TOK_NEWLINE)) {
+            while (accept(p, TOK_SEMI) || accept(p, TOK_NEWLINE)) { }
+        } else if (!check(p, TOK_RBRACK)) {
+            parse_error(p, "expected ',' or ';' between matrix elements");
+        }
+    }
+    expect(p, TOK_RBRACK, "']' to close matrix");
+    m->as.list = vec_seal(p, &rows);
+    return m;
+}
+
+static AstNode *parse_lambda(Parser *p)
+{
+    Token kw = p->cur;
+    expect(p, TOK_KW_FN, "'fn'");
+    AstNode *lam = node(p, AST_LAMBDA, kw);
+    Vec params = VEC_INIT;
+    if (!check(p, TOK_ARROW)) {
+        do {
+            Token id = expect(p, TOK_IDENT, "parameter name");
+            AstNode *pn = node(p, AST_IDENT, id);
+            pn->as.lit.text = id.start;
+            pn->as.lit.len  = id.len;
+            vec_push(p, &params, pn);
+        } while (accept(p, TOK_COMMA));
+    }
+    expect(p, TOK_ARROW, "'->' after lambda parameters");
+    lam->as.lambda.params = vec_seal(p, &params);
+    lam->as.lambda.body   = parse_expr(p, 0);  /* full expression, bounded by enclosing terminators */
+    /* Source span: from the 'fn' keyword to the token after the body (then
+     * trimmed). Powers body(f) and save(); zero-copy into session-lived source. */
+    const char *end = p->cur.start;
+    while (end > kw.start && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\n' || end[-1] == '\r'))
+        end--;
+    lam->as.lambda.src    = kw.start;
+    lam->as.lambda.srclen = (uint32_t)(end - kw.start);
+    return lam;
+}
+
+static AstNode *parse_if(Parser *p)
+{
+    Token kw = p->cur;
+    expect(p, TOK_KW_IF, "'if'");
+    AstNode *n = node(p, AST_IF, kw);
+    AstNode *ret = n;
+    /* if c then a [elseif c2 then b]... [else z] end — the elseif chain
+     * desugars into nested ifs sharing the single closing 'end'. */
+    for (;;) {
+        n->as.iff.cond = parse_expr(p, 0);
+        skip_newlines(p);
+        expect(p, TOK_KW_THEN, "'then'");
+        skip_newlines(p);
+        n->as.iff.then_e = parse_expr(p, 0);
+        skip_newlines(p);
+        if (accept(p, TOK_KW_ELSEIF)) {
+            skip_newlines(p);
+            AstNode *m = node(p, AST_IF, p->cur);
+            n->as.iff.else_e = m;
+            n = m;
+            continue;
+        }
+        if (accept(p, TOK_KW_ELSE)) {
+            skip_newlines(p);
+            n->as.iff.else_e = parse_expr(p, 0);
+            skip_newlines(p);
+        }
+        break;
+    }
+    expect(p, TOK_KW_END, "'end' to close if");
+    return ret;
+}
+
+static AstNode *parse_record(Parser *p)
+{
+    Token open = p->cur;
+    expect(p, TOK_LBRACE, "'{'");
+    AstNode *rec = node(p, AST_RECORD, open);
+    Vec fields = VEC_INIT;
+    skip_newlines(p);
+
+    while (!check(p, TOK_RBRACE)) {
+        /* keyed fields only: IDENT '=' value. Anything else is the
+         * reserved positional form, which we deliberately do not accept yet. */
+        Token fstart = p->cur;
+        if (!check(p, TOK_IDENT))
+            parse_error(p, "positional records are reserved — use named fields, e.g. {name = value}");
+        Token name = p->cur;
+        advance(p);
+        if (!check(p, TOK_ASSIGN)) {
+            if (check(p, TOK_COLON))
+                parse_error(p, "record fields use '=', not ':' (':' is the range operator)");
+            parse_error(p, "positional records are reserved — use named fields, e.g. {name = value}");
+        }
+        advance(p);                       /* consume '=' */
+        skip_newlines(p);
+
+        AstNode *f = node(p, AST_RECORD_FIELD, fstart);
+        f->as.recfield.name    = name.start;
+        f->as.recfield.namelen = name.len;
+        f->as.recfield.value   = parse_expr(p, 0);
+        vec_push(p, &fields, f);
+
+        skip_newlines(p);
+        if (!accept(p, TOK_COMMA)) break;  /* no comma ⇒ record must end */
+        skip_newlines(p);                  /* trailing comma allowed */
+    }
+    expect(p, TOK_RBRACE, "'}' to close record");
+    rec->as.list = vec_seal(p, &fields);
+    return rec;
+}
+
+/* ------------------------------------------------------------------ */
+/* operator sections: '_' inside grouping parens becomes a lambda param */
+/* ------------------------------------------------------------------ */
+static bool is_hole(const AstNode *n)
+{
+    return n->kind == AST_IDENT && n->as.lit.len == 1 && n->as.lit.text[0] == '_';
+}
+
+/* collect '_' holes in evaluation (left-to-right) order, not descending into a
+ * nested lambda (which includes already-built inner sections), so each '_'
+ * binds to its own innermost grouping. */
+static void collect_holes(Parser *p, AstNode *n, Vec *out)
+{
+    if (!n) return;
+    if (is_hole(n)) { vec_push(p, out, n); return; }
+    switch (n->kind) {
+    case AST_LAMBDA: return;
+    case AST_UNARY: case AST_POSTFIX: collect_holes(p, n->as.unary.operand, out); return;
+    case AST_BINARY: collect_holes(p, n->as.binary.lhs, out); collect_holes(p, n->as.binary.rhs, out); return;
+    case AST_RANGE:
+        collect_holes(p, n->as.range.start, out); collect_holes(p, n->as.range.step, out); collect_holes(p, n->as.range.stop, out); return;
+    case AST_CALL: case AST_INDEX:
+        collect_holes(p, n->as.call.callee, out);
+        for (uint32_t i = 0; i < n->as.call.args.count; i++) collect_holes(p, n->as.call.args.items[i], out);
+        return;
+    case AST_FIELD: collect_holes(p, n->as.field.target, out); return;
+    case AST_IF:
+        collect_holes(p, n->as.iff.cond, out); collect_holes(p, n->as.iff.then_e, out); collect_holes(p, n->as.iff.else_e, out); return;
+    case AST_RECORD: case AST_MATRIX: case AST_ROW: case AST_BLOCK:
+        for (uint32_t i = 0; i < n->as.list.count; i++) collect_holes(p, n->as.list.items[i], out);
+        return;
+    case AST_RECORD_FIELD: collect_holes(p, n->as.recfield.value, out); return;
+    case AST_LET: collect_holes(p, n->as.let.value, out); return;
+    case AST_ASSIGN: collect_holes(p, n->as.binary.rhs, out); return;
+    case AST_FOR: collect_holes(p, n->as.forloop.iter, out); collect_holes(p, n->as.forloop.body, out); return;
+    case AST_WHILE: collect_holes(p, n->as.whileloop.cond, out); collect_holes(p, n->as.whileloop.body, out); return;
+    default: return;
+    }
+}
+
+/* If e contains holes, rewrite it into  fn _@0, _@1, .. -> e  (each '_' becomes
+ * the next fresh parameter). '@' can't appear in an identifier, so the generated
+ * names can never collide with a user binding. */
+static AstNode *maybe_section(Parser *p, AstNode *e)
+{
+    Vec holes = VEC_INIT;
+    collect_holes(p, e, &holes);
+    if (holes.len == 0) { free(holes.data); return e; }
+
+    AstNode *lam = ast_alloc(p->arena, AST_LAMBDA, e->line, e->col);
+    lam->as.lambda.src = nullptr; lam->as.lambda.srclen = 0;   /* sections: no direct source */
+    Vec params = VEC_INIT;
+    for (uint32_t i = 0; i < holes.len; i++) {
+        char *nm = arena_alloc(p->arena, 16);
+        int len = snprintf(nm, 16, "_@%u", i);
+        holes.data[i]->as.lit.text = nm;          /* the hole now references the param */
+        holes.data[i]->as.lit.len  = (uint32_t)len;
+        AstNode *pn = ast_alloc(p->arena, AST_IDENT, e->line, e->col);
+        pn->as.lit.text = nm; pn->as.lit.len = (uint32_t)len;
+        vec_push(p, &params, pn);
+    }
+    lam->as.lambda.params = vec_seal(p, &params);
+    lam->as.lambda.body   = e;
+    free(holes.data);
+    return lam;
+}
+
+/* parse a statement sequence up to (but not consuming) 'end' or EOF */
+static AstNode *parse_block_until_end(Parser *p)
+{
+    AstNode *block = node(p, AST_BLOCK, p->cur);
+    Vec stmts = VEC_INIT;
+    while (accept(p, TOK_NEWLINE) || accept(p, TOK_SEMI)) { }
+    while (!check(p, TOK_KW_END) && !check(p, TOK_EOF)) {
+        AstNode *s = parse_statement(p);
+        if (check(p, TOK_SEMI)) s->silent = true;
+        vec_push(p, &stmts, s);
+        if (check(p, TOK_KW_END) || check(p, TOK_EOF)) break;
+        if (!check(p, TOK_NEWLINE) && !check(p, TOK_SEMI))
+            parse_error(p, "expected newline or ';' in loop body");
+        while (accept(p, TOK_NEWLINE) || accept(p, TOK_SEMI)) { }
+    }
+    block->as.list = vec_seal(p, &stmts);
+    return block;
+}
+
+static AstNode *parse_for(Parser *p)
+{
+    Token kw = p->cur;
+    expect(p, TOK_KW_FOR, "'for'");
+    Token var = expect(p, TOK_IDENT, "loop variable after 'for'");
+    expect(p, TOK_ASSIGN, "'=' after the loop variable");
+    AstNode *n = node(p, AST_FOR, kw);
+    n->as.forloop.var    = var.start;
+    n->as.forloop.varlen = var.len;
+    n->as.forloop.iter   = parse_expr(p, 0);
+    skip_newlines(p);
+    expect(p, TOK_KW_DO, "'do' before the loop body");
+    n->as.forloop.body = parse_block_until_end(p);
+    expect(p, TOK_KW_END, "'end' to close for");
+    return n;
+}
+
+static AstNode *parse_while(Parser *p)
+{
+    Token kw = p->cur;
+    expect(p, TOK_KW_WHILE, "'while'");
+    AstNode *n = node(p, AST_WHILE, kw);
+    n->as.whileloop.cond = parse_expr(p, 0);
+    skip_newlines(p);
+    expect(p, TOK_KW_DO, "'do' before the loop body");
+    n->as.whileloop.body = parse_block_until_end(p);
+    expect(p, TOK_KW_END, "'end' to close while");
+    return n;
+}
+
+static AstNode *parse_nud(Parser *p)
+{
+    Token t = p->cur;
+    switch (t.kind) {
+    case TOK_INT:      return lit_node(p, AST_INT);
+    case TOK_FLOAT:    return lit_node(p, AST_FLOAT);
+    case TOK_IMAG:     return lit_node(p, AST_IMAG);
+    case TOK_STRING:   return lit_node(p, AST_STRING);
+    case TOK_IDENT:    return lit_node(p, AST_IDENT);
+    case TOK_KW_TRUE:  { AstNode *n = node(p, AST_BOOL, t); n->as.boolean = true;  advance(p); return n; }
+    case TOK_KW_FALSE: { AstNode *n = node(p, AST_BOOL, t); n->as.boolean = false; advance(p); return n; }
+    case TOK_KW_NULL:  { AstNode *n = node(p, AST_NULL, t); advance(p); return n; }
+
+    case TOK_MINUS: case TOK_PLUS: case TOK_TILDE: case TOK_BANG: {
+        advance(p);
+        AstNode *n = node(p, AST_UNARY, t);
+        n->as.unary.op = t.kind;
+        n->as.unary.operand = parse_expr(p, BP_UNARY);
+        return n;
+    }
+    case TOK_LPAREN: {
+        Token open = p->cur;
+        advance(p);
+        skip_newlines(p);
+        AstNode *first = parse_statement(p);
+        skip_newlines(p);
+        if (check(p, TOK_SEMI)) {                  /* block-expression: ( s; s; expr ) */
+            AstNode *blk = node(p, AST_BLOCK_EXPR, open);
+            Vec stmts = VEC_INIT;
+            vec_push(p, &stmts, first);
+            while (accept(p, TOK_SEMI)) {
+                skip_newlines(p);
+                if (check(p, TOK_RPAREN)) break;   /* a trailing ';' is fine */
+                vec_push(p, &stmts, parse_statement(p));
+                skip_newlines(p);
+            }
+            blk->as.list = vec_seal(p, &stmts);
+            expect(p, TOK_RPAREN, "')'");
+            return blk;
+        }
+        expect(p, TOK_RPAREN, "')'");
+        if (first->kind == AST_ASSIGN || first->kind == AST_LET)
+            return first;                          /* a lone binding/assignment in parens */
+        return maybe_section(p, first);            /* '(_ + 1)' etc. becomes a lambda */
+    }
+    case TOK_LBRACK:   return parse_matrix(p);
+    case TOK_KW_FN:    return parse_lambda(p);
+    case TOK_KW_IF:    return parse_if(p);
+    case TOK_KW_FOR:   return parse_for(p);
+    case TOK_KW_WHILE: return parse_while(p);
+
+    case TOK_LBRACE:   return parse_record(p);
+    case TOK_KW_LET: {                       /* let x = v in body  (expression) */
+        Token kw = p->cur; advance(p);
+        Token name = expect(p, TOK_IDENT, "name after 'let'");
+        expect(p, TOK_ASSIGN, "'=' in let binding");
+        AstNode *n = node(p, AST_LET, kw);
+        n->as.let.name    = name.start;
+        n->as.let.namelen = name.len;
+        n->as.let.value   = parse_expr(p, 0);
+        expect(p, TOK_KW_IN, "'in' (a 'let' expression is 'let x = .. in ..')");
+        n->as.let.body    = parse_expr(p, 0);
+        return n;
+    }
+    case TOK_AT:       { AstNode *n = node(p, AST_AT, t); advance(p); return n; }
+    case TOK_KW_END:
+        if (p->in_index == 0) parse_error(p, "'end' is only valid inside an index, e.g. a[end]");
+        { AstNode *n = node(p, AST_END, t); advance(p); return n; }
+    case TOK_KW_BREAK:    { AstNode *n = node(p, AST_BREAK, t);    advance(p); return n; }
+    case TOK_KW_CONTINUE: { AstNode *n = node(p, AST_CONTINUE, t); advance(p); return n; }
+    case TOK_KW_RETURN: {
+        AstNode *n = node(p, AST_RETURN, t);
+        advance(p);
+        n->as.unary.operand = nullptr;                 /* bare 'return' -> null */
+        switch (p->cur.kind) {                          /* a value follows unless a terminator is next */
+        case TOK_NEWLINE: case TOK_SEMI: case TOK_EOF: case TOK_KW_END:
+        case TOK_KW_ELSE: case TOK_RPAREN: case TOK_RBRACK: case TOK_RBRACE: case TOK_COMMA:
+            break;
+        default:
+            n->as.unary.operand = parse_expr(p, 0);
+        }
+        return n;
+    }
+    default:           parse_error(p, "expected an expression");
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* led handlers (infix / postfix position)                             */
+/* ------------------------------------------------------------------ */
+static AstList parse_arglist(Parser *p, enum TokenKind close, const char *what)
+{
+    Vec args = VEC_INIT;
+    skip_newlines(p);
+    if (!check(p, close)) {
+        vec_push(p, &args, parse_expr(p, 0));
+        while (accept(p, TOK_COMMA)) {
+            skip_newlines(p);
+            vec_push(p, &args, parse_expr(p, 0));
+        }
+    }
+    skip_newlines(p);
+    expect(p, close, what);
+    return vec_seal(p, &args);
+}
+
+static AstNode *parse_index_arg(Parser *p)
+{
+    if (check(p, TOK_COLON)) {                    /* bare ':' = the whole dimension */
+        AstNode *n = node(p, AST_COLON, p->cur);
+        advance(p);
+        return n;
+    }
+    return parse_expr(p, 0);                       /* scalar, range a:b, vector, or mask */
+}
+
+static AstList parse_index_arglist(Parser *p)
+{
+    Vec args = VEC_INIT;
+    p->in_index++;                                /* enables 'end' within these args */
+    skip_newlines(p);
+    if (!check(p, TOK_RBRACK)) {
+        vec_push(p, &args, parse_index_arg(p));
+        while (accept(p, TOK_COMMA)) { skip_newlines(p); vec_push(p, &args, parse_index_arg(p)); }
+    }
+    skip_newlines(p);
+    expect(p, TOK_RBRACK, "']'");
+    p->in_index--;
+    return vec_seal(p, &args);
+}
+
+static AstNode *parse_range(Parser *p, AstNode *left)
+{
+    AstNode *n = node(p, AST_RANGE, p->cur);
+    expect(p, TOK_COLON, "':'");
+    n->as.range.start = left;
+    AstNode *mid = parse_expr(p, BP_RANGE);   /* additive binds in; another ':' does not */
+    if (accept(p, TOK_COLON)) {
+        n->as.range.step = mid;
+        n->as.range.stop = parse_expr(p, BP_RANGE);
+    } else {
+        n->as.range.step = nullptr;           /* default step 1 */
+        n->as.range.stop = mid;
+    }
+    return n;
+}
+
+
+/* Rewrite '@' into the reserved identifier '_@e' (for the ~> element lambda).
+ * Mirrors ast_contains_at's traversal: a nested pipe's rhs rebinds '@', so
+ * only its lhs is walked. Descends into lambda bodies: there '@' becomes a
+ * captured free variable of the element lambda, i.e. lexical element binding. */
+static void rewrite_at_to_elem(AstNode *n)
+{
+    if (!n) return;
+    switch (n->kind) {
+    case AST_AT:
+        n->kind = AST_IDENT;
+        n->as.lit.text = "_@e";
+        n->as.lit.len  = 3;
+        return;
+    case AST_UNARY: case AST_POSTFIX: rewrite_at_to_elem(n->as.unary.operand); return;
+    case AST_BINARY:
+        if (n->as.binary.op == TOK_PIPE_GT || n->as.binary.op == TOK_PIPE_GTGT ||
+            n->as.binary.op == TOK_TILDE_GT) { rewrite_at_to_elem(n->as.binary.lhs); return; }
+        rewrite_at_to_elem(n->as.binary.lhs); rewrite_at_to_elem(n->as.binary.rhs); return;
+    case AST_ASSIGN: rewrite_at_to_elem(n->as.binary.lhs); rewrite_at_to_elem(n->as.binary.rhs); return;
+    case AST_RANGE:
+        rewrite_at_to_elem(n->as.range.start); rewrite_at_to_elem(n->as.range.step); rewrite_at_to_elem(n->as.range.stop); return;
+    case AST_CALL: case AST_INDEX:
+        rewrite_at_to_elem(n->as.call.callee);
+        for (uint32_t i = 0; i < n->as.call.args.count; i++) rewrite_at_to_elem(n->as.call.args.items[i]);
+        return;
+    case AST_FIELD: rewrite_at_to_elem(n->as.field.target); return;
+    case AST_IF:
+        rewrite_at_to_elem(n->as.iff.cond); rewrite_at_to_elem(n->as.iff.then_e); rewrite_at_to_elem(n->as.iff.else_e); return;
+    case AST_RECORD: case AST_MATRIX: case AST_ROW: case AST_BLOCK: case AST_BLOCK_EXPR:
+        for (uint32_t i = 0; i < n->as.list.count; i++) rewrite_at_to_elem(n->as.list.items[i]);
+        return;
+    case AST_RECORD_FIELD: rewrite_at_to_elem(n->as.recfield.value); return;
+    case AST_LAMBDA: rewrite_at_to_elem(n->as.lambda.body); return;
+    case AST_LET: rewrite_at_to_elem(n->as.let.value); rewrite_at_to_elem(n->as.let.body); return;
+    case AST_FOR: rewrite_at_to_elem(n->as.forloop.iter); rewrite_at_to_elem(n->as.forloop.body); return;
+    case AST_WHILE: rewrite_at_to_elem(n->as.whileloop.cond); rewrite_at_to_elem(n->as.whileloop.body); return;
+    default: return;
+    }
+}
+
+
+/* ---- chained comparisons: a < b < c  ==>  (let t = b; (a < t) & (t < c)) --
+ * Same-direction chains only ({<,<=} / {>,>=} / {==}); '!=' never chains.
+ * Middle terms bind to reserved temps (users cannot write '@' in a name),
+ * so each is evaluated exactly once; '&' is elementwise, so array chains
+ * like 0 < z < 1 produce elementwise masks. Pure desugar: no new AST. */
+
+static int cmp_family(enum TokenKind k)
+{
+    switch (k) {
+    case TOK_LT: case TOK_LE: return 1;   /* ascending  */
+    case TOK_GT: case TOK_GE: return 2;   /* descending */
+    case TOK_EQ:              return 3;   /* equality   */
+    default:                  return 0;   /* TOK_NE and friends: no family */
+    }
+}
+
+static AstNode *chain_ident(Parser *p, Token t, const char *name, uint32_t len)
+{
+    AstNode *n = node(p, AST_IDENT, t);
+    n->as.lit.text = name; n->as.lit.len = len;
+    return n;
+}
+
+static AstNode *parse_cmp_chain(Parser *p, AstNode *left, int lbp, Token t)
+{
+    static const char *tmps[] = { "_@c1", "_@c2", "_@c3", "_@c4",
+                                  "_@c5", "_@c6", "_@c7", "_@c8" };
+    enum TokenKind ops[9];
+    AstNode *operands[10];
+    uint32_t nops = 0;
+
+    advance(p);
+    ops[nops++] = t.kind;
+    operands[0] = left;
+    operands[1] = parse_expr(p, lbp);
+
+    while (p->cur.kind == TOK_EQ || p->cur.kind == TOK_NE ||
+           p->cur.kind == TOK_LT || p->cur.kind == TOK_LE ||
+           p->cur.kind == TOK_GT || p->cur.kind == TOK_GE) {
+        Token nxt = p->cur;
+        if (nxt.kind == TOK_NE || ops[0] == TOK_NE)
+            parse_error(p, "'!=' does not chain: 'a != b != c' does not "
+                           "mean all-distinct; write the conditions with '&'");
+        if (cmp_family(nxt.kind) != cmp_family(ops[0]))
+            parse_error(p, "comparison chain mixes directions; write "
+                           "'(a < b) & (b > c)' to mean that explicitly");
+        if (nops >= 8)
+            parse_error(p, "comparison chain too long");
+        advance(p);
+        ops[nops] = nxt.kind;
+        operands[nops + 1] = parse_expr(p, lbp);
+        nops++;
+    }
+
+    if (nops == 1) {                              /* plain binary, unchanged */
+        AstNode *n = node(p, AST_BINARY, t);
+        n->as.binary.op = ops[0];
+        n->as.binary.lhs = operands[0];
+        n->as.binary.rhs = operands[1];
+        return n;
+    }
+
+    /* middles get temps; ends are used once and stay as written */
+    AstNode *ref[10];
+    ref[0] = operands[0];
+    ref[nops] = operands[nops];
+    Vec stmts = VEC_INIT;
+    for (uint32_t i = 1; i < nops; i++) {
+        AstNode *let = node(p, AST_LET, t);
+        let->as.let.name = tmps[i - 1];
+        let->as.let.namelen = 4;
+        let->as.let.value = operands[i];
+        let->as.let.body = nullptr;
+        vec_push(p, &stmts, let);
+        ref[i] = chain_ident(p, t, tmps[i - 1], 4);
+    }
+    AstNode *acc = nullptr;
+    for (uint32_t i = 0; i < nops; i++) {
+        AstNode *cmp = node(p, AST_BINARY, t);
+        cmp->as.binary.op = ops[i];
+        cmp->as.binary.lhs = (i == 0) ? ref[0] : chain_ident(p, t, tmps[i - 1], 4);
+        cmp->as.binary.rhs = ref[i + 1];
+        if (!acc) acc = cmp;
+        else {
+            AstNode *conj = node(p, AST_BINARY, t);
+            conj->as.binary.op = TOK_AMP;
+            conj->as.binary.lhs = acc;
+            conj->as.binary.rhs = cmp;
+            acc = conj;
+        }
+    }
+    vec_push(p, &stmts, acc);
+    AstNode *blk = node(p, AST_BLOCK_EXPR, t);
+    blk->as.list = vec_seal(p, &stmts);
+    return blk;
+}
+
+static AstNode *parse_led(Parser *p, AstNode *left, int lbp)
+{
+    Token t = p->cur;
+    switch (t.kind) {
+    case TOK_CARET: case TOK_DOT_CARET: {        /* right-associative */
+        advance(p);
+        AstNode *n = node(p, AST_BINARY, t);
+        n->as.binary.op = t.kind;
+        n->as.binary.lhs = left;
+        n->as.binary.rhs = parse_expr(p, lbp - 1);
+        return n;
+    }
+    case TOK_CTRANSPOSE: case TOK_TRANSPOSE: {   /* postfix */
+        advance(p);
+        AstNode *n = node(p, AST_POSTFIX, t);
+        n->as.unary.op = t.kind;
+        n->as.unary.operand = left;
+        return n;
+    }
+    case TOK_LPAREN: {
+        AstNode *n = node(p, AST_CALL, t);
+        advance(p);
+        n->as.call.callee = left;
+        n->as.call.args = parse_arglist(p, TOK_RPAREN, "')'");
+        return n;
+    }
+    case TOK_LBRACK: {
+        /* Index-bound reduction: f[k = R] E  ==>  R ~> (fn k -> E) |> f
+         * — executable sigma notation, any callable reducer, body loose
+         * like a fn body. Disambiguated from indexing by the two-token
+         * peek '[' IDENT '=' (a binding-shaped index was never legal). */
+        {
+            Lexer savedlex = p->lex;
+            Token savedcur = p->cur;
+            advance(p);                               /* past '['       */
+            bool is_reduction = false;
+            if (p->cur.kind == TOK_IDENT) {
+                Token binder = p->cur;
+                advance(p);
+                if (p->cur.kind == TOK_ASSIGN) {
+                    advance(p);                       /* past '='       */
+                    AstNode *range = parse_expr(p, 0);
+                    expect(p, TOK_RBRACK, "']' after the reduction range");
+                    AstNode *body = parse_expr(p, 0); /* loose, like fn */
+                    AstNode *pn = node(p, AST_IDENT, binder);
+                    pn->as.lit.text = binder.start; pn->as.lit.len = binder.len;
+                    AstNode *lam = node(p, AST_LAMBDA, t);
+                    Vec params = VEC_INIT;
+                    vec_push(p, &params, pn);
+                    lam->as.lambda.params = vec_seal(p, &params);
+                    lam->as.lambda.body   = body;
+                    lam->as.lambda.src    = t.start;
+                    lam->as.lambda.srclen = (uint32_t)(p->cur.start - t.start);
+                    AstNode *mapped = node(p, AST_BINARY, t);
+                    mapped->as.binary.op  = TOK_TILDE_GT;
+                    mapped->as.binary.lhs = range;
+                    mapped->as.binary.rhs = lam;
+                    AstNode *red = node(p, AST_BINARY, t);
+                    red->as.binary.op  = TOK_PIPE_GT;
+                    red->as.binary.lhs = mapped;
+                    red->as.binary.rhs = left;
+                    is_reduction = true;
+                    (void)is_reduction;
+                    return red;
+                }
+            }
+            p->lex = savedlex;                        /* plain index: rewind */
+            p->cur = savedcur;
+        }
+        AstNode *n = node(p, AST_INDEX, t);
+        advance(p);
+        n->as.call.callee = left;
+        n->as.call.args = parse_index_arglist(p);
+        return n;
+    }
+    case TOK_DOT: {
+        advance(p);
+        Token name = expect(p, TOK_IDENT, "field name after '.'");
+        AstNode *n = node(p, AST_FIELD, t);
+        n->as.field.target  = left;
+        n->as.field.name    = name.start;
+        n->as.field.namelen = name.len;
+        return n;
+    }
+    case TOK_COLON:
+        return parse_range(p, left);
+
+    case TOK_KW_WHERE: {
+        /* expr where a = e1, b = e2, ...  ==>  let a = e1 in let b = e2 in expr
+         * Sequential (later bindings see earlier), scoped to this expression,
+         * never crossing ';'. Pure desugar to let..in. */
+        advance(p);
+        const char *names[16]; uint32_t namelens[16];
+        AstNode *values[16];
+        uint32_t nb = 0;
+        for (;;) {
+            if (p->cur.kind != TOK_IDENT)
+                parse_error(p, "expected a name after 'where' (where a = expr, ...)");
+            if (nb >= 16)
+                parse_error(p, "too many bindings in one where clause");
+            names[nb] = p->cur.start; namelens[nb] = p->cur.len;
+            advance(p);
+            if (!accept(p, TOK_ASSIGN))
+                parse_error(p, "expected '=' after the name in a where clause");
+            values[nb] = parse_expr(p, BP_WHERE);
+            nb++;
+            if (!accept(p, TOK_COMMA)) break;
+        }
+        AstNode *body = left;
+        for (uint32_t i = nb; i > 0; i--) {
+            AstNode *let = node(p, AST_LET, t);
+            let->as.let.name = names[i - 1];
+            let->as.let.namelen = namelens[i - 1];
+            let->as.let.value = values[i - 1];
+            let->as.let.body = body;
+            body = let;
+        }
+        return body;
+    }
+    case TOK_EQ: case TOK_NE: case TOK_LT:
+    case TOK_LE: case TOK_GT: case TOK_GE:
+        return parse_cmp_chain(p, left, lbp, t);
+    case TOK_TILDE_GT: {                          /* elementwise pipe: x ~> f == map(f, x) */
+        advance(p);
+        AstNode *n = node(p, AST_BINARY, t);
+        n->as.binary.op = t.kind;
+        n->as.binary.lhs = left;
+        AstNode *rhs = parse_expr(p, lbp);
+        if (rhs->kind != AST_RECORD && ast_contains_at(rhs)) {
+            /* '@' under ~> binds the ELEMENT: rewrite '@' to the reserved
+             * ident '_@e' and wrap rhs as fn _@e -> rhs. Params live in
+             * stack slots, so '@' must become a real identifier here. */
+            rewrite_at_to_elem(rhs);
+            AstNode *lam = node(p, AST_LAMBDA, t);
+            AstNode *pn = node(p, AST_IDENT, t);
+            pn->as.lit.text = "_@e"; pn->as.lit.len = 3;
+            Vec params = VEC_INIT;
+            vec_push(p, &params, pn);
+            lam->as.lambda.params = vec_seal(p, &params);
+            lam->as.lambda.body   = rhs;
+            lam->as.lambda.src    = "fn @ -> ...";
+            lam->as.lambda.srclen = 11;
+            rhs = lam;
+        }
+        n->as.binary.rhs = rhs;
+        return n;
+    }
+    default: {                                    /* left-associative binary */
+        advance(p);
+        AstNode *n = node(p, AST_BINARY, t);
+        n->as.binary.op = t.kind;
+        n->as.binary.lhs = left;
+        n->as.binary.rhs = parse_expr(p, lbp);
+        return n;
+    }
+    }
+}
+
+static AstNode *parse_expr(Parser *p, int min_bp)
+{
+    AstNode *left = parse_nud(p);
+    for (;;) {
+        int lbp = infix_bp(p->cur.kind);
+        if (lbp <= min_bp) break;
+        left = parse_led(p, left, lbp);
+    }
+    return left;
+}
+
+/* ------------------------------------------------------------------ */
+/* statements / program                                                */
+/* ------------------------------------------------------------------ */
+static AstNode *parse_statement(Parser *p)
+{
+    if (check(p, TOK_KW_LET)) {
+        Token kw = p->cur;
+        advance(p);
+        Token name = expect(p, TOK_IDENT, "name after 'let'");
+        expect(p, TOK_ASSIGN, "'=' in let binding");
+        AstNode *n = node(p, AST_LET, kw);
+        n->as.let.name    = name.start;
+        n->as.let.namelen = name.len;
+        n->as.let.value   = parse_expr(p, 0);
+        if (accept(p, TOK_KW_IN))            /* 'let x = v in body' used as a statement */
+            n->as.let.body = parse_expr(p, 0);
+        return n;
+    }
+    AstNode *e = parse_expr(p, 0);
+    if (check(p, TOK_ASSIGN)) {                 /* name = value  or  name[idx] = value */
+        if (e->kind == AST_INDEX) {
+            if (e->as.call.callee->kind != AST_IDENT)
+                parse_error(p, "indexed assignment needs a name target, e.g. a[i] = x");
+        } else if (e->kind != AST_IDENT) {
+            parse_error(p, "invalid assignment target (only a name or an index can be assigned)");
+        }
+        Token kw = p->cur;
+        advance(p);
+        AstNode *n = node(p, AST_ASSIGN, kw);
+        n->as.binary.op  = TOK_ASSIGN;
+        n->as.binary.lhs = e;
+        n->as.binary.rhs = parse_expr(p, 0);
+        return n;
+    }
+    return e;
+}
+
+static AstNode *parse_program(Parser *p)
+{
+    AstNode *block = node(p, AST_BLOCK, p->cur);
+    Vec stmts = VEC_INIT;
+    while (accept(p, TOK_NEWLINE) || accept(p, TOK_SEMI)) { }
+
+    while (!check(p, TOK_EOF)) {
+        AstNode *s = parse_statement(p);
+        if (check(p, TOK_SEMI)) s->silent = true;   /* ';' suppresses this statement's echo */
+        vec_push(p, &stmts, s);
+        if (check(p, TOK_EOF)) break;
+        if (!check(p, TOK_NEWLINE) && !check(p, TOK_SEMI))
+            parse_error(p, "expected newline or ';' after statement");
+        while (accept(p, TOK_NEWLINE) || accept(p, TOK_SEMI)) { }
+    }
+    block->as.list = vec_seal(p, &stmts);
+    return block;
+}
+
+/* ------------------------------------------------------------------ */
+void parser_init(Parser *p, const char *src, Arena *arena)
+{
+    *p = (Parser){ .arena = arena };
+    lexer_init(&p->lex, src);
+}
+
+AstNode *parser_parse(Parser *p)
+{
+    if (setjmp(p->jmp)) {                 /* a parse_error unwinds to here */
+        for (uint32_t i = 0; i < p->scr_len; i++) free(p->scratch[i]);
+        free(p->scratch);
+        p->scratch = nullptr; p->scr_len = p->scr_cap = 0;
+        return nullptr;
+    }
+    advance(p);                           /* prime the lookahead */
+    AstNode *prog = parse_program(p);
+    free(p->scratch);                     /* all entries sealed on success */
+    p->scratch = nullptr; p->scr_len = p->scr_cap = 0;
+    return prog;
+}

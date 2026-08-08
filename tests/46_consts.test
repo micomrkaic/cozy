@@ -1,0 +1,50 @@
+# core mathematical constants
+cos(pi)
+=> -1
+log(e)
+=> 1
+1 + eps > 1
+=> true
+1 + eps / 2 == 1
+=> true
+nan == nan
+=> false
+inf > 1e308
+=> true
+abs(phi ^ 2 - phi - 1) < 1e-12
+=> true
+eulergamma < 0.58
+=> true
+# constants shadow like builtins
+let pi = 3; pi * 2
+=> 6
+# phys.nu: CODATA constants, exact where the SI defines them exactly
+load("packages/phys.nu"); phys.c == 299792458
+=> true
+load("packages/phys.nu"); phys.NA == 6.02214076e23
+=> true
+load("packages/phys.nu"); abs(phys.R - phys.k * phys.NA) == 0
+=> true
+load("packages/phys.nu"); abs(phys.hbar * 2 * pi - phys.h) < 1e-45
+=> true
+# Maxwell's relation from the constants themselves
+load("packages/phys.nu"); abs(1 / sqrt(phys.eps0 * phys.mu0) - phys.c) / phys.c < 1e-9
+=> true
+# constants are standard library: invisible to who, immune to clear
+who
+=> (no variables defined)
+# shadowing appends: the shadow is a real workspace variable
+let pi = 3; who
+=>   pi           int        = 3
+# clearing a shadow resurrects the original — for constants
+let pi = 3; clear("pi"); pi + 0
+=> 3.14159
+# ...and for builtins (this fixes a latent wart: shadowed builtins used to die)
+let map = 7; clear("map"); map(fn x -> x * 3, [9])
+=> [27]
+# bare clear removes shadows and user vars; the standard library resurfaces
+let pi = 3; let a = 1; clear(); cos(pi)
+=> -1
+# clearing an unshadowed stdlib name is an error, not a deletion
+clear("pi")
+=> !no such variable
