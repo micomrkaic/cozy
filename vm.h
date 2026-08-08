@@ -1,6 +1,6 @@
 /* vm.h — stack-based bytecode VM for Neutrino. */
-#ifndef NEUTRINO_VM_H
-#define NEUTRINO_VM_H
+#ifndef COZY_VM_H
+#define COZY_VM_H
 
 #include "value.h"
 #include "ast.h"

@@ -2,13 +2,13 @@
 # Note on tag listing: versions past 1.9 sort wrongly as strings (v1.10 before
 # v1.9). One-time fix in this clone:  git config tag.sort version:refname
 # (and 'sort -V' for shell work on release files).
-# deploy.sh — release a Neutrino tarball to GitHub, tagged with its version.
-#   usage: ./deploy.sh ~/Downloads/neutrino.tar.gz [--no-test]
+# deploy.sh — release a Cozy tarball to GitHub, tagged with its version.
+#   usage: ./deploy.sh ~/Downloads/cozy-vX.Y.Z.tar.gz [--no-test]
 # Steps: extract the tarball's version, untar over this repo, build and run
 # the full test suite, commit, push, and tag vX.Y.Z (same as version.h).
 set -euo pipefail
 
-TARBALL="${1:?usage: ./deploy.sh path/to/neutrino.tar.gz [--no-test]}"
+TARBALL="${1:?usage: ./deploy.sh path/to/cozy-vX.Y.Z.tar.gz [--no-test]}"
 RUN_TESTS=1
 [[ "${2:-}" == "--no-test" ]] && RUN_TESTS=0
 
@@ -16,8 +16,8 @@ RUN_TESTS=1
 [[ -d .git ]] || { echo "deploy: run from the repo root (no .git here)" >&2; exit 1; }
 
 # 0. Read the version out of the tarball BEFORE touching the tree.
-VERSION=$(tar xzf "$TARBALL" -O neutrino/version.h | sed -n 's/.*NEUTRINO_VERSION "\([0-9.]*\)".*/\1/p')
-[[ -n "$VERSION" ]] || { echo "deploy: could not read NEUTRINO_VERSION from the tarball" >&2; exit 1; }
+VERSION=$(tar xzf "$TARBALL" -O cozy/version.h | sed -n 's/.*COZY_VERSION "\([0-9.]*\)".*/\1/p')
+[[ -n "$VERSION" ]] || { echo "deploy: could not read COZY_VERSION from the tarball" >&2; exit 1; }
 TAG="v$VERSION"
 echo "deploy: releasing $TAG"
 

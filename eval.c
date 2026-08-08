@@ -1362,20 +1362,23 @@ typedef struct { const char *name, *sig, *desc, *cat, *ex; } BuiltinDoc;
 static const BuiltinDoc builtin_docs[] = {
     /* core ------------------------------------------------------------ */
     { "print", "print(...) | print(tmpl, ...)", "print values; template fills {} in order; {:[-][w][.p][f|e|g]} formats a hole ({{ }} literal)", "core" , "print(\"x = {}, root = {:.3f}\", 5, sqrt(2))   % x = 5, root = 1.414" },
-    { "upper",     "upper(s)",           "uppercase (ASCII bytes)", "string" , "upper(\"neutrino\")               %= \"NEUTRINO\"" },
+    { "upper",     "upper(s)",           "uppercase (ASCII bytes)", "string" , "upper(\"cozy\")                   %= \"COZY\"" },
     { "lower",     "lower(s)",           "lowercase (ASCII bytes)", "string" , "lower(\"Hi There\")               %= \"hi there\"" },
     { "trim",      "trim(s)",            "strip leading and trailing whitespace", "string" , "trim(\"  x  \")                   %= \"x\"" },
-    { "contains",  "contains(s, sub)",   "true if sub occurs in s", "string" , "contains(\"neutrino\", \"trin\")   %= true" },
-    { "startswith","startswith(s, p)",   "true if s begins with p", "string" , "startswith(\"neutrino\", \"neu\")  %= true" },
+    { "contains",  "contains(s, sub)",   "true if sub occurs in s", "string" , "contains(\"cozy\", \"oz\")         %= true" },
+    { "startswith","startswith(s, p)",   "true if s begins with p", "string" , "startswith(\"cozy\", \"co\")      %= true" },
     { "endswith",  "endswith(s, p)",     "true if s ends with p", "string" , "endswith(\"data.csv\", \".csv\")   %= true" },
     { "strrep",    "strrep(s, old, new)","replace every occurrence of old with new", "string" , "strrep(\"a-b-c\", \"-\", \"+\")     %= \"a+b+c\"" },
     { "str",       "str(x)",             "the display text of any value, as a string", "string" , "str(1.5) + str(true)             %= \"1.5true\"" },
     { "num",       "num(s)",             "parse a string as a number (Int if exact, else Float)", "string" , "num(\"42\") + num(\"2.5\")         %= 44.5" },
     { "fmt",       "fmt(tmpl, ...)",     "print's template, returned as a string instead of printed", "string" , "fmt(\"x = {:.2f}\", 3.14159)      %= \"x = 3.14\"" },
     { "fields","fields(r)",         "the record's field names, as a string column", "core" , "fields({yr = 1, cpi = 2})'        %= [\"yr\", \"cpi\"]" },
+    { "getfield","getfield(r, name)", "dynamic field read; error if the record has no such field", "core" , "getfield({a = 7}, \"a\")           %= 7" },
+    { "setfield","setfield(r, name, v)", "a new record with the field replaced or appended; r is untouched", "core" , "fields(setfield({a = 1}, \"b\", 2))' %= [\"a\", \"b\"]" },
     { "error",  "error(msg) | error(tmpl, ...)", "raise a runtime error (fmt-style template)", "core" , "error(\"p must be in (0,1), got {}\", 1.5)   % raises that message" },
     { "assert", "assert(cond) | assert(cond, tmpl, ...)", "error unless cond is true", "core" , "assert(2 > 1)                     % passes silently" },
     { "strsplit","strsplit(s, sep)", "split a string on a separator, giving a string row vector", "string" , "strsplit(\"a-b-c\", \"-\")          %= [\"a\", \"b\", \"c\"]" },
+    { "strfind", "strfind(s, pat)",  "1-based start positions of every occurrence of pat in s (overlapping), [] if none", "string" , "strfind(\"banana\", \"an\")'         %= [2, 4]" },
     { "strjoin", "strjoin(a, sep)",  "join a string array with a separator", "string" , "strjoin([\"x\", \"y\", \"z\"], \", \")  %= \"x, y, z\"" },
     { "version", "version",       "the interpreter version, as a string", "core" , "version                           % the version, e.g. \"1.10.0\"" },
     { "buildinfo", "buildinfo()", "build introspection -> {backend, version, built}; backend names the linear-algebra kernels", "core" , "buildinfo().backend               % which kernels answered, e.g. \"tier0\"" },
@@ -1744,7 +1747,7 @@ static Value bi_save(Interp *I, Value *args, uint32_t n)
         fclose(f); free(buf);
         memcpy(I->jmp, jsaved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
     }
-    fputs("# neutrino workspace (reload with load)\n", f);
+    fputs("# cozy workspace (reload with load)\n", f);
     EnvObj *g = I->globals;
     uint32_t saved = 0;
     for (uint32_t i = g ? g->n_protected : 0; g && i < g->count; i++) {
@@ -2568,9 +2571,9 @@ static void gp_qstr(FILE *g, const char *s, uint32_t len)
 
 /* ------------------------------------------------------------------ */
 /* ASCII plotting: the terminal backend, selected natively by           */
-/* NEUTRINO_PLOT_TERM=ascii (a missing gnuplot is an error, not a       */
+/* COZY_PLOT_TERM=ascii (a missing gnuplot is an error, not a       */
 /* silent fallback); in the browser it is reachable only if the page    */
-/* sets a non-svg NEUTRINO_PLOT_TERM (the browser DEFAULT is the SVG    */
+/* sets a non-svg COZY_PLOT_TERM (the browser DEFAULT is the SVG    */
 /* backend below — dispatch tries svg first). Renders into vout().      */
 
 static Value gp_label(RecObj *o, uint32_t k);
@@ -2580,7 +2583,7 @@ static bool plot_is_ascii(void)
 #ifdef __EMSCRIPTEN__
     return true;                                  /* no subprocesses in the browser */
 #else
-    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    const char *t = getenv("COZY_PLOT_TERM");
     return t && strcmp(t, "ascii") == 0;
 #endif
 }
@@ -2600,8 +2603,8 @@ static const char *ascii_optstr(Value opts, const char *key, uint32_t *len)
 
 /* Line/scatter plot. get(series, k) yields the k-th y of a series. */
 /* ------------------------------------------------------------------ */
-/* SVG plot backend. Selected by NEUTRINO_PLOT_TERM=svg natively and by */
-/* default in the browser, where a JS hook (Module.neutrinoPlot) shows  */
+/* SVG plot backend. Selected by COZY_PLOT_TERM=svg natively and by */
+/* default in the browser, where a JS hook (Module.cozyPlot) shows  */
 /* each written file. Structure borrowed from tea's graph.c.            */
 /* ------------------------------------------------------------------ */
 #ifdef __EMSCRIPTEN__
@@ -2611,10 +2614,10 @@ static const char *ascii_optstr(Value opts, const char *key, uint32_t *len)
 static bool plot_is_svg(void)
 {
 #ifdef __EMSCRIPTEN__
-    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    const char *t = getenv("COZY_PLOT_TERM");
     return !t || strcmp(t, "svg") == 0;           /* browser default */
 #else
-    const char *t = getenv("NEUTRINO_PLOT_TERM");
+    const char *t = getenv("COZY_PLOT_TERM");
     return t && strcmp(t, "svg") == 0;
 #endif
 }
@@ -2625,7 +2628,7 @@ static void svg_announce(const char *fname)
 {
     fprintf(vout(), "(plot written: %s)\n", fname);
 #ifdef __EMSCRIPTEN__
-    EM_ASM({ if (Module.neutrinoPlot) Module.neutrinoPlot(UTF8ToString($0)); }, fname);
+    EM_ASM({ if (Module.cozyPlot) Module.cozyPlot(UTF8ToString($0)); }, fname);
 #endif
 }
 
@@ -2910,11 +2913,11 @@ static void ascii_hist_render(FILE *o, double lo, double w, int64_t nb,
 static FILE *gp_open(Interp *I)
 {
     FILE *g = popen("gnuplot -persist 2>/dev/null", "w");
-    if (!g) runtime_error(I, "plot: could not start gnuplot (set NEUTRINO_PLOT_TERM=ascii for a text plot)");
-    const char *term = getenv("NEUTRINO_PLOT_TERM");
+    if (!g) runtime_error(I, "plot: could not start gnuplot (set COZY_PLOT_TERM=ascii for a text plot)");
+    const char *term = getenv("COZY_PLOT_TERM");
     if (term && *term) {
         fprintf(g, "set terminal %s\n", term);
-        const char *out = getenv("NEUTRINO_PLOT_OUT");
+        const char *out = getenv("COZY_PLOT_OUT");
         if (out && *out) fprintf(g, "set output '%s'\n", out);
     }
     return g;
@@ -3490,6 +3493,79 @@ static Value bi_fields(Interp *I, Value *args, uint32_t n)
     return out;
 }
 
+/* strfind(s, pat) -> 1-based start positions of every occurrence
+ * (overlapping counted: strfind("aaa","aa") -> [1; 2]); [] if none or
+ * the pattern is empty. The genuine string-extraction gap recorded in
+ * heritage/KNOWN_LIMITATIONS.md: contains says whether, this says where. */
+static Value bi_strfind(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    StrObj *s = want_strobj(I, args[0], "strfind"), *p = want_strobj(I, args[1], "strfind");
+    uint32_t cnt = 0;
+    if (p->len > 0 && p->len <= s->len)
+        for (uint32_t i = 0; i + p->len <= s->len; i++)
+            if (memcmp(s->data + i, p->data, p->len) == 0) cnt++;
+    Value out = val_array(ELT_INT, cnt, cnt ? 1 : 0);
+    int64_t *d = (int64_t *)as_arr(out)->data;
+    uint32_t k = 0;
+    if (p->len > 0 && p->len <= s->len)
+        for (uint32_t i = 0; i + p->len <= s->len; i++)
+            if (memcmp(s->data + i, p->data, p->len) == 0) d[k++] = (int64_t)i + 1;
+    return out;
+}
+
+/* getfield(r, name) — dynamic field read; strict error on missing,
+ * mirroring literal access (entry 5: the core exposes structure). */
+static Value bi_getfield(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_RECORD)
+        runtime_error(I, "getfield: expected a record, got %s", type_name(args[0].kind));
+    StrObj *name = want_strobj(I, args[1], "getfield");
+    RecObj *r = as_rec(args[0]);
+    for (uint32_t i = 0; i < r->count; i++)
+        if (r->keylens[i] == name->len && memcmp(r->keys[i], name->data, name->len) == 0)
+            return value_retain(r->vals[i]);
+    runtime_error(I, "getfield: record has no field '%.*s'", (int)name->len, name->data);
+}
+
+/* setfield(r, name, v) -> a NEW record with the field replaced in place
+ * (first match, like OP_FIELD) or appended; r is untouched (records stay
+ * immutable values). Ownership law: a reflection-built record strdups
+ * EVERY key and sets owns_keys — the name arrives as a refcounted string
+ * whose bytes do not outlive it, and owns_keys is record-wide, so mixed
+ * borrowed/owned keys under one flag would free source pointers. */
+static Value bi_setfield(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_RECORD)
+        runtime_error(I, "setfield: expected a record, got %s", type_name(args[0].kind));
+    StrObj *name = want_strobj(I, args[1], "setfield");
+    if (name->len == 0) runtime_error(I, "setfield: field name must be non-empty");
+    RecObj *r = as_rec(args[0]);
+    int64_t hit = -1;
+    for (uint32_t i = 0; i < r->count; i++)
+        if (r->keylens[i] == name->len && memcmp(r->keys[i], name->data, name->len) == 0)
+            { hit = (int64_t)i; break; }
+    uint32_t cnt = r->count + (hit < 0 ? 1 : 0);
+    Value out = val_record(cnt);
+    RecObj *o = as_rec(out);
+    o->owns_keys = true;
+    for (uint32_t i = 0; i < r->count; i++) {
+        char *k = malloc((size_t)r->keylens[i] + 1);
+        memcpy(k, r->keys[i], r->keylens[i]); k[r->keylens[i]] = 0;
+        o->keys[i] = k; o->keylens[i] = r->keylens[i];
+        o->vals[i] = value_retain(hit == (int64_t)i ? args[2] : r->vals[i]);
+    }
+    if (hit < 0) {
+        char *k = malloc((size_t)name->len + 1);
+        memcpy(k, name->data, name->len); k[name->len] = 0;
+        o->keys[r->count] = k; o->keylens[r->count] = name->len;
+        o->vals[r->count] = value_retain(args[2]);
+    }
+    return out;
+}
+
 #include <time.h>
 #include "version.h"
 
@@ -3497,7 +3573,7 @@ static Value bi_fields(Interp *I, Value *args, uint32_t n)
 static Value bi_version(Interp *I, Value *args, uint32_t n)
 {
     (void)I; (void)args; (void)n;
-    return val_string(NEUTRINO_VERSION, (uint32_t)strlen(NEUTRINO_VERSION));
+    return val_string(COZY_VERSION, (uint32_t)strlen(COZY_VERSION));
 }
 
 /* Build introspection (design entry 2): a production tool whose user cannot
@@ -3509,8 +3585,8 @@ static Value bi_buildinfo(Interp *I, Value *args, uint32_t n)
     (void)I; (void)args; (void)n;
     const char *b = cozy_linalg()->name;
     return record3("backend", val_string(b, (uint32_t)strlen(b)),
-                   "version", val_string(NEUTRINO_VERSION, (uint32_t)strlen(NEUTRINO_VERSION)),
-                   "built",   val_string(NEUTRINO_BUILT, (uint32_t)strlen(NEUTRINO_BUILT)));
+                   "version", val_string(COZY_VERSION, (uint32_t)strlen(COZY_VERSION)),
+                   "built",   val_string(COZY_BUILT, (uint32_t)strlen(COZY_BUILT)));
 }
 
 /* now(): the current local date and time as {y, m, d, h, mi, s}. */
@@ -3550,7 +3626,7 @@ static int who_name_cmp(const void *x, const void *y)
 static Value bi_repl_hint(Interp *I, const char *what)
 {
     (void)I;
-    fprintf(vout(), "%s is an interactive REPL command — start ./neutrino and type it at the prompt\n", what);
+    fprintf(vout(), "%s is an interactive REPL command — start ./cozy and type it at the prompt\n", what);
     return val_null();
 }
 static Value bi_exit(Interp *I, Value *args, uint32_t n)
@@ -5733,6 +5809,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "lower",      bi_lower,      1, 1);
     def_builtin(e, "trim",       bi_trim,       1, 1);
     def_builtin(e, "contains",   bi_contains,   2, 2);
+    def_builtin(e, "strfind",    bi_strfind,    2, 2);
     def_builtin(e, "startswith", bi_startswith, 2, 2);
     def_builtin(e, "endswith",   bi_endswith,   2, 2);
     def_builtin(e, "strrep",     bi_strrep,     3, 3);
@@ -5744,6 +5821,8 @@ EnvObj *globals_new(void)
     def_builtin(e, "strsplit",  bi_strsplit, 2, 2);
     def_builtin(e, "strjoin",   bi_strjoin,  2, 2);
     def_builtin(e, "fields", bi_fields, 1, 1);
+    def_builtin(e, "getfield", bi_getfield, 2, 2);
+    def_builtin(e, "setfield", bi_setfield, 3, 3);
     def_builtin(e, "exit",   bi_exit,        0, 1);
     def_builtin(e, "quit",   bi_exit,        0, 1);
     def_builtin(e, "manual", bi_manual_stub, 0, 1);

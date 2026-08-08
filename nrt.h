@@ -8,8 +8,8 @@
  * longjmps), the operands are still on the stack and the VM's error handler
  * reclaims them in a single sweep. That is what erases the tree-walker's
  * error-path temp leak. */
-#ifndef NEUTRINO_NRT_H
-#define NEUTRINO_NRT_H
+#ifndef COZY_NRT_H
+#define COZY_NRT_H
 
 #include "lexer.h"     /* enum TokenKind */
 #include "value.h"

@@ -48,7 +48,7 @@ setTimeout(() => {
   console.log("page: editor run, terminal echo, focus, and manual interception OK (stub)");
   // ---- phase 2: the real bundle through the real page ----
   try {
-    const bundle = fs.readFileSync("docs/neutrino.js", "utf8");
+    const bundle = fs.readFileSync("docs/cozy.js", "utf8");
     const html2 = fs.readFileSync("docs/index.html", "utf8")
       .replace(/<script src=[^>]*><\/script>/, "<script>" + bundle.replace(/<\/script>/g, "<\\/script>") + "</script>");
     const dom2 = new JSDOM(html2, { runScripts: "dangerously", pretendToBeVisual: true, url: "https://example.org/" });

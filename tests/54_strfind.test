@@ -1,0 +1,17 @@
+# strfind — pattern position, the one string-extraction gap (charter: fix from day one).
+# Overlapping occurrences count; empty pattern and no-match give [].
+strfind("banana", "an")
+=> [2; 4]
+strfind("aaa", "aa")
+=> [1; 2]
+strfind("abc", "abc")
+=> [1]
+strfind("abc", "x")
+=> []
+strfind("abc", "")
+=> []
+strfind("mississippi", "ss")
+=> [3; 6]
+# composes with indexing: pattern-directed slicing needs no char scan now
+let s = "key=value"; s[strfind(s, "=")[1]+1 : end]
+=> "value"

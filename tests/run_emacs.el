@@ -1,6 +1,6 @@
-;;; Batch tests for neutrino-mode. Run: emacs --batch -l tests/run_emacs.el
+;;; Batch tests for cozy-mode. Run: emacs --batch -l tests/run_emacs.el
 (setq debug-on-error t)
-(load (expand-file-name "editors/neutrino-mode.el") nil t)
+(load (expand-file-name "editors/cozy-mode.el") nil t)
 
 (defun nu-fail (msg) (message "emacs-mode FAIL: %s" msg) (kill-emacs 1))
 
@@ -10,7 +10,7 @@
           "let v = [1, 2, 3]'\n"
           "sqrt(sum(v .* v))\n"
           "let s = \"a % not comment | pipe\"\n")
-  (neutrino-mode)
+  (cozy-mode)
   (font-lock-ensure)
   (defun nu--face-at (str)
     (get-text-property (save-excursion (goto-char (point-min))
@@ -39,7 +39,7 @@
           "y = y * 2\n"
           "end;\n"
           "y)\n")
-  (neutrino-mode)
+  (cozy-mode)
   (indent-region (point-min) (point-max))
   (let ((want (concat "let f = fn x -> (\n"
                       "  let y = x + 1;\n"
@@ -53,11 +53,11 @@
 (message "emacs-mode: indentation OK")
 
 ;; ---- inferior REPL against the real interpreter ----
-(when (file-executable-p "./neutrino")
-  (setq neutrino-program (expand-file-name "./neutrino"))
-  (run-neutrino)
-  (neutrino--send "6 * 7")
-  (with-current-buffer neutrino-repl-buffer
+(when (file-executable-p "./cozy")
+  (setq cozy-program (expand-file-name "./cozy"))
+  (run-cozy)
+  (cozy--send "6 * 7")
+  (with-current-buffer cozy-repl-buffer
     (let ((deadline (+ (float-time) 5)) (ok nil))
       (while (and (not ok) (< (float-time) deadline))
         (accept-process-output (get-buffer-process (current-buffer)) 0.2)

@@ -1,6 +1,6 @@
 /* arena.h — bump allocator for AST nodes (freed all at once). */
-#ifndef NEUTRINO_ARENA_H
-#define NEUTRINO_ARENA_H
+#ifndef COZY_ARENA_H
+#define COZY_ARENA_H
 
 #include <stddef.h>
 

@@ -4,8 +4,8 @@
  * Value, no allocation. Everything else (string, array, record, closure,
  * builtin, env) is a refcounted heap Obj. The numeric tower is int -> float
  * -> complex; arrays carry one EltType so an index array is provably integer. */
-#ifndef NEUTRINO_VALUE_H
-#define NEUTRINO_VALUE_H
+#ifndef COZY_VALUE_H
+#define COZY_VALUE_H
 
 #include <stdint.h>
 #include <stddef.h>

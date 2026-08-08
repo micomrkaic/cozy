@@ -52,7 +52,7 @@ endif
 # Object build: each .c compiles once into build/obj/, with compiler-generated
 # header dependencies (-MMD -MP), so an edit recompiles exactly the affected
 # translation units and `make -jN` parallelizes the rest. The core objects are
-# shared between `neutrino` and `vmtest` (identical flags); the sanitizer
+# shared between `cozy` and `vmtest` (identical flags); the sanitizer
 # build lives in its own tree (build/asan/) because ASan objects cannot mix.
 # Tip:  make -j$(nproc)
 # ---------------------------------------------------------------------------
@@ -90,7 +90,7 @@ $(ASANDIR)/%.o: %.c | $(ASANDIR)
 $(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
 
-# Headless test driver: same VM as `neutrino`, but reads stdin line by line and
+# Headless test driver: same VM as `cozy`, but reads stdin line by line and
 # echoes each result (no readline), so piping a script in gives one result per
 # line. Handy for batch/regression testing and ASan runs.
 vmtest: $(CORE_O) $(OBJDIR)/vmtest.o
@@ -136,10 +136,10 @@ tokens: $(BIN); ./$(BIN) --tokens
 clean:; rm -rf $(BIN) vmtest vmtest-asan build
 
 # WebAssembly browser build: compiles the interpreter to a single self-contained
-# docs/neutrino.js (the .wasm is embedded as base64 via SINGLE_FILE, so there is
+# docs/cozy.js (the .wasm is embedded as base64 via SINGLE_FILE, so there is
 # no separate file to fetch and GitHub Pages needs no configuration). Requires
 # Emscripten (emcc) on PATH; a current emsdk needs no extra flags. The prebuilt
-# docs/neutrino.js is committed, so this target is only needed after changing the
+# docs/cozy.js is committed, so this target is only needed after changing the
 # interpreter. wasm_api.c is the string-in/string-out driver (nu_init/nu_eval).
 #
 # EMCC_C23 is empty for a current emsdk (full C23). Only the older Ubuntu-
@@ -156,7 +156,7 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_FLAGS) \
 	  --embed-file packages --embed-file MANUAL.md --embed-file PACKAGES.md --embed-file BOOK.md \
 	  --embed-file CHANGELOG.md --embed-file LESSONS.md --embed-file DESIGN_NOTES.md \
-	  $(WASM_SRCS) -o docs/neutrino.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
-	@echo "built docs/neutrino.js ($$(wc -c < docs/neutrino.js) bytes) — commit and push to update GitHub Pages"
+	  $(WASM_SRCS) -o docs/cozy.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
+	@echo "built docs/cozy.js ($$(wc -c < docs/cozy.js) bytes) — commit and push to update GitHub Pages"
 
 .PHONY: run repl sample ast tokens clean test test-asan wasm

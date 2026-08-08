@@ -1,6 +1,6 @@
 /* ast.h — Neutrino abstract syntax tree. */
-#ifndef NEUTRINO_AST_H
-#define NEUTRINO_AST_H
+#ifndef COZY_AST_H
+#define COZY_AST_H
 
 #include <stdint.h>
 #include <stdio.h>

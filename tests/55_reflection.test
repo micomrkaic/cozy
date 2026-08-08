@@ -1,0 +1,22 @@
+# Record reflection (design entry 5): getfield / setfield / the {} fold.
+# Records stay immutable values; setfield returns a NEW record.
+getfield({a = 7, b = 2}, "b")
+=> 2
+getfield({a = 7}, "a") + 1
+=> 8
+setfield({a = 1}, "b", 2)
+=> {a = 1, b = 2}
+setfield({a = 1, b = 2}, "a", 99)
+=> {a = 99, b = 2}
+let r = {a = 1}; let s = setfield(r, "a", 5); r.a + s.a
+=> 6
+fields({} |> setfield(@, "x", 1) |> setfield(@, "y", 2))
+=> ["x"; "y"]
+let t = {yr = [1; 2], cpi = [3; 5]}; fields(t) ~> (fn nm -> mean(getfield(t, nm)))
+=> [1.5; 4]
+getfield({a = 7}, "z")
+=> !getfield: record has no field 'z'
+setfield({a = 1}, "", 3)
+=> !setfield: field name must be non-empty
+getfield(3, "a")
+=> !getfield: expected a record

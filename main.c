@@ -1,5 +1,5 @@
 /* main.c — Neutrino front-end driver.
- *   neutrino [--tokens | --ast | --dis] [file.nu]
+ *   cozy [--tokens | --ast | --dis] [file.nu]
  * Default mode evaluates. With no file, runs a built-in sample. */
 #include <signal.h>
 #include "version.h"
@@ -26,7 +26,7 @@ static const char SAMPLE[] =
     "let sq = fn x -> x .^ 2\n"
     "let q = map(sq, r)\n"             /* [1, 9, 25, 49, 81] */
     "let z = sqrt(-4)\n"               /* tower: 2i */
-    "let rec = {name = \"neutrino\", dims = size(A)}\n"
+    "let rec = {name = \"cozy\", dims = size(A)}\n"
     "let label = if s > 10 then \"big\" else \"small\" end\n"
     "print(A, s, d, q, z, rec.name, rec.dims, label)\n"
     "let total = s + sum(q)\n";        /* trailing let -> program value */
@@ -77,7 +77,7 @@ int main(int argc, char **argv)
     bool want_sample = false;
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "--version") == 0) {
-            printf("cozy %s (built %s)\n", NEUTRINO_VERSION, NEUTRINO_BUILT);
+            printf("cozy %s (built %s)\n", COZY_VERSION, COZY_BUILT);
             return 0;
         }
         else if (strcmp(argv[i], "--tokens") == 0) mode = M_TOKENS;

@@ -5,9 +5,9 @@ set -u
 cd "$(dirname "$0")/.."
 command -v gnuplot >/dev/null 2>&1 || { echo "plot: gnuplot not installed — skipped"; exit 0; }
 [[ -x ./vmtest ]] || { echo "run_plot: ./vmtest not built" >&2; exit 2; }
-out=$(mktemp /tmp/neutrino_plot.XXXXXX.png)
+out=$(mktemp /tmp/cozy_plot.XXXXXX.png)
 trap 'rm -f "$out"' EXIT
-NEUTRINO_PLOT_TERM="pngcairo size 480,320" NEUTRINO_PLOT_OUT="$out" ./vmtest > /dev/null 2>&1 << 'EOF'
+COZY_PLOT_TERM="pngcairo size 480,320" COZY_PLOT_OUT="$out" ./vmtest > /dev/null 2>&1 << 'EOF'
 let x = linspace(0, 6.28, 100)
 plot(x, map(sin, x), {title = "smoke", grid = true})
 EOF

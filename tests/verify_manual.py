@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify MANUAL.md: run every `neutrino> ` transcript line through vmtest
+"""Verify MANUAL.md: run every `cozy> ` transcript line through vmtest
 (one session per fenced block) and check the shown output. Aligned multi-line
 matrices in the manual are compared against vmtest's single-line form."""
 import re, subprocess, sys, os
@@ -12,11 +12,11 @@ for b in blocks:
     lines = b.rstrip('\n').split('\n')
     entries, i = [], 0
     while i < len(lines):
-        if lines[i].startswith('neutrino> '):
-            inp = lines[i][len('neutrino> '):]
+        if lines[i].startswith('cozy> '):
+            inp = lines[i][len('cozy> '):]
             exp = []
             i += 1
-            while i < len(lines) and not lines[i].startswith('neutrino> '):
+            while i < len(lines) and not lines[i].startswith('cozy> '):
                 exp.append(lines[i]); i += 1
             entries.append((inp, '\n'.join(exp).rstrip()))
         else:
@@ -29,7 +29,7 @@ for b in blocks:
     prog = ''.join(inp + '\nprint("@@S@@")\n' for inp, _ in entries)
     # Deterministic plotting in verified transcripts: the ascii backend has a
     # fixed canvas, so seeded plots are exact text (browser users see SVG).
-    env = dict(os.environ, NEUTRINO_PLOT_TERM='ascii')
+    env = dict(os.environ, COZY_PLOT_TERM='ascii')
     r = subprocess.run(['./vmtest'], input=prog, capture_output=True, text=True, timeout=30, env=env)
     parts = r.stdout.split('@@S@@')
     err_lines = r.stderr.splitlines()

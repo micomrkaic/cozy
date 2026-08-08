@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify ASCII plotting (NEUTRINO_PLOT_TERM=ascii): deterministic text output,
+# Verify ASCII plotting (COZY_PLOT_TERM=ascii): deterministic text output,
 # so we can assert on exact structure. Native-independent of gnuplot.
 set -u
 cd "$(dirname "$0")/.."
@@ -10,7 +10,7 @@ fail=0
 check() {  # desc | program | needle
     local desc=$1 prog=$2 needle=$3
     local out
-    out="$(printf '%s\n' "$prog" | NEUTRINO_PLOT_TERM=ascii "$VMTEST" 2>&1)"
+    out="$(printf '%s\n' "$prog" | COZY_PLOT_TERM=ascii "$VMTEST" 2>&1)"
     if ! grep -qF -- "$needle" <<<"$out"; then
         echo "ASCII FAIL: $desc"
         echo "  program: $prog"

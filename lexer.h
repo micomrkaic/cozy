@@ -4,8 +4,8 @@
  * buffer (no allocation, no string copying). The buffer must outlive the
  * tokens and must be NUL-terminated.
  */
-#ifndef NEUTRINO_LEXER_H
-#define NEUTRINO_LEXER_H
+#ifndef COZY_LEXER_H
+#define COZY_LEXER_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -77,4 +77,4 @@ void  lexer_init(Lexer *lx, const char *src);
 [[nodiscard]] Token lexer_next(Lexer *lx);
 const char *token_kind_name(enum TokenKind k);
 
-#endif /* NEUTRINO_LEXER_H */
+#endif /* COZY_LEXER_H */

@@ -47,9 +47,9 @@ session started. `neutrino --version` prints the same from the command line.
 Start the REPL and type an expression; its value echoes back:
 
 ```
-neutrino> 2 + 3 * 4
+cozy> 2 + 3 * 4
 14
-neutrino> [1, 2; 3, 4] * [5; 6]
+cozy> [1, 2; 3, 4] * [5; 6]
 [ 17
    39 ]
 ```
@@ -86,8 +86,8 @@ apply to scripts — they are REPL features.
 untouched:
 
 ```
-neutrino> let rate = 0.0575; let n = 360; let scratch = 99; let tmp = [1, 2, 3];
-neutrino> keep("rate", "n"); who
+cozy> let rate = 0.0575; let n = 360; let scratch = 99; let tmp = [1, 2, 3];
+cozy> keep("rate", "n"); who
   rate         float      = 0.0575
   n            int        = 360
 ```
@@ -97,7 +97,7 @@ Every builtin's help includes executable examples with their actual output —
 the examples are machine-verified against the interpreter, like this manual:
 
 ```
-neutrino> help(median)
+cozy> help(median)
   median(A) | median(A, dim)
       median of all elements, or along dim
       builtin, 1 to 2 arguments
@@ -125,12 +125,12 @@ runs in a child process). Globs work: `ls("*.nu")`. Flags belong to the
 shell escape: `!ls -la`.
 
 ```
-neutrino> ls("packages")
+cozy> ls("packages")
 ["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "symb.nu"]
-neutrino> cd("packages");
-neutrino> load("dist.nu"); norm.cdf(0, 0, 1)
+cozy> cd("packages");
+cozy> load("dist.nu"); norm.cdf(0, 0, 1)
 0.5
-neutrino> cd("..");
+cozy> cd("..");
 ```
 
 **`ans` — the last value you saw and didn't name.** Every echoed
@@ -142,28 +142,28 @@ a name), semicolon-suppressed statements don't, and `load()`ed scripts don't
 and simply gets overwritten by your next anonymous result.
 
 ```
-neutrino> 3 + 4
+cozy> 3 + 4
 7
-neutrino> ans * 2
+cozy> ans * 2
 14
-neutrino> sqrt(ans)
+cozy> sqrt(ans)
 3.74166
-neutrino> let named = ans
+cozy> let named = ans
 3.74166
-neutrino> 9 * 9
+cozy> 9 * 9
 81
-neutrino> let x = 1
+cozy> let x = 1
 1
-neutrino> ans
+cozy> ans
 81
-neutrino> ans + 100;
-neutrino> ans
+cozy> ans + 100;
+cozy> ans
 81
-neutrino> s * 2 where s = 50
+cozy> s * 2 where s = 50
 100
-neutrino> ans
+cozy> ans
 100
-neutrino> who
+cozy> who
   ans          int        = 100
   named        float      = 3.74166
   x            int        = 1
@@ -201,9 +201,9 @@ always produces a `Float` (`4 / 2` is `2.0`).
 Floating point behaves like floating point:
 
 ```
-neutrino> 0.1 + 0.2 == 0.3
+cozy> 0.1 + 0.2 == 0.3
 false
-neutrino> 5 / 0
+cozy> 5 / 0
 inf
 ```
 
@@ -232,11 +232,11 @@ would not mean "all distinct". The conjunction is the elementwise `&`, so a
 chain over an array is a mask — counting draws in a band is one `sum`:
 
 ```
-neutrino> 0 <= 0.5 < 1
+cozy> 0 <= 0.5 < 1
 true
-neutrino> let z = [-1, 0.5, 0.8, 3]; sum(0 < z < 1)
+cozy> let z = [-1, 0.5, 0.8, 3]; sum(0 < z < 1)
 2
-neutrino> rng(1); sum(-1.96 < randn(1, 100) < 1.96) >= 90
+cozy> rng(1); sum(-1.96 < randn(1, 100) < 1.96) >= 90
 true
 ```
 
@@ -250,11 +250,11 @@ true
 The `.`-prefixed operators are the elementwise family, exactly as in Octave:
 
 ```
-neutrino> [1, 2, 3] .* [4, 5, 6]
+cozy> [1, 2, 3] .* [4, 5, 6]
 [4, 10, 18]
-neutrino> 2 .^ [1, 2, 3]
+cozy> 2 .^ [1, 2, 3]
 [2, 4, 8]
-neutrino> [1i, 2]'          # conjugate transpose
+cozy> [1i, 2]'          # conjugate transpose
 [  -1i
   2+0i ]
 ```
@@ -274,7 +274,7 @@ body updates an accumulator defined outside it.
 in `body`, and the whole thing evaluates to `body`. Bindings nest and shadow:
 
 ```
-neutrino> let a = 1 in a + (let a = 100 in a) + a
+cozy> let a = 1 in a + (let a = 100 in a) + a
 102
 ```
 
@@ -283,7 +283,7 @@ neutrino> let a = 1 in a + (let a = 100 in a) + a
 `if` is an expression:
 
 ```
-neutrino> let x = 5; if x > 3 then "big" else "small" end
+cozy> let x = 5; if x > 3 then "big" else "small" end
 "big"
 ```
 
@@ -294,9 +294,9 @@ condition.
 Loops are statements (they yield `null`):
 
 ```
-neutrino> let s = 0; for i = 1:10 do s = s + i end; s
+cozy> let s = 0; for i = 1:10 do s = s + i end; s
 55
-neutrino> let n = 1; while n < 100 do n = n * 2 end; n
+cozy> let n = 1; while n < 100 do n = n * 2 end; n
 128
 ```
 
@@ -309,9 +309,9 @@ restores the loop's stack state on a non-local exit.
 final expression, and `let` bindings are local to the block:
 
 ```
-neutrino> (let x = 3; let y = 4; sqrt(x*x + y*y))
+cozy> (let x = 3; let y = 4; sqrt(x*x + y*y))
 5
-neutrino> (let q = 7; q); q
+cozy> (let q = 7; q); q
 error: undefined name 'q'          # block locals do not leak
 ```
 
@@ -322,11 +322,11 @@ This is the natural shape for a multi-step function body.
 Chains share a single closing `end`; each condition is tried in order:
 
 ```
-neutrino> if 1 > 2 then "a" elseif 3 > 2 then "c" else "d" end
+cozy> if 1 > 2 then "a" elseif 3 > 2 then "c" else "d" end
 "c"
-neutrino> let sign_ = fn x -> if x < 0 then -1 elseif x == 0 then 0 else 1 end
+cozy> let sign_ = fn x -> if x < 0 then -1 elseif x == 0 then 0 else 1 end
 <fn/1>
-neutrino> [sign_(-7), sign_(0), sign_(4)]
+cozy> [sign_(-7), sign_(0), sign_(4)]
 [-1, 0, 1]
 ```
 
@@ -337,11 +337,11 @@ expression or `let … in` for multiple steps). Functions are values: bind them,
 pass them, return them.
 
 ```
-neutrino> let f = fn x -> x ^ 2 + 1; f(3)
+cozy> let f = fn x -> x ^ 2 + 1; f(3)
 10
-neutrino> let add = fn a -> fn b -> a + b; add(2)(5)   # currying
+cozy> let add = fn a -> fn b -> a + b; add(2)(5)   # currying
 7
-neutrino> let g = fn x -> (let s = x * x; s + 1); g(4)
+cozy> let g = fn x -> (let s = x * x; s + 1); g(4)
 17
 ```
 
@@ -360,11 +360,11 @@ binds `@` to `x` and evaluates `rhs`; if `rhs` is a bare callable, the pipe
 applies it:
 
 ```
-neutrino> [1, 2, 3, 4] |> sum(@) |> sqrt
+cozy> [1, 2, 3, 4] |> sum(@) |> sqrt
 3.16228
-neutrino> 5 |> @ + 1
+cozy> 5 |> @ + 1
 6
-neutrino> 9 |> sqrt              # bare callable: sqrt(9)
+cozy> 9 |> sqrt              # bare callable: sqrt(9)
 3
 ```
 
@@ -378,13 +378,13 @@ likewise to qualify the range with a `where`:
 `(sum[k = 1:n] k ^ 2) where n = 3`.
 
 ```
-neutrino> sum[k = 1:100] 1 / k ^ 2
+cozy> sum[k = 1:100] 1 / k ^ 2
 1.63498
-neutrino> pi ^ 2 / 6
+cozy> pi ^ 2 / 6
 1.64493
-neutrino> let q = [0.1, 0.2, 0.15]; prod[j = 1:3] (1 - q[j])
+cozy> let q = [0.1, 0.2, 0.15]; prod[j = 1:3] (1 - q[j])
 0.612
-neutrino> sum[i = 1:4] sum[j = 1:4] (i == j)
+cozy> sum[i = 1:4] sum[j = 1:4] (i == j)
 4
 ```
 
@@ -398,13 +398,13 @@ so a whole pipeline can be qualified at its end. It is pure sugar for a
 of true) and `pick(mask, a, b)` (elementwise select).
 
 ```
-neutrino> let y = a * x ^ 2 + b * x + c where a = 1, b = -3, c = 2, x = 4
+cozy> let y = a * x ^ 2 + b * x + c where a = 1, b = -3, c = 2, x = 4
 6
-neutrino> sqrt(h) where hs = 3, h = hs + 1
+cozy> sqrt(h) where hs = 3, h = hs + 1
 2
-neutrino> 1:n ~> (@ ^ 2) |> sum where n = 5
+cozy> 1:n ~> (@ ^ 2) |> sum where n = 5
 55
-neutrino> b
+cozy> b
 ```
 
 Pipes chain left to right, which reads as a data-flow pipeline.
@@ -418,11 +418,11 @@ elementwise pipe oscillates. `~>` always means the map primitive itself, so
 shadowing the name `map` cannot change what the operator does.
 
 ```
-neutrino> [0.5, 1.5, 2.5] ~> (@ * 2) ~> floor
+cozy> [0.5, 1.5, 2.5] ~> (@ * 2) ~> floor
 [1, 3, 5]
-neutrino> 1:5 ~> (@ ^ 2) |> sum
+cozy> 1:5 ~> (@ ^ 2) |> sum
 55
-neutrino> [1, 2, 3] ~> (fn x -> x * 10)
+cozy> [1, 2, 3] ~> (fn x -> x * 10)
 [10, 20, 30]
 ```
 
@@ -432,7 +432,7 @@ the pipeline. Swap `|>` for `|>>` at the stage you want to watch, then swap
 back:
 
 ```
-neutrino> [3, 1, 4, 1, 5] |>> sort |>> unique |> length
+cozy> [3, 1, 4, 1, 5] |>> sort |>> unique |> length
 [3, 1, 4, 1, 5]
 [1, 1, 3, 4, 5]
 4
@@ -443,7 +443,7 @@ each field's callable is applied to the piped value, and the result is a
 record of results with the same keys — a `describe()` composed from syntax:
 
 ```
-neutrino> [2.1, 3.7, 1.4, 5.0] |> {n = length, mu = mean, sd = std, top = max}
+cozy> [2.1, 3.7, 1.4, 5.0] |> {n = length, mu = mean, sd = std, top = max}
 {n = 4, mu = 3.05, sd = 1.61761, top = 5}
 ```
 
@@ -463,25 +463,25 @@ two-dimensional and **1-indexed**. `[]` is the empty array.
 masks:
 
 ```
-neutrino> let A = [1, 2, 3; 4, 5, 6]
+cozy> let A = [1, 2, 3; 4, 5, 6]
 [ 1  2  3
   4  5  6 ]
-neutrino> size(A)
+cozy> size(A)
 [2, 3]
-neutrino> A[2, 3]          # element
+cozy> A[2, 3]          # element
 6
-neutrino> A[1, :]          # row
+cozy> A[1, :]          # row
 [1, 2, 3]
-neutrino> A[:, 2]          # column
+cozy> A[:, 2]          # column
 [ 2
   5 ]
-neutrino> A[end, end]
+cozy> A[end, end]
 6
-neutrino> let v = [10, 20, 30, 40]; v[2:3]
+cozy> let v = [10, 20, 30, 40]; v[2:3]
 [20, 30]
-neutrino> v[v > 15]        # logical mask
+cozy> v[v > 15]        # logical mask
 [20, 30, 40]
-neutrino> v[[1, 4]]        # gather
+cozy> v[[1, 4]]        # gather
 [10, 40]
 ```
 
@@ -505,10 +505,10 @@ counts by averaging, and `quantile` uses linear interpolation between order
 statistics (the NumPy default):
 
 ```
-neutrino> let x = [2, 7, 4, 9, 3]
-neutrino> var(x)
+cozy> let x = [2, 7, 4, 9, 3]
+cozy> var(x)
 8.5
-neutrino> quantile(x, [0.25, 0.5, 0.75])
+cozy> quantile(x, [0.25, 0.5, 0.75])
 [3, 4, 7]
 ```
 
@@ -519,7 +519,7 @@ the scalar: `cov(x, y)`, `corr(x, y)`. A constant column has no correlation to
 speak of — those entries are `nan`:
 
 ```
-neutrino> corr([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])
+cozy> corr([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])
 0.8
 ```
 
@@ -530,10 +530,10 @@ pivoting; non-square `\` is least squares — overdetermined gives the LS fit,
 underdetermined the minimum-norm solution.
 
 ```
-neutrino> [2, 1; 1, 3] \ [3; 5]
+cozy> [2, 1; 1, 3] \ [3; 5]
 [ 0.8
   1.4 ]
-neutrino> [1, 1; 1, 2; 1, 3] \ [1; 2; 2]     # regression: intercept, slope
+cozy> [1, 1; 1, 2; 1, 3] \ [1; 2; 2]     # regression: intercept, slope
 [ 0.666667
        0.5 ]
 ```
@@ -568,10 +568,10 @@ The special-function set is chosen as *primitives* from which the classical
 distributions are one-liners:
 
 ```
-neutrino> let normcdf = fn x -> 0.5 * erfc(-x / sqrt(2))
-neutrino> normcdf(1.96)
+cozy> let normcdf = fn x -> 0.5 * erfc(-x / sqrt(2))
+cozy> normcdf(1.96)
 0.975002
-neutrino> norminv(0.975)
+cozy> norminv(0.975)
 1.95996
 ```
 
@@ -592,9 +592,9 @@ Richardson estimate; finite limits; default tolerance 1e-10). Closures capture
 data, so parameterized problems read naturally — a bond's yield to maturity:
 
 ```
-neutrino> let cf = [100, 100, 100, 1100]
-neutrino> let npv = fn r -> sum(cf ./ ((1 + r) .^ (1:4))) - 1000
-neutrino> format(6); fzero(npv, 0.01, 0.3)
+cozy> let cf = [100, 100, 100, 1100]
+cozy> let npv = fn r -> sum(cf ./ ((1 + r) .^ (1:4))) - 1000
+cozy> format(6); fzero(npv, 0.01, 0.3)
 0.100000
 ```
 
@@ -610,10 +610,10 @@ friends compare lexicographically, shorter prefixes first; indexing uses the
 same machinery as arrays, so ranges, `end`, and even permutations work:
 
 ```
-neutrino> let s = "neutrino"
-neutrino> s[1:3] + "!" + s[end]
+cozy> let s = "neutrino"
+cozy> s[1:3] + "!" + s[end]
 "neu!o"
-neutrino> "apple" < "banana"
+cozy> "apple" < "banana"
 true
 ```
 
@@ -624,7 +624,7 @@ string as a number (Int if exact, else Float). And `fmt(tmpl, ...)` is
 `print`'s template engine returning a string instead of printing:
 
 ```
-neutrino> fmt("run {} done in {:.2f}s", 3, 1.234)
+cozy> fmt("run {} done in {:.2f}s", 3, 1.234)
 "run 3 done in 1.23s"
 ```
 
@@ -634,12 +634,12 @@ slicing, `end`, transpose, `reshape`, `sort`, and `unique` all work, and
 elementwise operations do what a data-frame user hopes:
 
 ```
-neutrino> let names = ["si", "at", "de", "si"]
-neutrino> names == "si"
+cozy> let names = ["si", "at", "de", "si"]
+cozy> names == "si"
 [true, false, false, true]
-neutrino> names[names == "si"]
+cozy> names[names == "si"]
 ["si", "si"]
-neutrino> ["pre_", "un_"] + "fix"
+cozy> ["pre_", "un_"] + "fix"
 ["pre_fix", "un_fix"]
 ```
 
@@ -657,6 +657,30 @@ legends alongside the older `label1`, `label2`, … form.
 String-and-number arithmetic is still an error — there is no implicit
 conversion in either direction; use `str` and `num` to cross the bridge.
 
+### Where, not just whether: `strfind` — and dynamic record fields
+
+`contains` says whether a pattern occurs; `strfind(s, pat)` says where —
+every 1-based start position (overlapping occurrences count), `[]` if
+none. Since strings index like arrays, pattern-directed slicing is now a
+one-liner instead of a character scan. And the record reflection pair
+closes the mirror-image gap: `getfield(r, name)` reads a field named at
+runtime (strict error if absent, like literal access), and
+`setfield(r, name, v)` returns a *new* record with the field replaced or
+appended — records stay immutable values, and construction is a fold:
+grow `{}` one `setfield` at a time. Generic column statistics, record
+merge, k=v parsing, and serialization round-trips now live in packages.
+
+```
+cozy> let s = "key=value"; s[strfind(s, "=")[1]+1 : end]
+"value"
+cozy> strfind("mississippi", "ss")
+[3; 6]
+cozy> let t = {yr = [2024; 2025], cpi = [3.1; 2.4]}; fields(t) ~> (fn nm -> mean(getfield(t, nm)))
+[2024.5; 2.75]
+cozy> fields({} |> setfield(@, "lo", 1) |> setfield(@, "hi", 2))
+["lo"; "hi"]
+```
+
 ### Packages: `load`
 
 `load("file.nu")` runs a file in the current session; its `let` bindings
@@ -664,10 +688,10 @@ persist afterwards. A package is just a file of definitions — and a record
 of closures makes a namespace, so packages don't collide:
 
 ```
-neutrino> load("tests/data/mathlib.nu")
-neutrino> cube(4)
+cozy> load("tests/data/mathlib.nu")
+cozy> cube(4)
 64
-neutrino> geo.hyp([3, 4])
+cozy> geo.hyp([3, 4])
 5
 ```
 
@@ -679,8 +703,8 @@ clear message; a failed save leaves no file behind. `body(f)` prints the
 source of a user-defined function:
 
 ```
-neutrino> let cube = fn x -> x^3
-neutrino> body(cube)
+cozy> let cube = fn x -> x^3
+cozy> body(cube)
 fn x -> x^3
 ```
 
@@ -692,8 +716,8 @@ lines automatically while a bracket is open.
 Packages validate their inputs with `error` and `assert`:
 
 ```
-neutrino> let f = fn x -> (assert(x > 0, "f needs x > 0, got {}", x); sqrt(x))
-neutrino> f(-4)
+cozy> let f = fn x -> (assert(x > 0, "f needs x > 0, got {}", x); sqrt(x))
+cozy> f(-4)
 error: f needs x > 0, got -4
 ```
 
@@ -710,11 +734,11 @@ Comparisons on arrays yield Bool masks, and the reductions treat
 the one-line statistic for any condition.
 
 ```
-neutrino> let mask = [1, 5, 2, 8, 3] > 2.5
+cozy> let mask = [1, 5, 2, 8, 3] > 2.5
 [false, true, false, true, true]
-neutrino> sum(mask)
+cozy> sum(mask)
 3
-neutrino> mean(mask)
+cozy> mean(mask)
 0.6
 ```
 
@@ -747,8 +771,8 @@ everything else draws lines — so `"circle"` means the same thing on every
 backend:
 
 ```
-neutrino> let x = linspace(0, 10, 200)
-neutrino> plot(x, map(sin, x), {title = "sin(x)", xlabel = "x", grid = true})
+cozy> let x = linspace(0, 10, 200)
+cozy> plot(x, map(sin, x), {title = "sin(x)", xlabel = "x", grid = true})
 ```
 
 Recognised options: `title`, `xlabel`, `ylabel`, `style` (strings); `logx`,
@@ -758,15 +782,15 @@ single series, `label1`, `label2`, ... for several (unlabeled series keep the
 `series k` default):
 
 ```
-neutrino> let t = (linspace(0, 6.28, 100))';
-neutrino> plot(t, [map(sin, t), map(cos, t)], {label1 = "sin", label2 = "cos"})
+cozy> let t = (linspace(0, 6.28, 100))';
+cozy> plot(t, [map(sin, t), map(cos, t)], {label1 = "sin", label2 = "cos"})
 ``` `hist(y)` draws a histogram
 (`hist(y, nbins)` to choose the bin count; the default follows Sturges' rule),
 and accepts the same trailing options record:
 
 ```
-neutrino> rng(7)
-neutrino> hist(randn(1, 5000), 40)
+cozy> rng(7)
+cozy> hist(randn(1, 5000), 40)
 ```
 
 A word of caution that `yrange` exists to address: gnuplot auto-ranges the
@@ -777,7 +801,7 @@ whole plot and looks alarming; anchored at zero it is the flat wall it should
 be:
 
 ```
-neutrino> hist(rand(1, 100000), 20, {yrange = [0, 6000]})
+cozy> hist(rand(1, 100000), 20, {yrange = [0, 6000]})
 ```
 
 Plots open in a gnuplot window that outlives the command (`gnuplot -persist`).
@@ -809,16 +833,16 @@ This is Neutrino's data frame — named columns plus the existing mask
 machinery:
 
 ```
-neutrino> writecsv("/tmp/m.csv", [1, 2; 3, 4]); readcsv("/tmp/m.csv")
+cozy> writecsv("/tmp/m.csv", [1, 2; 3, 4]); readcsv("/tmp/m.csv")
 [ 1  2
   3  4 ]
 ```
 
 ```
-neutrino> let d = readtable("tests/data/macro.csv")
-neutrino> mean(d.gdp_growth)
+cozy> let d = readtable("tests/data/macro.csv")
+cozy> mean(d.gdp_growth)
 1.93333
-neutrino> d.cpi[d.year >= 2021]
+cozy> d.cpi[d.year >= 2021]
 [  nan
      8 ]
 ```
@@ -846,22 +870,22 @@ say so explicitly with the systematic two-argument form:
   `"long e"`) remain as presets.
 
 ```
-neutrino> let bill = 87.40; bill * 1.15
+cozy> let bill = 87.40; bill * 1.15
 100.51
-neutrino> format(2)
-neutrino> bill * 1.15
+cozy> format(2)
+cozy> bill * 1.15
 1.0e+02
-neutrino> format("fixed", 2)
-neutrino> bill * 1.15
+cozy> format("fixed", 2)
+cozy> bill * 1.15
 100.51
-neutrino> ans / 4
+cozy> ans / 4
 25.13
-neutrino> format("sci", 3)
-neutrino> ans
+cozy> format("sci", 3)
+cozy> ans
 2.513e+01
-neutrino> format
+cozy> format
 format: scientific, 3 decimals
-neutrino> format("default")
+cozy> format("default")
 ```
 
 Strings interpolate with `fmt`, and `print` shares its template
@@ -876,14 +900,14 @@ family (whose printed tables are unchanged): your workspace names as a
 sorted string column, with `"vars"`/`"funcs"` selectors.
 
 ```
-neutrino> eval("2 + 2")
+cozy> eval("2 + 2")
 4
-neutrino> let w = {temp = [21.5; 19.8], rain = [0; 4.2]};
-neutrino> let col = "temp"; eval("w." + col)
+cozy> let w = {temp = [21.5; 19.8], rain = [0; 4.2]};
+cozy> let col = "temp"; eval("w." + col)
 [21.5; 19.8]
-neutrino> let a = 1; let f = fn x -> x; names("vars")
+cozy> let a = 1; let f = fn x -> x; names("vars")
 ["a"; "ans"; "col"; "w"]
-neutrino> names("funcs")
+cozy> names("funcs")
 ["f"]
 ```
 
@@ -910,16 +934,16 @@ function value (1). To store the *result*, call it: `let w = version()`
 suppressed below with `;` so this page never goes stale.)
 
 ```
-neutrino> let v = version
+cozy> let v = version
 <builtin version>
-neutrino> whof
+cozy> whof
   v            builtin
-neutrino> length(v)
+cozy> length(v)
 1
-neutrino> let w = version();
-neutrino> w == version()
+cozy> let w = version();
+cozy> w == version()
 true
-neutrino> names("vars")
+cozy> names("vars")
 ["ans"; "w"]
 ```
 
@@ -937,10 +961,10 @@ shape: the backend name varies by build and the timestamp by the minute,
 so this page never goes stale.)
 
 ```
-neutrino> fields(buildinfo())
+cozy> fields(buildinfo())
 ["backend"; "version"; "built"]
-neutrino> let b = buildinfo();
-neutrino> b.version == version()
+cozy> let b = buildinfo();
+cozy> b.version == version()
 true
 ```
 
@@ -960,7 +984,7 @@ seconds — bare `toc` as a statement echoes it, but in an expression position
 write `toc()` (a bare name is a value reference, as with any function):
 
 ```
-neutrino> tic; let A = randn(100, 100); let B = A * A; toc() < 60
+cozy> tic; let A = randn(100, 100); let B = A * A; toc() < 60
 true
 ```
 
@@ -997,13 +1021,13 @@ session your own definitions stay findable at a glance. `who("name")`
 (`who("functions")`, `who("vars")`, ...) remain flat, as before.
 
 ```
-neutrino> load("packages/scatter.nu")
-neutrino> let zq = 5
+cozy> load("packages/scatter.nu")
+cozy> let zq = 5
 5
-neutrino> who
+cozy> who
   packages/scatter.nu      3 names   (who("scatter") to list)
   zq           int        = 5
-neutrino> who("scatter")
+cozy> who("scatter")
   scatter      function   (2 params)
   scatter_titled function   (3 params)
   jitter       function   (2 params)
@@ -1016,10 +1040,10 @@ with the same name as a shelf wins the dispute). The registry follows
 names, not values — a rebound name stays on its shelf.
 
 ```
-neutrino> load("packages/scatter.nu")
-neutrino> let zq = 5
+cozy> load("packages/scatter.nu")
+cozy> let zq = 5
 5
-neutrino> clear("scatter"); who
+cozy> clear("scatter"); who
   packages/scatter.nu      2 names   (who("scatter") to list)
   zq           int        = 5
 ```
@@ -1036,6 +1060,8 @@ neutrino> clear("scatter"); who
 |---|---|
 | `print(...) \| print(tmpl, ...)` | print values; template fills {} in order; {:[-][w][.p][f\|e\|g]} formats a hole ({{ }} literal) |
 | `fields(r)` | the record's field names, as a string column |
+| `getfield(r, name)` | dynamic field read; error if the record has no such field |
+| `setfield(r, name, v)` | a new record with the field replaced or appended; r is untouched |
 | `error(msg) \| error(tmpl, ...)` | raise a runtime error (fmt-style template) |
 | `assert(cond) \| assert(cond, tmpl, ...)` | error unless cond is true |
 | `version` | the interpreter version, as a string |
@@ -1079,6 +1105,7 @@ neutrino> clear("scatter"); who
 | `num(s)` | parse a string as a number (Int if exact, else Float) |
 | `fmt(tmpl, ...)` | print's template, returned as a string instead of printed |
 | `strsplit(s, sep)` | split a string on a separator, giving a string row vector |
+| `strfind(s, pat)` | 1-based start positions of every occurrence of pat in s (overlapping), [] if none |
 | `strjoin(a, sep)` | join a string array with a separator |
 
 ### REPL commands

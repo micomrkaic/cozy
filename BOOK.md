@@ -57,10 +57,10 @@ mode for money — without touching the numbers underneath; and a trailing
 split four ways.
 
 ```
-neutrino> format("fixed", 2)
-neutrino> let bill = 87.40; bill * 1.15
+cozy> format("fixed", 2)
+cozy> let bill = 87.40; bill * 1.15
 100.51
-neutrino> ans / 4
+cozy> ans / 4
 25.13
 ```
 
@@ -72,12 +72,12 @@ one door (1.9 × 0.9) and two windows (1.2 × 1.4) don't get painted. A liter
 covers 10 m².
 
 ```
-neutrino> let area = 2 * (5.2 + 3.8) * 2.6 - 1.9 * 0.9 - 2 * 1.2 * 1.4;
-neutrino> area
+cozy> let area = 2 * (5.2 + 3.8) * 2.6 - 1.9 * 0.9 - 2 * 1.2 * 1.4;
+cozy> area
 41.73
-neutrino> area / 10
+cozy> area / 10
 4.173
-neutrino> ceil(ans)
+cozy> ceil(ans)
 5
 ```
 
@@ -90,10 +90,10 @@ years. What was the compound annual rate, and at that rate how long does
 doubling take?
 
 ```
-neutrino> format(4)
-neutrino> (68.4 / 51.2) ^ (1 / 6) - 1
+cozy> format(4)
+cozy> (68.4 / 51.2) ^ (1 / 6) - 1
 0.04946
-neutrino> let years = fn r -> log(2) / log(1 + r); years(ans)
+cozy> let years = fn r -> log(2) / log(1 + r); years(ans)
 14.36
 ```
 
@@ -104,11 +104,11 @@ predicts 72/4.9 ≈ 14.7 — the exact formula, one `fn` long, is now on file.
 price — then a whole price list, with the same function.
 
 ```
-neutrino> format("fixed", 2)
-neutrino> let eur = fn usd -> usd / 1.0865;
-neutrino> eur(1500)
+cozy> format("fixed", 2)
+cozy> let eur = fn usd -> usd / 1.0865;
+cozy> eur(1500)
 1380.58
-neutrino> [19.99, 45.50, 129] ~> eur
+cozy> [19.99, 45.50, 129] ~> eur
 [18.40, 41.88, 118.73]
 ```
 
@@ -128,10 +128,10 @@ anything can sit in a variable, ride a pipe, or live in a record field.
 **Problem 2.1 — The type zoo.** One of everything, then ask the workspace.
 
 ```
-neutrino> let n = 42; let x = 2.5; let ok = true; let s = "helium";
-neutrino> let v = [1.5, 2.5]; let M = [1, 2; 3, 4]; let z = 3 + 4i;
-neutrino> let r = {name = "boron", Z = 5}; let f = fn t -> t ^ 2;
-neutrino> who
+cozy> let n = 42; let x = 2.5; let ok = true; let s = "helium";
+cozy> let v = [1.5, 2.5]; let M = [1, 2; 3, 4]; let z = 3 + 4i;
+cozy> let r = {name = "boron", Z = 5}; let f = fn t -> t ^ 2;
+cozy> who
   n            int        = 42
   x            float      = 2.5
   ok           bool       = true
@@ -152,19 +152,19 @@ array with two dimensions in play.
 **Problem 2.2 — How numbers behave.**
 
 ```
-neutrino> 7 / 2
+cozy> 7 / 2
 3.5
-neutrino> 2 ^ 10
+cozy> 2 ^ 10
 1024
-neutrino> 2 ^ 0.5
+cozy> 2 ^ 0.5
 1.41421
-neutrino> floor(7 / 2)
+cozy> floor(7 / 2)
 3
-neutrino> [1, 5, 2, 8] > 3
+cozy> [1, 5, 2, 8] > 3
 [false, true, false, true]
-neutrino> sum([1, 5, 2, 8] > 3)
+cozy> sum([1, 5, 2, 8] > 3)
 2
-neutrino> pick(true, 10, 20)
+cozy> pick(true, 10, 20)
 10
 ```
 
@@ -178,17 +178,17 @@ purpose); `pick(mask, a, b)` is the explicit bridge.
 **Problem 2.3 — Floating-point honesty.**
 
 ```
-neutrino> 0.1 + 0.2 == 0.3
+cozy> 0.1 + 0.2 == 0.3
 false
-neutrino> abs(0.1 + 0.2 - 0.3) < eps * 4
+cozy> abs(0.1 + 0.2 - 0.3) < eps * 4
 true
-neutrino> 1 / 0
+cozy> 1 / 0
 inf
-neutrino> -1 / 0
+cozy> -1 / 0
 -inf
-neutrino> 0 / 0
+cozy> 0 / 0
 nan
-neutrino> nan == nan
+cozy> nan == nan
 false
 ```
 
@@ -211,14 +211,14 @@ concatenates; `length` counts.
 **Problem 3.1 — Cleanup and assembly.**
 
 ```
-neutrino> let name = "  Neutrino  ";
-neutrino> trim(name)
+cozy> let name = "  Neutrino  ";
+cozy> trim(name)
 "Neutrino"
-neutrino> upper(ans)
+cozy> upper(ans)
 "NEUTRINO"
-neutrino> length(trim(name))
+cozy> length(trim(name))
 8
-neutrino> "version " + str(2.5) + ", " + str(153) + " builtins"
+cozy> "version " + str(2.5) + ", " + str(153) + " builtins"
 "version 2.5, 153 builtins"
 ```
 
@@ -229,9 +229,9 @@ shows, so building messages is concatenation.
 with `{:.2f}`-style precision control:
 
 ```
-neutrino> fmt("pmt = {:.2f} at i = {:.4f}", -1984.153, 0.0575 / 12)
+cozy> fmt("pmt = {:.2f} at i = {:.4f}", -1984.153, 0.0575 / 12)
 "pmt = -1984.15 at i = 0.0048"
-neutrino> fmt("{} of {} lots pass", 18, 20)
+cozy> fmt("{} of {} lots pass", 18, 20)
 "18 of 20 lots pass"
 ```
 
@@ -242,14 +242,14 @@ cases; for full layout control, build pieces with `str` and concatenate.
 numeric, reassemble with a different separator.
 
 ```
-neutrino> let csvline = "2026-07-25,close,187.44";
-neutrino> let parts = strsplit(csvline, ",")
+cozy> let csvline = "2026-07-25,close,187.44";
+cozy> let parts = strsplit(csvline, ",")
 ["2026-07-25", "close", "187.44"]
-neutrino> num(parts[3])
+cozy> num(parts[3])
 187.44
-neutrino> strjoin(parts, " | ")
+cozy> strjoin(parts, " | ")
 "2026-07-25 | close | 187.44"
-neutrino> strrep(csvline, ",", ";")
+cozy> strrep(csvline, ",", ";")
 "2026-07-25;close;187.44"
 ```
 
@@ -261,11 +261,11 @@ neutrino> strrep(csvline, ",", ";")
 string functions ride the pipes like everything else:
 
 ```
-neutrino> ls("packages")
+cozy> ls("packages")
 ["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "symb.nu"]
-neutrino> ans ~> (fn f -> endswith(f, ".nu")) |> all
+cozy> ans ~> (fn f -> endswith(f, ".nu")) |> all
 true
-neutrino> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
+cozy> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
 5
 ```
 
@@ -278,15 +278,15 @@ string-to-array builtin because none is needed — conversion is a
 pipeline:
 
 ```
-neutrino> strsplit("3.14, 2.71, 1.41", ",") ~> trim ~> num
+cozy> strsplit("3.14, 2.71, 1.41", ",") ~> trim ~> num
 [3.14, 2.71, 1.41]
-neutrino> strsplit("10 20 30", " ") ~> num |> sum
+cozy> strsplit("10 20 30", " ") ~> num |> sum
 60
-neutrino> [1.5, 2.5, 3.5] ~> str |> (fn a -> strjoin(a, " | "))
+cozy> [1.5, 2.5, 3.5] ~> str |> (fn a -> strjoin(a, " | "))
 "1.5 | 2.5 | 3.5"
-neutrino> let r = {rate = 0.0575, n = 360}; str(r)
+cozy> let r = {rate = 0.0575, n = 360}; str(r)
 "{rate = 0.0575, n = 360}"
-neutrino> fields(r)
+cozy> fields(r)
 ["rate"; "n"]
 ```
 
@@ -318,16 +318,16 @@ Complex values are ordinary numbers here: `3 + 4i` is a literal, and
 What current does the circuit draw, and by what angle does it lag?
 
 ```
-neutrino> format(4)
-neutrino> let f = 60; let R = 100; let L = 0.25; let C = 20e-6;
-neutrino> let w = 2 * pi * f;
-neutrino> let Z = R + 1i * w * L + 1 / (1i * w * C)
+cozy> format(4)
+cozy> let f = 60; let R = 100; let L = 0.25; let C = 20e-6;
+cozy> let w = 2 * pi * f;
+cozy> let Z = R + 1i * w * L + 1 / (1i * w * C)
 100.0-38.38i
-neutrino> abs(Z)
+cozy> abs(Z)
 107.1
-neutrino> angle(Z) * 180 / pi
+cozy> angle(Z) * 180 / pi
 -21.00
-neutrino> 230 / abs(Z)
+cozy> 230 / abs(Z)
 2.147
 ```
 
@@ -340,16 +340,16 @@ that the five roots sum to zero, and find the side length of the inscribed
 pentagon.
 
 ```
-neutrino> format(4)
-neutrino> let z = exp(2i * pi / 5)
+cozy> format(4)
+cozy> let z = exp(2i * pi / 5)
 0.3090+0.9511i
-neutrino> let zpow = fn n -> prod[k = 1:n] z
+cozy> let zpow = fn n -> prod[k = 1:n] z
 <fn/1>
-neutrino> abs(zpow(5) - 1) < 1e-12
+cozy> abs(zpow(5) - 1) < 1e-12
 true
-neutrino> abs(sum[k = 0:4] zpow(k)) < 1e-12
+cozy> abs(sum[k = 0:4] zpow(k)) < 1e-12
 true
-neutrino> abs(z - 1)
+cozy> abs(z - 1)
 1.176
 ```
 
@@ -364,11 +364,11 @@ platforms' math libraries; |z − 1| ≈ 1.176 is the unit pentagon's side.
 60° about the origin.
 
 ```
-neutrino> format(4)
-neutrino> let p = 3 + 2i;
-neutrino> p * exp(1i * pi / 3)
+cozy> format(4)
+cozy> let p = 3 + 2i;
+cozy> p * exp(1i * pi / 3)
 -0.2321+3.598i
-neutrino> abs(ans - p)
+cozy> abs(ans - p)
 3.606
 ```
 
@@ -392,21 +392,21 @@ functions; reshaping a range; tiling; and building big matrices from
 blocks:
 
 ```
-neutrino> let A = [1, 2; 3, 4]
+cozy> let A = [1, 2; 3, 4]
 [1, 2; 3, 4]
-neutrino> zeros(2, 3)
+cozy> zeros(2, 3)
 [0, 0, 0; 0, 0, 0]
-neutrino> eye(3)
+cozy> eye(3)
 [1, 0, 0; 0, 1, 0; 0, 0, 1]
-neutrino> diag([5, 6, 7])
+cozy> diag([5, 6, 7])
 [5, 0, 0; 0, 6, 0; 0, 0, 7]
-neutrino> reshape(1:6, 2, 3)
+cozy> reshape(1:6, 2, 3)
 [1, 2, 3; 4, 5, 6]
-neutrino> repmat([1, 0], 2, 2)
+cozy> repmat([1, 0], 2, 2)
 [1, 0, 1, 0; 1, 0, 1, 0]
-neutrino> let B = eye(2); [A; B]
+cozy> let B = eye(2); [A; B]
 [1, 2; 3, 4; 1, 0; 0, 1]
-neutrino> [A, A]
+cozy> [A, A]
 [1, 2, 1, 2; 3, 4, 3, 4]
 ```
 
@@ -419,17 +419,17 @@ elements: the eye stacked under A, A beside itself.
 slices, assignment in place, and logical selection:
 
 ```
-neutrino> let A = reshape(1:12, 3, 4)
+cozy> let A = reshape(1:12, 3, 4)
 [1, 2, 3, 4; 5, 6, 7, 8; 9, 10, 11, 12]
-neutrino> A[2, 3]
+cozy> A[2, 3]
 7
-neutrino> A[2, :]
+cozy> A[2, :]
 [5, 6, 7, 8]
-neutrino> A[:, 4]
+cozy> A[:, 4]
 [4; 8; 12]
-neutrino> A[1, 1] = 100; A
+cozy> A[1, 1] = 100; A
 [100, 2, 3, 4; 5, 6, 7, 8; 9, 10, 11, 12]
-neutrino> let v = [10, 20, 30, 40]; v[v > 15]
+cozy> let v = [10, 20, 30, 40]; v[v > 15]
 [20, 30, 40]
 ```
 
@@ -442,20 +442,20 @@ passes.
 distinction in any matrix language:
 
 ```
-neutrino> let A = [1, 2; 3, 4]; let B = [0, 1; 1, 0];
-neutrino> A + B
+cozy> let A = [1, 2; 3, 4]; let B = [0, 1; 1, 0];
+cozy> A + B
 [1, 3; 4, 4]
-neutrino> A * B
+cozy> A * B
 [2, 1; 4, 3]
-neutrino> A .* B
+cozy> A .* B
 [0, 2; 3, 0]
-neutrino> A ^ 2
+cozy> A ^ 2
 [7, 10; 15, 22]
-neutrino> A .^ 2
+cozy> A .^ 2
 [1, 4; 9, 16]
-neutrino> A * 10 + 1
+cozy> A * 10 + 1
 [11, 21; 31, 41]
-neutrino> A.'
+cozy> A.'
 [1, 3; 2, 4]
 ```
 
@@ -469,19 +469,19 @@ interpreter. Scalars broadcast (`A * 10 + 1`), and `.'` transposes.
 workspace view:
 
 ```
-neutrino> let A = [1/3, 2/3; 1, 4/3];
-neutrino> A
+cozy> let A = [1/3, 2/3; 1, 4/3];
+cozy> A
 [0.333333, 0.666667; 1, 1.33333]
-neutrino> format(10); A
+cozy> format(10); A
 [0.3333333333, 0.6666666667; 1.000000000, 1.333333333]
-neutrino> format(6);
-neutrino> size(A)
+cozy> format(6);
+cozy> size(A)
 [2, 2]
-neutrino> numel(A)
+cozy> numel(A)
 4
-neutrino> let big = rand(50, 50); size(big)
+cozy> let big = rand(50, 50); size(big)
 [50, 50]
-neutrino> who
+cozy> who
   A            array      2x2 Float
   ans          array      1x2 Int
   big          array      50x50 Float
@@ -507,16 +507,16 @@ columns; `save`/`load` persist the workspace itself.
 yields, write them to CSV, read them back, and correlate:
 
 ```
-neutrino> format(4)
-neutrino> rng(5)
-neutrino> let yield_data = [10 + randn(1, 6) * 0.5; 12 + randn(1, 6) * 0.5].';
-neutrino> writecsv("/tmp/yield.csv", yield_data)
-neutrino> let back = readcsv("/tmp/yield.csv");
-neutrino> size(back)
+cozy> format(4)
+cozy> rng(5)
+cozy> let yield_data = [10 + randn(1, 6) * 0.5; 12 + randn(1, 6) * 0.5].';
+cozy> writecsv("/tmp/yield.csv", yield_data)
+cozy> let back = readcsv("/tmp/yield.csv");
+cozy> size(back)
 [6, 2]
-neutrino> mean(back, 1)
+cozy> mean(back, 1)
 [9.707, 11.94]
-neutrino> corr(back[:, 1], back[:, 2])
+cozy> corr(back[:, 1], back[:, 2])
 -0.4076
 ```
 
@@ -530,15 +530,15 @@ weather in `tests/data/weather.csv` (columns `day,temp,rain`). `readtable`
 turns the header into field names:
 
 ```
-neutrino> let w = readtable("tests/data/weather.csv")
+cozy> let w = readtable("tests/data/weather.csv")
 {day = [1; 2; 3; 4; 5; 6; 7], temp = [21.5; 19.8; 23.1; 22.4; 24; 20.6; 22.9], rain = [0; 4.2; 0; 1.1; 0; 7.8; 0.4]}
-neutrino> mean(w.temp)
+cozy> mean(w.temp)
 22.0429
-neutrino> sum(w.rain > 0)
+cozy> sum(w.rain > 0)
 4
-neutrino> w.temp[find(w.rain == 0)]
+cozy> w.temp[find(w.rain == 0)]
 [21.5; 23.1; 24]
-neutrino> w.temp |> {hi = max, lo = min, mu = mean}
+cozy> w.temp |> {hi = max, lo = min, mu = mean}
 {hi = 24, lo = 19.8, mu = 22.0429}
 ```
 
@@ -552,13 +552,13 @@ analysis.
 week, preserved and restored:
 
 ```
-neutrino> let rate = 0.0575; let horizon = 30; let goal = 250000;
-neutrino> save("/tmp/mycase.nu")
-neutrino> clear(); who
+cozy> let rate = 0.0575; let horizon = 30; let goal = 250000;
+cozy> save("/tmp/mycase.nu")
+cozy> clear(); who
 (no variables defined)
-neutrino> load("/tmp/mycase.nu"); who
+cozy> load("/tmp/mycase.nu"); who
   /tmp/mycase.nu           3 names   (who("mycase") to list)
-neutrino> who("mycase")
+cozy> who("mycase")
   rate         float      = 0.0575
   horizon      int        = 30
   goal         int        = 250000
@@ -582,14 +582,14 @@ source of what you defined.
 above. Compute the tax at three incomes.
 
 ```
-neutrino> format("fixed", 2)
-neutrino> let tax = fn inc -> if inc <= 11000 then inc * 0.10 elseif inc <= 44725 then 1100 + (inc - 11000) * 0.12 else 5147 + (inc - 44725) * 0.22 end
+cozy> format("fixed", 2)
+cozy> let tax = fn inc -> if inc <= 11000 then inc * 0.10 elseif inc <= 44725 then 1100 + (inc - 11000) * 0.12 else 5147 + (inc - 44725) * 0.22 end
 <fn/1>
-neutrino> tax(9500)
+cozy> tax(9500)
 950.00
-neutrino> tax(30000)
+cozy> tax(30000)
 3380.00
-neutrino> tax(60000)
+cozy> tax(60000)
 8507.50
 ```
 
@@ -601,11 +601,11 @@ definition you can read back later with `body(tax)`.
 around 300 BC.
 
 ```
-neutrino> let gcd = fn a, b -> if b == 0 then a else gcd(b, mod(a, b)) end
+cozy> let gcd = fn a, b -> if b == 0 then a else gcd(b, mod(a, b)) end
 <fn/2>
-neutrino> gcd(1071, 462)
+cozy> gcd(1071, 462)
 21
-neutrino> gcd(35, 64)
+cozy> gcd(35, 64)
 1
 ```
 
@@ -615,12 +615,12 @@ name. `gcd(35, 64) = 1` — coprime, as any piano tuner suspects.
 **Problem 7.3 — Body mass index, with provenance.**
 
 ```
-neutrino> format(3)
-neutrino> let bmi = fn kg, cm -> kg / (cm / 100) ^ 2
+cozy> format(3)
+cozy> let bmi = fn kg, cm -> kg / (cm / 100) ^ 2
 <fn/2>
-neutrino> bmi(82, 178)
+cozy> bmi(82, 178)
 25.9
-neutrino> body(bmi)
+cozy> body(bmi)
 fn kg, cm -> kg / (cm / 100) ^ 2
 ```
 
@@ -641,16 +641,16 @@ a record of functions fans one value out to many summaries.
 **Problem 8.1 — The pipe family on one array.**
 
 ```
-neutrino> format(4)
-neutrino> let x = [3, 1, 4, 1, 5, 9, 2, 6];
-neutrino> x |> sort
+cozy> format(4)
+cozy> let x = [3, 1, 4, 1, 5, 9, 2, 6];
+cozy> x |> sort
 [1, 1, 2, 3, 4, 5, 6, 9]
-neutrino> x ~> (@ ^ 2 - 1)
+cozy> x ~> (@ ^ 2 - 1)
 [8, 0, 15, 0, 24, 80, 3, 35]
-neutrino> x |> sort |>> (@) |> median
+cozy> x |> sort |>> (@) |> median
 [1, 1, 2, 3, 4, 5, 6, 9]
 3.500
-neutrino> x |> {n = length, mu = mean, rng = fn v -> max(v) - min(v)}
+cozy> x |> {n = length, mu = mean, rng = fn v -> max(v) - min(v)}
 {n = 8, mu = 3.875, rng = 8}
 ```
 
@@ -662,11 +662,11 @@ anonymous — can ride in the fan-out.
 and a half beyond. Five employees' hours; total the week's wages.
 
 ```
-neutrino> format("fixed", 2)
-neutrino> let hours = [38, 42.5, 40, 45, 36.5];
-neutrino> hours ~> (fn h -> if h <= 40 then h * 22 else 880 + (h - 40) * 33 end)
+cozy> format("fixed", 2)
+cozy> let hours = [38, 42.5, 40, 45, 36.5];
+cozy> hours ~> (fn h -> if h <= 40 then h * 22 else 880 + (h - 40) * 33 end)
 [836.00, 962.50, 880.00, 1045.00, 803.00]
-neutrino> ans |> sum
+cozy> ans |> sum
 4526.50
 ```
 
@@ -686,14 +686,14 @@ isn't enough.
 **Problem 9.1 — A parts bin.**
 
 ```
-neutrino> format("fixed", 2)
-neutrino> let bolt = {sku = "M8x40", price = 0.42, stock = 1180};
-neutrino> let nut = {sku = "M8n", price = 0.11, stock = 2600};
-neutrino> bolt.price * 200 + nut.price * 200
+cozy> format("fixed", 2)
+cozy> let bolt = {sku = "M8x40", price = 0.42, stock = 1180};
+cozy> let nut = {sku = "M8n", price = 0.11, stock = 2600};
+cozy> bolt.price * 200 + nut.price * 200
 106.00
-neutrino> fields(bolt)
+cozy> fields(bolt)
 ["sku"; "price"; "stock"]
-neutrino> let bolt = {sku = bolt.sku, price = bolt.price * 1.06, stock = bolt.stock}; bolt.price
+cozy> let bolt = {sku = bolt.sku, price = bolt.price * 1.06, stock = bolt.stock}; bolt.price
 0.45
 ```
 
@@ -705,11 +705,11 @@ which is exactly the audit trail you want in anything touching money.
 structured summary.
 
 ```
-neutrino> rng(3); format(4)
-neutrino> let sample = randn(1, 400);
-neutrino> let report = sample |> {n = length, mu = mean, sd = std, q90 = fn v -> quantile(v, 0.9)}
+cozy> rng(3); format(4)
+cozy> let sample = randn(1, 400);
+cozy> let report = sample |> {n = length, mu = mean, sd = std, q90 = fn v -> quantile(v, 0.9)}
 {n = 400, mu = -0.1356, sd = 0.9688, q90 = 1.127}
-neutrino> report.q90
+cozy> report.q90
 1.127
 ```
 
@@ -730,8 +730,8 @@ the fan-out doesn't care who wrote its entries.
 fading with altitude as 1/(1 + h/R)²; h in km, R = 6371 km.
 
 ```
-neutrino> format(6)
-neutrino> integral(fn x -> 4000 / (1 + x / 6371) ^ 2, 0, 400)
+cozy> format(6)
+cozy> integral(fn x -> 4000 / (1 + x / 6371) ^ 2, 0, 400)
 1.50548e+06
 ```
 
@@ -750,12 +750,12 @@ tolerance (1e-10) is far below engineering need.
 A cantilever's deflection is y(x) = x²(3L − x)/(6EI), with EI = 2.1e4.
 
 ```
-neutrino> format(5)
-neutrino> let defl = fn x -> x ^ 2 * (3 * 4 - x) / (6 * 2.1e4)
+cozy> format(5)
+cozy> let defl = fn x -> x ^ 2 * (3 * 4 - x) / (6 * 2.1e4)
 <fn/1>
-neutrino> defl(4)
+cozy> defl(4)
 0.0010159
-neutrino> fminbnd(fn x -> -defl(x), 0, 4)
+cozy> fminbnd(fn x -> -defl(x), 0, 4)
 {x = 4.0000, fx = -0.0010159}
 ```
 
@@ -767,11 +767,11 @@ boundary, which is the standard trick for maximization.
 closed form. For M = 1.5, e = 0.4, find the eccentric anomaly.
 
 ```
-neutrino> format(6)
-neutrino> let M = 1.5; let ecc = 0.4;
-neutrino> let E = fzero(fn x -> x - ecc * sin(x) - M, 0, pi)
+cozy> format(6)
+cozy> let M = 1.5; let ecc = 0.4;
+cozy> let E = fzero(fn x -> x - ecc * sin(x) - M, 0, pi)
 1.88092
-neutrino> E - ecc * sin(E)
+cozy> E - ecc * sin(E)
 1.50000
 ```
 
@@ -783,17 +783,17 @@ orbit propagator on Earth does this daily.
 exact integral (via `polyint`) with adaptive quadrature.
 
 ```
-neutrino> load("packages/poly.nu"); format(4)
-neutrino> let p = [1, -2, 0, 3];
-neutrino> polyval(p, 2)
+cozy> load("packages/poly.nu"); format(4)
+cozy> let p = [1, -2, 0, 3];
+cozy> polyval(p, 2)
 3
-neutrino> let dp = polyder(p)
+cozy> let dp = polyder(p)
 [3, -4, 0]
-neutrino> polyval(dp, 2)
+cozy> polyval(dp, 2)
 4
-neutrino> let P = polyint(p, 0); polyval(P, 2) - polyval(P, 0)
+cozy> let P = polyint(p, 0); polyval(P, 2) - polyval(P, 0)
 4.667
-neutrino> integral(fn x -> polyval(p, x), 0, 2)
+cozy> integral(fn x -> polyval(p, x), 0, 2)
 4.667
 ```
 
@@ -805,17 +805,17 @@ and the symbolic agree to ten digits, both were probably right.
 definitions turn `integral` into a Fourier analyzer:
 
 ```
-neutrino> format(4)
-neutrino> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
+cozy> format(4)
+cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
+cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let sq = fn x -> pick(x > 0, 1, -1);
-neutrino> 1:5 ~> (fn k -> fb(sq, k))
+cozy> let sq = fn x -> pick(x > 0, 1, -1);
+cozy> 1:5 ~> (fn k -> fb(sq, k))
 [1.273, 1.060e-16, 0.4244, -3.534e-17, 0.2546]
-neutrino> 4 / pi * [1, 0, 1/3, 0, 1/5]
+cozy> 4 / pi * [1, 0, 1/3, 0, 1/5]
 [1.273, 0.000, 0.4244, 0.000, 0.2546]
-neutrino> (sum[k = 1:n] fb(sq, k) * sin(k * x)) where n = 40, x = 1
+cozy> (sum[k = 1:n] fb(sq, k) * sin(k * x)) where n = 40, x = 1
 1.023
 ```
 
@@ -834,17 +834,17 @@ and a record whose fields each map over k turns one pipe into a whole
 Fourier table.
 
 ```
-neutrino> format(4)
-neutrino> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
+cozy> format(4)
+cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
+cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
+cozy> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
 <fn/1>
-neutrino> let s = spectrum(4);
-neutrino> (fn x -> x) |> {a = s.a, b = s.b}
+cozy> let s = spectrum(4);
+cozy> (fn x -> x) |> {a = s.a, b = s.b}
 {a = [0.000, 2.827e-16, 1.325e-16, 1.767e-17, 1.414e-16], b = [2.000, -1.000, 0.6667, -0.5000]}
-neutrino> (fn x -> x ^ 2) |> {a = s.a, b = s.b}
+cozy> (fn x -> x ^ 2) |> {a = s.a, b = s.b}
 {a = [6.580, -4.000, 1.000, -0.4444, 0.2500], b = [5.654e-16, 0.000, 0.000, 2.827e-16]}
 ```
 
@@ -869,19 +869,19 @@ so its series is pure cosine; the idiom is three moves — the coefficient
 functional, one map, one sigma closure — and a two-curve plot:
 
 ```
-neutrino> format(4)
-neutrino> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
+cozy> format(4)
+cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let a = 0:9 ~> (fn k -> fa(abs, k))
+cozy> let a = 0:9 ~> (fn k -> fa(abs, k))
 [3.142, -1.273, 1.944e-16, -0.1415, -1.237e-16, -0.05093, -2.288e-15, -0.02598, -8.844e-15, -0.01572]
-neutrino> [pi, -4/pi, -4/(9*pi), -4/(25*pi)]
+cozy> [pi, -4/pi, -4/(9*pi), -4/(25*pi)]
 [3.142, -1.273, -0.1415, -0.05093]
-neutrino> let S = fn x -> a[1] / 2 + (sum[k = 1:9] a[k + 1] * cos(k * x))
+cozy> let S = fn x -> a[1] / 2 + (sum[k = 1:9] a[k + 1] * cos(k * x))
 <fn/1>
-neutrino> let xs = -pi:0.05:pi;
-neutrino> max(abs((xs ~> abs) - (xs ~> S)))
+cozy> let xs = -pi:0.05:pi;
+cozy> max(abs((xs ~> abs) - (xs ~> S)))
 0.06345
-neutrino> plot(xs, [xs ~> abs; xs ~> S]', {title = "|x| and its 10-term Fourier series", label1 = "|x|", label2 = "S"})
+cozy> plot(xs, [xs ~> abs; xs ~> S]', {title = "|x| and its 10-term Fourier series", label1 = "|x|", label2 = "S"})
   |x| and its 10-term Fourier series
      3.14 |++                                                            ++
      2.96 | +++                                                        +++
@@ -925,24 +925,24 @@ wave jumps, and a Fourier series near a jump overshoots by a fixed
 fraction no number of terms can cure — only sharpen:
 
 ```
-neutrino> format(4)
-neutrino> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
+cozy> format(4)
+cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let sq = fn x -> pick(x > 0, 1, -1)
+cozy> let sq = fn x -> pick(x > 0, 1, -1)
 <fn/1>
-neutrino> let b = 1:9 ~> (fn k -> fb(sq, k))
+cozy> let b = 1:9 ~> (fn k -> fb(sq, k))
 [1.273, 1.060e-16, 0.4244, -3.534e-17, 0.2546, 3.534e-17, 0.1819, -8.835e-18, 0.1415]
-neutrino> let S9 = fn x -> sum[k = 1:9] b[k] * sin(k * x)
+cozy> let S9 = fn x -> sum[k = 1:9] b[k] * sin(k * x)
 <fn/1>
-neutrino> max((0:0.002:1) ~> S9)
+cozy> max((0:0.002:1) ~> S9)
 1.182
-neutrino> let S99 = fn x -> 4 / pi * (sum[j = 1:50] sin((2 * j - 1) * x) / (2 * j - 1))
+cozy> let S99 = fn x -> 4 / pi * (sum[j = 1:50] sin((2 * j - 1) * x) / (2 * j - 1))
 <fn/1>
-neutrino> max((0:0.0005:0.2) ~> S99)
+cozy> max((0:0.0005:0.2) ~> S99)
 1.179
-neutrino> 2 / pi * integral(fn t -> sin(t) / t, 1e-9, pi)
+cozy> 2 / pi * integral(fn t -> sin(t) / t, 1e-9, pi)
 1.179
-neutrino> plot(-pi:0.02:pi, [(-pi:0.02:pi) ~> sq; (-pi:0.02:pi) ~> S9]', {title = "square wave, 9 terms: Gibbs", label1 = "sq", label2 = "S9"})
+cozy> plot(-pi:0.02:pi, [(-pi:0.02:pi) ~> sq; (-pi:0.02:pi) ~> S9]', {title = "square wave, 9 terms: Gibbs", label1 = "sq", label2 = "S9"})
   square wave, 9 terms: Gibbs
      1.18 |                                  +++                      +++
      1.04 |                                **+*++*+++++*+++++**++++**++*+**
@@ -988,18 +988,18 @@ and returns its derivative — a function eating a function, producing a
 function:
 
 ```
-neutrino> format(4)
-neutrino> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
+cozy> format(4)
+cozy> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
 <fn/1>
-neutrino> d(sin)(0)
+cozy> d(sin)(0)
 1.000
-neutrino> d(fn x -> x ^ 3)(2)
+cozy> d(fn x -> x ^ 3)(2)
 12.00
-neutrino> let arclen = fn f, a, b -> integral(fn x -> sqrt(1 + d(f)(x) ^ 2), a, b)
+cozy> let arclen = fn f, a, b -> integral(fn x -> sqrt(1 + d(f)(x) ^ 2), a, b)
 <fn/3>
-neutrino> arclen(sin, 0, 2 * pi)
+cozy> arclen(sin, 0, 2 * pi)
 7.640
-neutrino> arclen(fn x -> x, 0, 1)
+cozy> arclen(fn x -> x, 0, 1)
 1.414
 ```
 
@@ -1014,14 +1014,14 @@ need no special machinery, because functions were never special.
 three roads to π:
 
 ```
-neutrino> format(6)
-neutrino> let gam = fn s -> integral(fn t -> t ^ (s - 1) * exp(-t), 0, 60); gam(5)
+cozy> format(6)
+cozy> let gam = fn s -> integral(fn t -> t ^ (s - 1) * exp(-t), 0, 60); gam(5)
 24.0000
-neutrino> (2 * integral(fn u -> exp(-u ^ 2), 0, 10)) ^ 2
+cozy> (2 * integral(fn u -> exp(-u ^ 2), 0, 10)) ^ 2
 3.14159
-neutrino> (2 * prod[k = 1:n] 4 * k ^ 2 / (4 * k ^ 2 - 1)) where n = 10000
+cozy> (2 * prod[k = 1:n] 4 * k ^ 2 / (4 * k ^ 2 - 1)) where n = 10000
 3.14151
-neutrino> 4 * integral(fn x -> sqrt(1 - x ^ 2), 0, 1)
+cozy> 4 * integral(fn x -> sqrt(1 - x ^ 2), 0, 1)
 3.14159
 ```
 
@@ -1056,11 +1056,11 @@ Matrices are the native tongue: `\` solves systems, `eig`, `lu`, `qr`,
 Blend a 10% and a 25% acid solution into 200 L at 22%.
 
 ```
-neutrino> format(4)
-neutrino> let A = [0.10, 0.25; 0.90, 0.75]; let b = [40; 160];
-neutrino> A \ b
+cozy> format(4)
+cozy> let A = [0.10, 0.25; 0.90, 0.75]; let b = [40; 160];
+cozy> A \ b
 [66.67; 133.3]
-neutrino> A * ans
+cozy> A * ans
 [40.00; 160.0]
 ```
 
@@ -1073,11 +1073,11 @@ output and 0.3 of sector 2's per unit; sector 2 uses 0.4 and 0.1. Final
 demand is (100, 150). What gross output meets it?
 
 ```
-neutrino> format(4)
-neutrino> let A = [0.2, 0.3; 0.4, 0.1]; let d = [100; 150];
-neutrino> let x = (eye(2) - A) \ d
+cozy> format(4)
+cozy> let A = [0.2, 0.3; 0.4, 0.1]; let d = [100; 150];
+cozy> let x = (eye(2) - A) \ d
 [225.0; 266.7]
-neutrino> (eye(2) - A) * x
+cozy> (eye(2) - A) * x
 [100.0; 150.0]
 ```
 
@@ -1089,11 +1089,11 @@ final demand, the rest consumed in production itself.
 fit a line, predict the next point.
 
 ```
-neutrino> load("packages/poly.nu"); format(4)
-neutrino> let t = [0, 1, 2, 3, 4, 5]; let y = [2.1, 3.9, 6.2, 7.8, 10.1, 12.2];
-neutrino> let c = polyfit(t, y, 1)
+cozy> load("packages/poly.nu"); format(4)
+cozy> let t = [0, 1, 2, 3, 4, 5]; let y = [2.1, 3.9, 6.2, 7.8, 10.1, 12.2];
+cozy> let c = polyfit(t, y, 1)
 [2.020, 2.000]
-neutrino> polyval(c, 6)
+cozy> polyval(c, 6)
 14.12
 ```
 
@@ -1106,15 +1106,15 @@ stays sunny 0.9, rain turns sunny 0.3. The long-run climate is the
 eigenvector of Pᵀ at eigenvalue 1.
 
 ```
-neutrino> format(4)
-neutrino> let P = [0.9, 0.1; 0.3, 0.7];
-neutrino> let r = eig(P.')
+cozy> format(4)
+cozy> let P = [0.9, 0.1; 0.3, 0.7];
+cozy> let r = eig(P.')
 {values = [0.6000; 1.000], vectors = [-0.7071, 0.9487; 0.7071, 0.3162]}
-neutrino> let idx = find(abs(r.values - 1) < 1e-9)[1]
+cozy> let idx = find(abs(r.values - 1) < 1e-9)[1]
 2
-neutrino> let v = r.vectors[:, idx]; let s = v / sum(v)
+cozy> let v = r.vectors[:, idx]; let s = v / sum(v)
 [0.7500; 0.2500]
-neutrino> P.' * s
+cozy> P.' * s
 [0.7500; 0.2500]
 ```
 
@@ -1140,14 +1140,14 @@ shows at most 2 defectives. At a true 5% defect rate, how often does a lot
 fail? The binomial probability, from first principles:
 
 ```
-neutrino> load("packages/dist.nu"); format(4)
-neutrino> let p_defect = fn k -> gamma(21) / (gamma(k + 1) * gamma(21 - k)) * 0.05 ^ k * 0.95 ^ (20 - k)
+cozy> load("packages/dist.nu"); format(4)
+cozy> let p_defect = fn k -> gamma(21) / (gamma(k + 1) * gamma(21 - k)) * 0.05 ^ k * 0.95 ^ (20 - k)
 <fn/1>
-neutrino> sum[k = 0:2] p_defect(k)
+cozy> sum[k = 0:2] p_defect(k)
 0.9245
-neutrino> 1 - ans
+cozy> 1 - ans
 0.07548
-neutrino> p_defect(0)
+cozy> p_defect(0)
 0.3585
 ```
 
@@ -1159,13 +1159,13 @@ and 36% of samples are perfectly clean.
 measurements; a 95% interval for the mean.
 
 ```
-neutrino> rng(2)
-neutrino> let z = randn(1, 10000);
-neutrino> mean(-1.96 < z < 1.96)
+cozy> rng(2)
+cozy> let z = randn(1, 10000);
+cozy> mean(-1.96 < z < 1.96)
 0.9484
-neutrino> sum(z > 3)
+cozy> sum(z > 3)
 10
-neutrino> mean(abs(z) > 2.576)
+cozy> mean(abs(z) > 2.576)
 0.0101
 ```
 
@@ -1185,12 +1185,12 @@ with 95% confidence.
 ```
 
 ```
-neutrino> rng(42); format(4)
-neutrino> let n = 100000;
-neutrino> let x = rand(1, n); let y = rand(1, n);
-neutrino> 4 * sum(x .^ 2 + y .^ 2 < 1) / n
+cozy> rng(42); format(4)
+cozy> let n = 100000;
+cozy> let x = rand(1, n); let y = rand(1, n);
+cozy> 4 * sum(x .^ 2 + y .^ 2 < 1) / n
 3.137
-neutrino> pi
+cozy> pi
 3.142
 ```
 
@@ -1201,10 +1201,10 @@ as 1/sqrt(n): expect the second decimal, budget for the fourth.
 uniforms, standardized; how many of 500 land within ±1.96?
 
 ```
-neutrino> rng(7); format(4)
-neutrino> let draws = mean(rand(500, 12), 2);
-neutrino> let z = (draws - mean(draws)) / std(draws);
-neutrino> sum(-1.96 < z < 1.96) / 500
+cozy> rng(7); format(4)
+cozy> let draws = mean(rand(500, 12), 2);
+cozy> let z = (draws - mean(draws)) / std(draws);
+cozy> sum(-1.96 < z < 1.96) / 500
 0.9620
 ```
 
@@ -1229,7 +1229,7 @@ produce proper graphics.
 **Problem 13.1 — A function, seen.** One period-ish of the sine.
 
 ```
-neutrino> plot(0:0.5:6, sin(0:0.5:6), {title = "sin(x)"})
+cozy> plot(0:0.5:6, sin(0:0.5:6), {title = "sin(x)"})
   sin(x)
     0.997 |                *
     0.881 |           *         *
@@ -1261,7 +1261,7 @@ Matrix `y`: each column its own series.
 **Problem 13.2 — The shape of randn.** Four hundred draws, twelve bins.
 
 ```
-neutrino> rng(9); hist(randn(1, 400), 12, {title = "400 draws of randn"})
+cozy> rng(9); hist(randn(1, 400), 12, {title = "400 draws of randn"})
   400 draws of randn
     -2.98 | 1
     -2.42 |# 3
@@ -1286,9 +1286,9 @@ scatter.nu (Appendix and PACKAGES.md §7): pure Neutrino over the frozen
 `style = "points"` path.
 
 ```
-neutrino> load("packages/scatter.nu")
-neutrino> rng(4); let x = rand(1, 40); let noise = randn(1, 40) * 0.15;
-neutrino> scatter_titled(x, 2 * x + noise, "y = 2x + noise")
+cozy> load("packages/scatter.nu")
+cozy> rng(4); let x = rand(1, 40); let noise = randn(1, 40) * 0.15;
+cozy> scatter_titled(x, 2 * x + noise, "y = 2x + noise")
   y = 2x + noise
      2.16 |                                                           *
      2.02 |
@@ -1333,13 +1333,13 @@ chapter in the book.
 map them:
 
 ```
-neutrino> let twice = fn f, x -> f(f(x))
+cozy> let twice = fn f, x -> f(f(x))
 <fn/2>
-neutrino> twice(fn t -> t + 3, 10)
+cozy> twice(fn t -> t + 3, 10)
 16
-neutrino> let make_pow = fn p -> fn x -> x ^ p; let cube = make_pow(3); cube(4)
+cozy> let make_pow = fn p -> fn x -> x ^ p; let cube = make_pow(3); cube(4)
 64
-neutrino> [1, 2, 3] ~> make_pow(2)
+cozy> [1, 2, 3] ~> make_pow(2)
 [1, 4, 9]
 ```
 
@@ -1353,11 +1353,11 @@ formula first, the constants after — and let later bindings use earlier
 ones:
 
 ```
-neutrino> sqrt(b ^ 2 - 4 * a * c) where a = 1, b = -3, c = 2
+cozy> sqrt(b ^ 2 - 4 * a * c) where a = 1, b = -3, c = 2
 1
-neutrino> (-b + [-d, d]) / (2 * a) where a = 1, b = -3, c = 2, d = sqrt(b ^ 2 - 4 * a * c)
+cozy> (-b + [-d, d]) / (2 * a) where a = 1, b = -3, c = 2, d = sqrt(b ^ 2 - 4 * a * c)
 [1, 2]
-neutrino> 1:n ~> (@ ^ 2) |> sum where n = 5
+cozy> 1:n ~> (@ ^ 2) |> sum where n = 5
 55
 ```
 
@@ -1370,13 +1370,13 @@ binds loosest of all, by design.
 **Problem 14.3 — Sigma notation, working.**
 
 ```
-neutrino> (sum[k = 1:n] 1 / k ^ 2) where n = 100000
+cozy> (sum[k = 1:n] 1 / k ^ 2) where n = 100000
 1.64492
-neutrino> pi ^ 2 / 6
+cozy> pi ^ 2 / 6
 1.64493
-neutrino> sum[i = 1:4] sum[j = 1:4] pick(i == j, i, 0)
+cozy> sum[i = 1:4] sum[j = 1:4] pick(i == j, i, 0)
 10
-neutrino> let dot_ = fn u, v -> sum[k = 1:length(u)] u[k] * v[k]; dot_([1, 2, 3], [4, 5, 6])
+cozy> let dot_ = fn u, v -> sum[k = 1:length(u)] u[k] * v[k]; dot_([1, 2, 3], [4, 5, 6])
 32
 ```
 
@@ -1388,13 +1388,13 @@ reads as the mathematics because it is the mathematics.
 **Problem 14.4 — The grand combinations.** Everything at once:
 
 ```
-neutrino> rng(1); A |> {a = det, b = inv} where A = eig(rand(2)).vectors
+cozy> rng(1); A |> {a = det, b = inv} where A = eig(rand(2)).vectors
 {a = -0.998887, b = [-0.621925, 0.784499; 0.812955, 0.584237]}
-neutrino> ans.a * det(ans.b)
+cozy> ans.a * det(ans.b)
 1
-neutrino> rng(2); sum(-1.96 < z < 1.96) / n where n = 10000, z = randn(1, n)
+cozy> rng(2); sum(-1.96 < z < 1.96) / n where n = 10000, z = randn(1, n)
 0.9484
-neutrino> 1:m ~> (fn k -> prod[j = 1:k] (1 - (j - 1) / 365)) |> (fn p -> find(p < 0.5)[1]) where m = 60
+cozy> 1:m ~> (fn k -> prod[j = 1:k] (1 - (j - 1) / 365)) |> (fn p -> find(p < 0.5)[1]) where m = 60
 23
 ```
 
@@ -1417,14 +1417,14 @@ returns f ∘ f — a function eating a function, producing their
 composition:
 
 ```
-neutrino> format(4)
-neutrino> let selfcomp = fn f -> fn x -> f(f(x))
+cozy> format(4)
+cozy> let selfcomp = fn f -> fn x -> f(f(x))
 <fn/1>
-neutrino> selfcomp(fn t -> t + 3)(10)
+cozy> selfcomp(fn t -> t + 3)(10)
 16
-neutrino> selfcomp(sqrt)(16)
+cozy> selfcomp(sqrt)(16)
 2.000
-neutrino> [1, 2, 3] ~> selfcomp(fn t -> t * 10)
+cozy> [1, 2, 3] ~> selfcomp(fn t -> t * 10)
 [100, 200, 300]
 ```
 
@@ -1434,14 +1434,14 @@ rather than `pick` — `pick` is an ordinary function and evaluates *both*
 arms, which would recurse forever; `if` is the lazy form:
 
 ```
-neutrino> format(4)
-neutrino> let iterate = fn f, n -> if n <= 0 then (fn x -> x) else (fn x -> f(iterate(f, n - 1)(x))) end
+cozy> format(4)
+cozy> let iterate = fn f, n -> if n <= 0 then (fn x -> x) else (fn x -> f(iterate(f, n - 1)(x))) end
 <fn/2>
-neutrino> iterate(fn t -> t * 2, 10)(1)
+cozy> iterate(fn t -> t * 2, 10)(1)
 1024
-neutrino> iterate(fn t -> sqrt(1 + t), 40)(1)
+cozy> iterate(fn t -> sqrt(1 + t), 40)(1)
 1.618
-neutrino> (1 + sqrt(5)) / 2
+cozy> (1 + sqrt(5)) / 2
 1.618
 ```
 
@@ -1451,13 +1451,13 @@ wonder: forty-fold composition of √(1+t) converges to its fixed point,
 `iterate(f, 2)`.
 
 ```
-neutrino> format(4)
-neutrino> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-4
+cozy> format(4)
+cozy> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-4
 <fn/1>
-neutrino> let selfcomp = fn f -> fn x -> f(f(x));
-neutrino> selfcomp(d)(sin)(pi / 3)
+cozy> let selfcomp = fn f -> fn x -> f(f(x));
+cozy> selfcomp(d)(sin)(pi / 3)
 -0.8660
-neutrino> -sin(pi / 3)
+cozy> -sin(pi / 3)
 -0.8660
 ```
 
@@ -1478,15 +1478,15 @@ because they *are* functions.
 extra per month.
 
 ```
-neutrino> load("packages/finance.nu")
-neutrino> let price = 425000; let down = 0.20;
-neutrino> let principal = price * (1 - down)
+cozy> load("packages/finance.nu")
+cozy> let price = 425000; let down = 0.20;
+cozy> let principal = price * (1 - down)
 340000
-neutrino> pmt(n, i, principal, 0) where n = 360, i = 0.0575 / 12
+cozy> pmt(n, i, principal, 0) where n = 360, i = 0.0575 / 12
 -1984.15
-neutrino> ans * 360
+cozy> ans * 360
 -714293
-neutrino> nper(0.0575 / 12, principal, -1984.15 - 300, 0) / 12
+cozy> nper(0.0575 / 12, principal, -1984.15 - 300, 0) / 12
 21.7762
 ```
 
@@ -1498,10 +1498,10 @@ neutrino> nper(0.0575 / 12, principal, -1984.15 - 300, 0) / 12
 the market yields 5.2%.
 
 ```
-neutrino> load("packages/finance.nu"); format(4)
-neutrino> bond_price(0.045, 0.052, 10, 2, 100)
+cozy> load("packages/finance.nu"); format(4)
+cozy> bond_price(0.045, 0.052, 10, 2, 100)
 0.0002340
-neutrino> bond_duration(0.045, 0.052, 10, 2, 100)
+cozy> bond_duration(0.045, 0.052, 10, 2, 100)
 0.1100
 ```
 
@@ -1512,11 +1512,11 @@ modified-duration machinery one call away.
 years of cash flows.
 
 ```
-neutrino> load("packages/finance.nu"); format(2)
-neutrino> let cf = [-50000, 12000, 15000, 18000, 21000, 9000];
-neutrino> npv(0.08, cf)
+cozy> load("packages/finance.nu"); format(2)
+cozy> let cf = [-50000, 12000, 15000, 18000, 21000, 9000];
+cozy> npv(0.08, cf)
 9.8e+03
-neutrino> irr(cf) * 100
+cozy> irr(cf) * 100
 15.
 ```
 
@@ -1527,13 +1527,13 @@ decision survives any discount rate below that.
 by 200,000 simulated paths.
 
 ```
-neutrino> load("packages/dist.nu"); format(4)
-neutrino> let s0 = 100; let strike = 105; let r = 0.03; let sig = 0.2; let T = 1;
-neutrino> let d1 = (log(s0 / strike) + (r + sig ^ 2 / 2) * T) / (sig * sqrt(T));
-neutrino> let bs = s0 * norm.cdf(d1, 0, 1) - strike * exp(-r * T) * norm.cdf(d1 - sig * sqrt(T), 0, 1)
+cozy> load("packages/dist.nu"); format(4)
+cozy> let s0 = 100; let strike = 105; let r = 0.03; let sig = 0.2; let T = 1;
+cozy> let d1 = (log(s0 / strike) + (r + sig ^ 2 / 2) * T) / (sig * sqrt(T));
+cozy> let bs = s0 * norm.cdf(d1, 0, 1) - strike * exp(-r * T) * norm.cdf(d1 - sig * sqrt(T), 0, 1)
 7.128
-neutrino> rng(11); let st = s0 * exp((r - sig ^ 2 / 2) * T + sig * sqrt(T) * randn(1, 200000));
-neutrino> exp(-r * T) * mean(pick(st > strike, st - strike, 0))
+cozy> rng(11); let st = s0 * exp((r - sig ^ 2 / 2) * T + sig * sqrt(T) * randn(1, 200000));
+cozy> exp(-r * T) * mean(pick(st > strike, st - strike, 0))
 7.108
 ```
 
@@ -1551,12 +1551,12 @@ begin to trust it on the contracts that have no formula.
 length at 46.05°N, 14.51°E, UTC+2.
 
 ```
-neutrino> load("packages/astro.nu")
-neutrino> hm(sunrise(46.05, 14.51, 2026, 7, 25, 2))
+cozy> load("packages/astro.nu")
+cozy> hm(sunrise(46.05, 14.51, 2026, 7, 25, 2))
 "05:36"
-neutrino> hm(sunset(46.05, 14.51, 2026, 7, 25, 2))
+cozy> hm(sunset(46.05, 14.51, 2026, 7, 25, 2))
 "20:40"
-neutrino> hm(day_length(46.05, 14.51, 2026, 7, 25))
+cozy> hm(day_length(46.05, 14.51, 2026, 7, 25))
 "15:04"
 ```
 
@@ -1567,10 +1567,10 @@ package carries coordinates so you needn't.
 **Problem B.2 — Tonight's moon.**
 
 ```
-neutrino> load("packages/astro.nu"); format(3)
-neutrino> moon_age(2026, 7, 25)
+cozy> load("packages/astro.nu"); format(3)
+cozy> moon_age(2026, 7, 25)
 10.7
-neutrino> moon_illum(2026, 7, 25) * 100
+cozy> moon_illum(2026, 7, 25) * 100
 82.5
 ```
 
@@ -1588,11 +1588,11 @@ twenty days.
 orbit; escape speed from the surface.
 
 ```
-neutrino> load("packages/phys.nu"); format(4)
-neutrino> let Me = 5.972e24; let Re = 6.371e6;
-neutrino> sqrt(phys.G * Me / (Re + 4e5))
+cozy> load("packages/phys.nu"); format(4)
+cozy> let Me = 5.972e24; let Re = 6.371e6;
+cozy> sqrt(phys.G * Me / (Re + 4e5))
 7672.
-neutrino> sqrt(2 * phys.G * Me / Re)
+cozy> sqrt(2 * phys.G * Me / Re)
 1.119e+04
 ```
 
@@ -1604,10 +1604,10 @@ electron volts, and the thermal wavelength of the cosmic microwave
 background.
 
 ```
-neutrino> load("packages/phys.nu"); format(4)
-neutrino> phys.k * 300 / phys.eV
+cozy> load("packages/phys.nu"); format(4)
+cozy> phys.k * 300 / phys.eV
 0.02585
-neutrino> phys.hbar * phys.c / (phys.k * 2.7255) * 1000
+cozy> phys.hbar * phys.c / (phys.k * 2.7255) * 1000
 0.8402
 ```
 
@@ -1625,12 +1625,12 @@ found by a microwave antenna.
 400 × 400 GOE matrix.
 
 ```
-neutrino> load("packages/rmt.nu"); rng(1); format(3)
-neutrino> let H = goe(400);
-neutrino> let lam = eig(H).values;
-neutrino> max(abs(lam))
+cozy> load("packages/rmt.nu"); rng(1); format(3)
+cozy> let H = goe(400);
+cozy> let lam = eig(H).values;
+cozy> max(abs(lam))
 1.99
-neutrino> sum(abs(lam) < 1) / 400
+cozy> sum(abs(lam) < 1) / 400
 0.608
 ```
 
@@ -1648,14 +1648,14 @@ hardware.
 **Problem E.1 — The derivative, symbolically, checked numerically.**
 
 ```
-neutrino> format(4)
-neutrino> load("packages/symb.nu")
-neutrino> let e = add(powc(X, 3), mul(C(5), sinx(X)));
-neutrino> show(simp(ddx(e)))
+cozy> format(4)
+cozy> load("packages/symb.nu")
+cozy> let e = add(powc(X, 3), mul(C(5), sinx(X)));
+cozy> show(simp(ddx(e)))
 "((3 * x^2) + (5 * cos(x)))"
-neutrino> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
+cozy> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
 <fn/1>
-neutrino> abs(evalx(ddx(e), 2) - d(fn t -> t ^ 3 + 5 * sin(t))(2)) < 1e-8
+cozy> abs(evalx(ddx(e), 2) - d(fn t -> t ^ 3 + 5 * sin(t))(2)) < 1e-8
 true
 ```
 
@@ -1668,13 +1668,13 @@ operators are all just values.
 **Problem E.2 — Taylor series from structure.**
 
 ```
-neutrino> format(4)
-neutrino> load("packages/symb.nu")
-neutrino> taylor(sinx(X), 7)
+cozy> format(4)
+cozy> load("packages/symb.nu")
+cozy> taylor(sinx(X), 7)
 [0.000, 1.000, -0.000, -0.1667, 0.000, 0.008333, -0.000, -0.0001984]
-neutrino> taylor(expx(X), 5)
+cozy> taylor(expx(X), 5)
 [1.000, 1.000, 0.5000, 0.1667, 0.04167, 0.008333]
-neutrino> show(dn(powc(X, 5), 3))
+cozy> show(dn(powc(X, 5), 3))
 "(60 * x^2)"
 ```
 
@@ -1691,17 +1691,17 @@ pure Neutrino, so the differentiator takes mathematics as you would type
 it:
 
 ```
-neutrino> format(4)
-neutrino> load("packages/symb.nu")
-neutrino> deriv("sin(x)/x")
+cozy> format(4)
+cozy> load("packages/symb.nu")
+cozy> deriv("sin(x)/x")
 "((cos(x) / x) - (sin(x) / x^2))"
-neutrino> deriv("x^3 + 5*sin(x)")
+cozy> deriv("x^3 + 5*sin(x)")
 "((3 * x^2) + (5 * cos(x)))"
-neutrino> deriv("exp(-x^2)")
+cozy> deriv("exp(-x^2)")
 "(-2 * (exp((-x^2)) * x))"
-neutrino> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
+cozy> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
 <fn/1>
-neutrino> abs(evalx(ddx(parse("sin(x)/x")), 1.5) - d(fn t -> sin(t) / t)(1.5)) < 1e-8
+cozy> abs(evalx(ddx(parse("sin(x)/x")), 1.5) - d(fn t -> sin(t) / t)(1.5)) < 1e-8
 true
 ```
 
@@ -1723,16 +1723,16 @@ payoff is reunification — symbolic results re-enter the numeric
 ecosystem:
 
 ```
-neutrino> format(6)
-neutrino> load("packages/symb.nu")
-neutrino> let f = dfun("sin(x)/x");
-neutrino> fzero(f, 4, 5)
+cozy> format(6)
+cozy> load("packages/symb.nu")
+cozy> let f = dfun("sin(x)/x");
+cozy> fzero(f, 4, 5)
 4.49341
-neutrino> fminbnd(ffun("sin(x)/x"), 4, 5)
+cozy> fminbnd(ffun("sin(x)/x"), 4, 5)
 {x = 4.49341, fx = -0.217234}
-neutrino> integral(dfun("x^3"), 1, 2)
+cozy> integral(dfun("x^3"), 1, 2)
 7.00000
-neutrino> ffun("x^3")(2) - ffun("x^3")(1)
+cozy> ffun("x^3")(2) - ffun("x^3")(1)
 7
 ```
 
@@ -1820,6 +1820,7 @@ language.
 | `fzero` | `fzero(f, a, b)` | root of f in [a, b] (Brent; f(a), f(b) must differ in sign) | solvers |
 | `gamma` | `gamma(x)` | gamma function (real, elementwise) | math |
 | `gammainc` | `gammainc(x, a)` | regularized lower incomplete gamma P(a, x) (the chi^2 CDF) | math |
+| `getfield` | `getfield(r, name)` | dynamic field read; error if the record has no such field | core |
 | `help` | `help / help(f)` | help lists every builtin; help(f) describes one | core |
 | `hist` | `hist(y[, nbins][, opts])` | histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend) | plot |
 | `hypot` | `hypot(a, b)` | sqrt(a^2 + b^2) without overflow (elementwise) | math |
@@ -1885,6 +1886,7 @@ language.
 | `rng` | `rng(seed)` | reseed the generator (xoshiro256**); same seed, same stream | random |
 | `round` | `round(x)` | round to nearest (componentwise on complex) | math |
 | `save` | `save("file.nu")` | write all variables and functions as reloadable source (restore with load) | core |
+| `setfield` | `setfield(r, name, v)` | a new record with the field replaced or appended; r is untouched | core |
 | `sign` | `sign(x)` | -1 / 0 / +1 by sign; z/\|z\| for complex | math |
 | `sin` | `sin(x)` | sine (complex-aware, elementwise) | trig |
 | `sinh` | `sinh(x)` | hyperbolic sine (complex-aware) | trig |
@@ -1894,6 +1896,7 @@ language.
 | `startswith` | `startswith(s, p)` | true if s begins with p | strings |
 | `std` | `std(A) \| std(A, w) \| std(A, w, dim)` | standard deviation (sqrt of var, same normalization) | reductions |
 | `str` | `str(x)` | the display text of any value, as a string | strings |
+| `strfind` | `strfind(s, pat)` | 1-based start positions of every occurrence of pat in s (overlapping), [] if none | strings |
 | `strjoin` | `strjoin(a, sep)` | join a string array with a separator | strings |
 | `strrep` | `strrep(s, old, new)` | replace every occurrence of old with new | strings |
 | `strsplit` | `strsplit(s, sep)` | split a string on a separator, giving a string row vector | strings |
@@ -1919,7 +1922,7 @@ language.
 | `writecsv` | `writecsv(file, A[, opts])` | matrix -> CSV, full precision (round-trips); opts: {delim} | files |
 | `zeros` | `zeros(r, c)` | r-by-c matrix of zeros | arrays |
 
-*159 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
+*162 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
 <!-- INDEX:END -->
 
 ---
@@ -1945,7 +1948,7 @@ remains is structural: the grammar itself.*
 **G.1 — The mask that reads like the statistics.**
 
 ```
-neutrino> rng(2); mean(-1.96 < z < 1.96) where z = randn(1, 10000)
+cozy> rng(2); mean(-1.96 < z < 1.96) where z = randn(1, 10000)
 0.9484
 ```
 
@@ -1965,7 +1968,7 @@ wart. Neutrino's grammar just says the statistics.
 **G.2 — Formula first, constants after.**
 
 ```
-neutrino> (-b + [-d, d]) / (2 * a) where a = 1, b = -3, c = 2, d = sqrt(b ^ 2 - 4 * a * c)
+cozy> (-b + [-d, d]) / (2 * a) where a = 1, b = -3, c = 2, d = sqrt(b ^ 2 - 4 * a * c)
 [1, 2]
 ```
 
@@ -1983,7 +1986,7 @@ broadcasts both roots from one expression.
 **G.3 — The birthday problem in one sentence.**
 
 ```
-neutrino> 1:m ~> (fn k -> prod[j = 1:k] (1 - (j - 1) / 365)) |> (fn p -> find(p < 0.5)[1]) where m = 60
+cozy> 1:m ~> (fn k -> prod[j = 1:k] (1 - (j - 1) / 365)) |> (fn p -> find(p < 0.5)[1]) where m = 60
 23
 ```
 
@@ -2001,7 +2004,7 @@ an off-by-one to reason about. Both are honest; only one is a sentence.
 **G.4 — The dashboard.**
 
 ```
-neutrino> rng(7); rand(1, 500) |> {mu = mean, sd = std, hi = max, lo = min}
+cozy> rng(7); rand(1, 500) |> {mu = mean, sd = std, hi = max, lo = min}
 {mu = 0.507215, sd = 0.291248, hi = 0.998657, lo = 0.0026157}
 ```
 
@@ -2022,14 +2025,14 @@ the value once, and the record syntax *is* the report.
 **G.5 — The spectrum analyzer, from first principles.**
 
 ```
-neutrino> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
+cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
+cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-neutrino> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
+cozy> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
 <fn/1>
-neutrino> let s = spectrum(4);
-neutrino> (fn x -> x) |> {a = s.a, b = s.b}
+cozy> let s = spectrum(4);
+cozy> (fn x -> x) |> {a = s.a, b = s.b}
 {a = [0, 2.82716e-16, 1.32523e-16, 1.76697e-17, 1.41358e-16], b = [2, -1, 0.666667, -0.5]}
 ```
 

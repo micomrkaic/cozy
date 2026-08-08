@@ -135,9 +135,9 @@ project advances.
 **Current task:** 0.0.5 shipped the dispatch seam (entry 2): the
 LinalgKernels table, BACKEND=tier0, buildinfo, and the reference
 generator's missing --check (ledgered). Next: the sparse design (entry 1)
-to review, then the first tier-1 backend when its trigger fires. strfind
-and getfield/setfield remain the first small builtins on deck; eval
-covers the read half meanwhile.
+to review, then the first tier-1 backend when its trigger fires. strfind and
+the reflection pair shipped in 0.0.6; the docket holds the ratified
+sparse design awaiting its trigger.
 
 ---
 

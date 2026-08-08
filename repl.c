@@ -237,7 +237,7 @@ static void print_banner(bool color)
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
         printf("           \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
-               NEUTRINO_VERSION, NEUTRINO_BUILT, now);
+               COZY_VERSION, COZY_BUILT, now);
     } else {
         fputs("  ( (         ____\n", stdout);
         fputs("   ) )       / ___|___ _____   _\n", stdout);
@@ -248,7 +248,7 @@ static void print_banner(bool color)
         fputs("           a heavier numerical language, warmly held\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("           v%s · built %s · session %s\n", NEUTRINO_VERSION, NEUTRINO_BUILT, now);
+        printf("           v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
     }
 }
 
@@ -362,7 +362,7 @@ int repl_run(void)
     else      snprintf(histpath, sizeof histpath, ".cozy_history");
 
 #ifdef HAVE_READLINE
-    rl_readline_name = "neutrino";
+    rl_readline_name = "cozy";
     rl_attempted_completion_function = repl_completion;
     rl_variable_bind("blink-matching-paren", "on");
 #ifdef HAVE_GNU_READLINE
@@ -440,8 +440,8 @@ int repl_run(void)
             if ((arg = match_command(q, "manual"))) {
                 /* manual [packages|changelog|lessons|design|readme] — render
                  * the document as ANSI-formatted text and page it. Files are
-                 * found in the cwd or /usr/local/share/neutrino; set
-                 * NEUTRINO_MANUAL to override the main manual's path. */
+                 * found in the cwd or /usr/local/share/cozy; set
+                 * COZY_MANUAL to override the main manual's path. */
                 static const struct { const char *name, *file; } docs[] = {
                     { "",          "MANUAL.md" },     { "packages", "PACKAGES.md" },
                     { "book",      "BOOK.md" },
@@ -458,16 +458,16 @@ int repl_run(void)
                     goto manual_done;
                 }
                 char path[1100]; FILE *mf = nullptr;
-                const char *envp = getenv("NEUTRINO_MANUAL");
+                const char *envp = getenv("COZY_MANUAL");
                 if (*arg == '\0' && envp && *envp && (mf = fopen(envp, "rb"))) { /* override */ }
                 if (!mf && (mf = fopen(file, "rb"))) { }
                 if (!mf) {
-                    snprintf(path, sizeof path, "/usr/local/share/neutrino/%s", file);
+                    snprintf(path, sizeof path, "/usr/local/share/cozy/%s", file);
                     mf = fopen(path, "rb");
                 }
                 if (!mf) {
                     fprintf(stderr, "manual: %s not found (run from the repo root, "
-                            "or set NEUTRINO_MANUAL for the main manual)\n", file);
+                            "or set COZY_MANUAL for the main manual)\n", file);
                     goto manual_done;
                 }
                 bool tty = isatty(fileno(stdout));

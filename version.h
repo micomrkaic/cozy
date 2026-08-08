@@ -1,6 +1,6 @@
 /* version.h — Neutrino version and build identification. */
-#ifndef NEUTRINO_VERSION_H
-#define NEUTRINO_VERSION_H
-#define NEUTRINO_VERSION "0.0.5"
-#define NEUTRINO_BUILT   __DATE__ " " __TIME__
+#ifndef COZY_VERSION_H
+#define COZY_VERSION_H
+#define COZY_VERSION "0.0.7"
+#define COZY_BUILT   __DATE__ " " __TIME__
 #endif

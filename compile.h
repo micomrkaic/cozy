@@ -1,6 +1,6 @@
 /* compile.h — compile one Neutrino statement (AST) into a bytecode Chunk. */
-#ifndef NEUTRINO_COMPILE_H
-#define NEUTRINO_COMPILE_H
+#ifndef COZY_COMPILE_H
+#define COZY_COMPILE_H
 
 #include "chunk.h"
 #include "ast.h"

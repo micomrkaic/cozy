@@ -1,5 +1,62 @@
 # Cozy changelog
 
+## 0.0.7 — the rename (neutrino baggage, once and for all)
+
+### Changed
+- **Every name the machine uses is now cozy.** The rename rule: machine
+  names change, lineage prose stays. Renamed: deploy.sh's tarball path
+  (cozy/version.h — the reference that broke the 0.0.6 deploy) and usage;
+  COZY_VERSION/COZY_BUILT and every include guard (NEUTRINO_*_H ->
+  COZY_*_H); env vars COZY_PLOT_TERM/COZY_PLOT_OUT/COZY_MANUAL (C and
+  every test harness together); the transcript prompt in all three books
+  and the verifier's prefix (the correlated pair changed atomically —
+  947 goldens and 597 re-executed transcripts arbitrate); editors/
+  cozy-mode.el with cozy- symbols throughout and run-cozy; docs/cozy.js
+  and the page; the readline app name; /usr/local/share/cozy; workspace
+  save headers; usage strings; truthful re-chosen doc examples
+  (upper("cozy") %= "COZY" and friends — executed claims, so blind
+  substitution was not an option).
+- **Module.cozyPlot** replaces the wasm plot hook; docs/index.html
+  defines the old name as an alias until the wasm bundle rebuild (the
+  bundle is prebuilt and still calls the old hook — remove the alias
+  after the next emcc build). The browser editor's localStorage key
+  also renamed; old drafts are orphaned, acceptable at 0.0.x.
+
+### Kept, deliberately
+- The `.nu` extension and load("x.nu"): inherited language surface,
+  referenced by conformance goldens — renaming it would break the
+  machine-checked "every Neutrino program is a valid Cozy program"
+  invariant. If ever revisited, it goes through the docket.
+- heritage/ verbatim (the frozen record), changelog history, and every
+  true lineage statement in comments and books.
+- nrt.h: inert residue, nothing couples to it; recorded here so the
+  keep is a choice, not an oversight.
+
+## 0.0.6 — the userland-unblocking pair
+
+### Added
+- **`strfind(s, pat)`** — every 1-based start position of pat in s
+  (overlapping counted), [] if none: the one genuine string-extraction
+  gap from heritage/KNOWN_LIMITATIONS.md, chartered "fix from day one".
+  Pattern-directed slicing is now indexing, not a character scan.
+- **Record reflection (design entry 5)**: `getfield(r, name)` (dynamic
+  read, strict error on missing — mirroring literal access) and
+  `setfield(r, name, v)` (a NEW record, field replaced in place or
+  appended; the source record untouched). Construction is the {} fold,
+  per the entry's repair note — no parallel-array constructor, which
+  would require the heterogeneous container entry 6 rejects. Generic
+  record map/merge, k=v parsing, and serialization round-trips now
+  live in userland. Ownership law inside: a reflection-built record
+  strdups every key and sets owns_keys — the field name arrives as a
+  refcounted string whose bytes do not outlive it, and owns_keys is
+  record-wide, so mixed borrowed/owned keys would free source pointers.
+- **Sparse design ratified (entry 1, 2026-08-08)**: separate value kind,
+  the zero-preserving promotion law, reads-yes/writes-no indexing,
+  triplet print form, builtins-only surface, matvec as the sole founding
+  kernel with CG-class solvers as packages. Four rejections recorded;
+  the seam question sub-parked; the implementation trigger unchanged.
+- Suite: 947 goldens (930 + 17), 143 + 101 + 353 verified transcripts.
+
 ## 0.0.5 — the dispatch seam
 
 ### Added

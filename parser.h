@@ -1,6 +1,6 @@
 /* parser.h — recursive-descent + Pratt parser for Neutrino. */
-#ifndef NEUTRINO_PARSER_H
-#define NEUTRINO_PARSER_H
+#ifndef COZY_PARSER_H
+#define COZY_PARSER_H
 
 #include <setjmp.h>
 #include "lexer.h"

@@ -59,7 +59,7 @@ void nu_wasm_pause(const char *msg, uint32_t mlen)
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char *nu_version(void) { return NEUTRINO_VERSION " (wasm, built " NEUTRINO_BUILT ")"; }
+const char *nu_version(void) { return COZY_VERSION " (wasm, built " COZY_BUILT ")"; }
 
 EMSCRIPTEN_KEEPALIVE
 void nu_init(void)

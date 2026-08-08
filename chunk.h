@@ -4,8 +4,8 @@
  * once at compile time — this also folds literals so "3.14" is parsed once,
  * not on every evaluation), and a name pool (non-owning slices into the parse
  * arena, used for variable get/define/assign and field access). */
-#ifndef NEUTRINO_CHUNK_H
-#define NEUTRINO_CHUNK_H
+#ifndef COZY_CHUNK_H
+#define COZY_CHUNK_H
 
 #include <stdint.h>
 #include "value.h"

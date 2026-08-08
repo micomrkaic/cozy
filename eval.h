@@ -4,8 +4,8 @@
  * state, builtin-environment construction, and the runtime helpers the VM and
  * the builtins call (apply_binop, transpose, do_index, build_matrix, ... — see
  * nrt.h). The original tree-walker was removed at the stage-4 cutover. */
-#ifndef NEUTRINO_EVAL_H
-#define NEUTRINO_EVAL_H
+#ifndef COZY_EVAL_H
+#define COZY_EVAL_H
 
 #include <setjmp.h>
 #include "value.h"

@@ -25,40 +25,40 @@ expansion plus `fzero` on the CDF; the quantile domain is `0 < p < 1`.
 Cross-checked against SciPy (`tests/34_dist.test`).
 
 ```
-neutrino> load("packages/dist.nu")
-neutrino> norm.cdf(1.96, 0, 1)
+cozy> load("packages/dist.nu")
+cozy> norm.cdf(1.96, 0, 1)
 0.975002
-neutrino> norm.inv(0.975, 0, 1)
+cozy> norm.inv(0.975, 0, 1)
 1.95996
-neutrino> student.inv(0.975, 30)
+cozy> student.inv(0.975, 30)
 2.04227
-neutrino> chi2.inv(0.95, 3)
+cozy> chi2.inv(0.95, 3)
 7.81473
-neutrino> fdist.cdf(3.0, 4, 20)
+cozy> fdist.cdf(3.0, 4, 20)
 0.956799
 ```
 
 A complete two-sample t-test — simulate, test, decide:
 
 ```
-neutrino> load("packages/dist.nu")
-neutrino> rng(42)
-neutrino> let x1 = norm.rand(40, 100, 15)
+cozy> load("packages/dist.nu")
+cozy> rng(42)
+cozy> let x1 = norm.rand(40, 100, 15)
 [75.8016; 123.017; 111.725; 93.9971; 100.238; 98.0904; 107.158; 90.1486; 90.4082; 94.4609; 96.6851; 112.686; 95.6656; 109.003; 108.909; 91.3959; 108.772; 88.1456; 96.7325; 87.9582; 114.106; 129.505; 84.513; 88.4457; 77.2211; 101.549; 104.948; 80.2774; 101.673; 114.196; 85.7196; 86.121; 107.652; 97.2319; 99.8187; 90.3843; 110.037; 102.904; 118.182; 96.7784]
-neutrino> let x2 = norm.rand(40, 108, 15)
+cozy> let x2 = norm.rand(40, 108, 15)
 [102.897; 92.0654; 112.122; 98.9768; 112.891; 112.931; 92.8931; 102.642; 111.903; 100.646; 100.94; 123.642; 91.1496; 86.5915; 82.8453; 139.092; 110.541; 92.2825; 95.2512; 96.0461; 112.458; 106.348; 114.08; 82.58; 124.228; 138.371; 80.9394; 103.445; 118.893; 123.572; 96.6755; 110.739; 97.5351; 101.709; 102.158; 119.722; 130.468; 119.061; 139.396; 97.8152]
-neutrino> let t = (mean(x2) - mean(x1)) / sqrt(var(x1)/40 + var(x2)/40)
+cozy> let t = (mean(x2) - mean(x1)) / sqrt(var(x1)/40 + var(x2)/40)
 2.46819
-neutrino> 2 * (1 - student.cdf(abs(t), 78))
+cozy> 2 * (1 - student.cdf(abs(t), 78))
 0.0157683
 ```
 
 Out-of-domain probabilities refuse with the package's own message:
 
 ```
-neutrino> load("packages/dist.nu")
+cozy> load("packages/dist.nu")
 error: quantile: p must be in (0,1), got 1.5
-neutrino> student.inv(1.5, 10)
+cozy> student.inv(1.5, 10)
 ```
 
 | Function | Worked example | Result |
@@ -81,32 +81,32 @@ algorithm Octave uses, on Neutrino's LAPACK-verified eigensolver.
 Cross-checked against NumPy (`tests/37_poly.test`).
 
 ```
-neutrino> load("packages/poly.nu")
-neutrino> polyval([2, -3, 1], 4)
+cozy> load("packages/poly.nu")
+cozy> polyval([2, -3, 1], 4)
 21
-neutrino> roots([1, -6, 11, -6])'
+cozy> roots([1, -6, 11, -6])'
 [1, 2, 3]
-neutrino> roots([1, 0, 1])'
+cozy> roots([1, 0, 1])'
 [1i, -1i]
-neutrino> companion([1, -6, 11, -6])
+cozy> companion([1, -6, 11, -6])
 [6, -11, 6; 1, 0, 0; 0, 1, 0]
 ```
 
 Least-squares fitting (Vandermonde + backslash), and calculus that inverts:
 
 ```
-neutrino> load("packages/poly.nu")
-neutrino> let x = [0, 1, 2, 3, 4]
+cozy> load("packages/poly.nu")
+cozy> let x = [0, 1, 2, 3, 4]
 [0, 1, 2, 3, 4]
-neutrino> let y = [1.1, 2.9, 9.2, 19.1, 32.8]
+cozy> let y = [1.1, 2.9, 9.2, 19.1, 32.8]
 [1.1, 2.9, 9.2, 19.1, 32.8]
-neutrino> polyfit(x, y, 2)
+cozy> polyfit(x, y, 2)
 [1.95714, 0.131429, 1.01429]
-neutrino> polyder([1, -6, 11, -6])
+cozy> polyder([1, -6, 11, -6])
 [3, -12, 11]
-neutrino> polyint(polyder([1, -6, 11, -6]), -6)
+cozy> polyint(polyder([1, -6, 11, -6]), -6)
 [1, -6, 11, -6]
-neutrino> conv([1, -1], [1, -2])
+cozy> conv([1, -1], [1, -2])
 [1, -3, 2]
 ```
 
@@ -132,28 +132,28 @@ rates are per period, as decimals. Cross-checked against SciPy and Python's
 The mortgage block — payment, implied rate, savings growth:
 
 ```
-neutrino> load("packages/finance.nu")
-neutrino> pmt(360, 0.005, 250000, 0)
+cozy> load("packages/finance.nu")
+cozy> pmt(360, 0.005, 250000, 0)
 -1498.88
-neutrino> rate(360, 250000, -1498.876313, 0)
+cozy> rate(360, 250000, -1498.876313, 0)
 0.005
-neutrino> fv(120, 0.004, 0, -200)
+cozy> fv(120, 0.004, 0, -200)
 30726.4
 ```
 
 Cash flows and bonds:
 
 ```
-neutrino> load("packages/finance.nu")
-neutrino> npv(0.10, [-1000, 300, 420, 680])
+cozy> load("packages/finance.nu")
+cozy> npv(0.10, [-1000, 300, 420, 680])
 130.729
-neutrino> irr([-1000, 300, 420, 680])
+cozy> irr([-1000, 300, 420, 680])
 0.163406
-neutrino> bond_price(100, 0.08, 0.06, 10, 1)
+cozy> bond_price(100, 0.08, 0.06, 10, 1)
 114.72
-neutrino> bond_ytm(114.7202, 100, 0.08, 10, 1)
+cozy> bond_ytm(114.7202, 100, 0.08, 10, 1)
 0.06
-neutrino> bond_mduration(100, 0.08, 0.06, 10, 1)
+cozy> bond_mduration(100, 0.08, 0.06, 10, 1)
 7.0236
 ```
 
@@ -161,16 +161,16 @@ neutrino> bond_mduration(100, 0.08, 0.06, 10, 1)
 frame you can index, sum, and plot:
 
 ```
-neutrino> load("packages/finance.nu")
-neutrino> let s = amort(1000, 0.01, 3)
+cozy> load("packages/finance.nu")
+cozy> let s = amort(1000, 0.01, 3)
 {period = [1; 2; 3], payment = [340.022; 340.022; 340.022], interest = [10; 6.69978; 3.36656], principal = [330.022; 333.322; 336.656], balance = [669.978; 336.656; 4.26326e-12]}
-neutrino> fields(s)'
+cozy> fields(s)'
 ["period", "payment", "interest", "principal", "balance"]
-neutrino> s.payment[1]
+cozy> s.payment[1]
 340.022
-neutrino> s.balance'
+cozy> s.balance'
 [669.978, 336.656, 4.26326e-12]
-neutrino> sum(s.principal)
+cozy> sum(s.principal)
 1000
 ```
 
@@ -180,20 +180,20 @@ the bond market's 30/360 convention. `datestr` returns a display string,
 arithmetic reads naturally — `datestr(today() + 90)` is the date in 90 days:
 
 ```
-neutrino> load("packages/finance.nu")
-neutrino> days(2026, 1, 1, 2026, 7, 9)
+cozy> load("packages/finance.nu")
+cozy> days(2026, 1, 1, 2026, 7, 9)
 189
-neutrino> datestr(datenum(2026, 7, 17) + 90)
+cozy> datestr(datenum(2026, 7, 17) + 90)
 "2026-10-15"
-neutrino> daterec(datenum(2024, 2, 29))
+cozy> daterec(datenum(2024, 2, 29))
 {y = 2024, m = 2, d = 29}
-neutrino> dateadd(2024, 2, 28, 2)
+cozy> dateadd(2024, 2, 28, 2)
 {y = 2024, m = 3, d = 1}
-neutrino> dow(2026, 7, 9)
+cozy> dow(2026, 7, 9)
 4
-neutrino> days360(2024, 1, 31, 2024, 7, 31)
+cozy> days360(2024, 1, 31, 2024, 7, 31)
 180
-neutrino> daterec(today()).y >= 2026
+cozy> daterec(today()).y >= 2026
 true
 ```
 
@@ -233,14 +233,14 @@ minute of the `astral` reference library (`tests/39_astro.test`). A `places`
 record preloads coordinates for several cities.
 
 ```
-neutrino> load("packages/astro.nu")
-neutrino> hm(sunrise(places.alexandria_va.lat, places.alexandria_va.lon, 2026, 7, 10, -4))
+cozy> load("packages/astro.nu")
+cozy> hm(sunrise(places.alexandria_va.lat, places.alexandria_va.lon, 2026, 7, 10, -4))
 "05:52"
-neutrino> hm(sunset(places.duluth_ga.lat, places.duluth_ga.lon, 2026, 7, 10, -4))
+cozy> hm(sunset(places.duluth_ga.lat, places.duluth_ga.lon, 2026, 7, 10, -4))
 "20:50"
-neutrino> hm(solar_noon(places.ljubljana.lon, 2026, 7, 10, 2))
+cozy> hm(solar_noon(places.ljubljana.lon, 2026, 7, 10, 2))
 "13:07"
-neutrino> day_length(places.ljubljana.lat, places.ljubljana.lon, 2026, 7, 10)
+cozy> day_length(places.ljubljana.lat, places.ljubljana.lon, 2026, 7, 10)
 15.5331
 ```
 
@@ -248,27 +248,27 @@ Planning a drive to arrive before dark — civil dawn at the origin to civil
 dusk at the destination:
 
 ```
-neutrino> load("packages/astro.nu")
-neutrino> let w = drive_daylight(places.alexandria_va, places.duluth_ga, 2026, 7, 10, -4)
+cozy> load("packages/astro.nu")
+cozy> let w = drive_daylight(places.alexandria_va, places.duluth_ga, 2026, 7, 10, -4)
 {depart_dawn = 5.34382, depart_rise = 5.86728, arrive_set = 20.8376, arrive_dusk = 21.3161, window_hours = 15.9723}
-neutrino> hm(w.depart_dawn) + " to " + hm(w.arrive_dusk)
+cozy> hm(w.depart_dawn) + " to " + hm(w.arrive_dusk)
 "05:21 to 21:19"
-neutrino> w.window_hours
+cozy> w.window_hours
 15.9723
 ```
 
 Sun position, moon illumination, and the honest polar refusal:
 
 ```
-neutrino> load("packages/astro.nu")
+cozy> load("packages/astro.nu")
 error: the sun does not cross 90.833 degrees at latitude 80 on 2026-6-21
-neutrino> let p = sun_position(38.8048, -77.0469, 2026, 7, 10, 13.22, -4)
+cozy> let p = sun_position(38.8048, -77.0469, 2026, 7, 10, 13.22, -4)
 {alt = 73.3594, az = 179.65}
-neutrino> p.alt
+cozy> p.alt
 73.3594
-neutrino> moon_illum(2026, 7, 10)
+cozy> moon_illum(2026, 7, 10)
 0.19449
-neutrino> sunrise(80, 0, 2026, 6, 21, 0)
+cozy> sunrise(80, 0, 2026, 6, 21, 0)
 ```
 
 | Function | Worked example | Result |
@@ -300,18 +300,18 @@ Gaussian orthogonal ensemble — whose spectrum follows Wigner's semicircle on
 reproducible under `rng(seed)`.
 
 ```
-neutrino> load("packages/rmt.nu")
-neutrino> format(6)
-neutrino> rng(11)
-neutrino> randorth(2)
+cozy> load("packages/rmt.nu")
+cozy> format(6)
+cozy> rng(11)
+cozy> randorth(2)
 [0.684752, 0.728776; -0.728776, 0.684752]
-neutrino> let P = randspd(3); chol(P)[1, 1] > 0
+cozy> let P = randspd(3); chol(P)[1, 1] > 0
 true
-neutrino> randperm(6)
+cozy> randperm(6)
 [4, 5, 1, 2, 3, 6]
-neutrino> permmat([3, 1, 2])
+cozy> permmat([3, 1, 2])
 [0, 0, 1; 1, 0, 0; 0, 1, 0]
-neutrino> let H = goe(200); max(abs(eig(H).values))
+cozy> let H = goe(200); max(abs(eig(H).values))
 1.99476
 ```
 
@@ -337,17 +337,17 @@ gravity from `G`, recovers the speed of light from Maxwell's relation
 electron volts:
 
 ```
-neutrino> load("packages/phys.nu")
-neutrino> format(6)
-neutrino> phys.c
+cozy> load("packages/phys.nu")
+cozy> format(6)
+cozy> phys.c
 299792458
-neutrino> phys.hbar
+cozy> phys.hbar
 1.05457e-34
-neutrino> phys.G * 5.972e24 / 6.371e6 ^ 2
+cozy> phys.G * 5.972e24 / 6.371e6 ^ 2
 9.81997
-neutrino> 1 / sqrt(phys.eps0 * phys.mu0)
+cozy> 1 / sqrt(phys.eps0 * phys.mu0)
 2.99792e+08
-neutrino> phys.k * 300 / phys.eV
+cozy> phys.k * 300 / phys.eV
 0.0258520
 ```
 
@@ -377,11 +377,11 @@ the package's header says so. The transcript exercises the numeric helper;
 the SVG output itself is asserted by the plot test suite:
 
 ```
-neutrino> load("packages/scatter.nu")
-neutrino> rng(1); let j = jitter(1:100, 0.1);
-neutrino> max(abs(j - (1:100))) <= 0.05
+cozy> load("packages/scatter.nu")
+cozy> rng(1); let j = jitter(1:100, 0.1);
+cozy> max(abs(j - (1:100))) <= 0.05
 true
-neutrino> size(jitter(rand(3, 4), 0.2))
+cozy> size(jitter(rand(3, 4), 0.2))
 [3, 4]
 ```
 
@@ -397,20 +397,20 @@ A symbolic differentiator in pure Neutrino, addressed in mathematics and
 answering in it. The front door is a string:
 
 ```
-neutrino> format(6)
-neutrino> load("packages/symb.nu")
-neutrino> deriv("sin(x)/x")
+cozy> format(6)
+cozy> load("packages/symb.nu")
+cozy> deriv("sin(x)/x")
 "((cos(x) / x) - (sin(x) / x^2))"
-neutrino> deriv("x^x")
+cozy> deriv("x^x")
 "(exp((x * log(x))) * (log(x) + (x / x)))"
-neutrino> deriv("exp(-x^2)")
+cozy> deriv("exp(-x^2)")
 "(-2 * (exp((-x^2)) * x))"
-neutrino> let f = dfun("sin(x)/x");
-neutrino> fzero(f, 4, 5)
+cozy> let f = dfun("sin(x)/x");
+cozy> fzero(f, 4, 5)
 4.49341
-neutrino> fminbnd(ffun("sin(x)/x"), 4, 5)
+cozy> fminbnd(ffun("sin(x)/x"), 4, 5)
 {x = 4.49341, fx = -0.217234}
-neutrino> integral(dfun("x^3"), 1, 2)
+cozy> integral(dfun("x^3"), 1, 2)
 7.00000
 ```
 
@@ -446,18 +446,18 @@ verified session — and recovers the sine series (0, 1, 0, −1/6, ...)
 from pure record recursion:
 
 ```
-neutrino> format(4)
-neutrino> load("packages/symb.nu")
-neutrino> let e = add(powc(X, 3), mul(C(5), sinx(X)));
-neutrino> show(simp(ddx(e)))
+cozy> format(4)
+cozy> load("packages/symb.nu")
+cozy> let e = add(powc(X, 3), mul(C(5), sinx(X)));
+cozy> show(simp(ddx(e)))
 "((3 * x^2) + (5 * cos(x)))"
-neutrino> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
+cozy> let d = fn f -> fn x -> (f(x + h) - f(x - h)) / (2 * h) where h = 1e-6
 <fn/1>
-neutrino> abs(evalx(ddx(e), 2) - d(fn t -> t ^ 3 + 5 * sin(t))(2)) < 1e-8
+cozy> abs(evalx(ddx(e), 2) - d(fn t -> t ^ 3 + 5 * sin(t))(2)) < 1e-8
 true
-neutrino> show(dn(powc(X, 5), 3))
+cozy> show(dn(powc(X, 5), 3))
 "(60 * x^2)"
-neutrino> taylor(sinx(X), 7)
+cozy> taylor(sinx(X), 7)
 [0.000, 1.000, -0.000, -0.1667, 0.000, 0.008333, -0.000, -0.0001984]
 ```
 
@@ -500,7 +500,7 @@ instantly at EOF. One file, every temperament. Seeded where random,
 deterministic throughout. Point a newcomer at this file first.
 
 ```
-neutrino> load("packages/demo.nu")
+cozy> load("packages/demo.nu")
 ```
 
 ## Writing your own

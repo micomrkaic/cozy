@@ -3,17 +3,51 @@
 *Parked designs in the Neutrino tradition: each waits with a written
 trigger; each ends SHIPPED or rejected, never silently dropped.*
 
-## 1. Sparse matrices
+## 1. Sparse matrices — DECIDED 2026-08-08 (design ratified; waiting on trigger)
 
-**Sketch.** A sparse value kind (CSR to start); `who` legibility
-(`sparse RxC, nnz = N`); explicit `dense()`/`sparse()` gates; one
-promotion table for {scalar, dense, sparse} × ops, stated once —
-sparse-preserving where mathematics allows, explicit error where a silent
-densification would surprise.
-**Open questions.** Elementwise ops with scalar (densifying: error, or
-gate?); indexing/assignment semantics; print form.
-**Trigger.** The first real workload (a Markov chain, a PDE grid, a
-network) that a dense matrix cannot hold.
+**Representation.** A separate value kind (SparseObj), never a flag on
+ArrObj: a distinct kind inverts the default so every builtin that does
+not know sparse rejects it by type, and behaviors replace tested
+refusals one at a time — the mechanism that made the strings retrofit
+safe, applied at the foundation. CSR; float and complex elements from
+day one (the Cplx machinery exists).
+
+**The promotion law, stated once.** Zero-preserving ops stay sparse
+(S .* k, S + S, S .* S, unary negation, transpose); zero-breaking ops
+gate with a teaching error naming the way through ("sparse + scalar
+would densify — wrap in dense(S) if intended"). matmul: sparse × dense
+vector -> dense vector (the founding kernel); sparse × sparse -> sparse;
+sparse \ b errors, pointing at dense() or an iterative solver.
+
+**Indexing.** Reads yes (S[i,j], slices return sparse); writes no —
+indexed assignment into CSR is a quadratic trap, so it errors pointing
+at the triplet constructor. Construct-then-use, like the records
+convention.
+
+**Print form.** Summary line (`sparse 3x3, nnz = 2`) then `(i,j) v`
+triplet lines, elided past a cap; `who` shows `sparse RxC, nnz = N`.
+Deterministic, golden-able in fresh sessions.
+
+**Surface.** Builtins only in v1 — sparse(A), sparse(i,j,v,m,n),
+dense(S), nnz(S). No new grammar; sparse literals, if ever, are a
+separate parked entry through the additive-syntax rite.
+
+**Kernel scope.** Exactly one kernel at founding: sparse-matvec. It
+serves every trigger workload (Markov chain = matvec iteration,
+network = matvec, PDE = matvec + CG), and CG/pcg become packages
+written in Cozy on top of it — one kernel, the whole capability class.
+
+**Rejections recorded.** Int/bool sparse (no workload; revisit only
+with a friction transcript). Silent densification anywhere. Sparse
+indexed assignment. Direct sparse solve at founding.
+
+**Sub-park.** Whether LinalgKernels (entry 2's table) grows sparse
+entries or sparse gets its own table. Trigger: the first profile
+showing tier0 matvec as the bottleneck.
+
+**Trigger (unchanged, governs implementation).** The first real
+workload (a Markov chain, a PDE grid, a network) that a dense matrix
+cannot hold.
 
 ## 2. External LAPACK
 
