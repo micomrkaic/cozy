@@ -1,5 +1,27 @@
 # Cozy changelog
 
+## 0.0.9 — sparse linear algebra, the designed way
+
+### Added
+- **packages/sparselin.nu**: `cg(A, b)` (conjugate gradient, SPD solve
+  -> {x, iters, relres}) and `powerit(A)` / `powerit_from(A, x0)`
+  (dominant eigenpair by power iteration with Rayleigh estimate) — pure
+  Cozy on the founding kernel S * v, per entry 1's law that solvers are
+  packages. Goldens assert invariants only: residuals, known spectra
+  (the path Laplacian's 2 + sqrt(2)), CG's finite termination (3x3 in
+  3), never iteration internals.
+- **Teaching gates on the dense kernels**: eig/svd/chol/det/lu/qr on a
+  sparse argument now name the way through (sparselin.nu, or
+  f(dense(S)) if it fits) via one central gate in the to_cplx
+  marshaller; inv's gate also explains why sparse inverses are usually
+  unwanted (they are dense). Fixed in passing: inv and det on sparse
+  previously produced misleading "expected a square matrix" rejections.
+- Suite: 990 goldens (976 + 14).
+
+### Notes
+- The 200x200 sprandn+CG transcript in PACKAGES.md is the trigger
+  workload entry 1 originally waited for, now solved without forming a
+  dense matrix — the founding-kernel scope validated.
 ## 0.0.8 — sparse lands (entry 1 core, owner-triggered)
 
 ### Added

@@ -4217,6 +4217,10 @@ void interp_init(Interp *I) { *I = (Interp){0}; rng_seed(I, 0x9E3779B97F4A7C15UL
  * arithmetic keeps imaginary parts exactly zero) and complex inputs just work. */
 static Cplx *to_cplx(Interp *I, Value v, uint32_t *rows, uint32_t *cols, const char *who)
 {
+    if (is_sparse(v))
+        runtime_error(I, "%s on sparse is not supported — load(\"sparselin.nu\") for cg and powerit "
+                         "on S * v, or %s(dense(S)) if it fits in memory",
+                      who, who);
     if (!is_array(v)) runtime_error(I, "%s: expected a matrix, got %s", who, type_name(v.kind));
     ArrObj *a = as_arr(v);
     *rows = a->rows; *cols = a->cols;
@@ -4303,6 +4307,8 @@ static Value bi_trace(Interp *I, Value *args, uint32_t n)
 static Value bi_det(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
+    if (is_sparse(args[0]))
+        runtime_error(I, "det on sparse is not supported — det(dense(S)) if it fits in memory");
     if (!is_array(args[0])) runtime_error(I, "det: expected a square matrix");
     ArrObj *a = as_arr(args[0]);
     uint32_t N = a->rows;
@@ -4320,7 +4326,10 @@ static Value bi_det(Interp *I, Value *args, uint32_t n)
 static Value bi_inv(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
-    if (!is_array(args[0])) runtime_error(I, "inv: expected a square matrix");
+    if (is_sparse(args[0]))
+        runtime_error(I, "inv on sparse is not supported (and usually unwanted: the inverse of "
+                         "a sparse matrix is dense) — cg from sparselin.nu solves A x = b instead");
+    if (!is_array(args[0])) runtime_error(I, "inv: expected a square matrix, got %s", type_name(args[0].kind));
     ArrObj *a = as_arr(args[0]);
     if (a->rows != a->cols) runtime_error(I, "inv: matrix must be square (got %ux%u)", a->rows, a->cols);
     return inv_via_solve(I, args[0], a->rows);

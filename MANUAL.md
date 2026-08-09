@@ -126,7 +126,7 @@ shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "symb.nu"]
+["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "sparselin.nu"; "symb.nu"]
 cozy> cd("packages");
 cozy> load("dist.nu"); norm.cdf(0, 0, 1)
 0.5

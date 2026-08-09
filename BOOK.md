@@ -262,11 +262,11 @@ string functions ride the pipes like everything else:
 
 ```
 cozy> ls("packages")
-["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "symb.nu"]
+["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "sparselin.nu"; "symb.nu"]
 cozy> ans ~> (fn f -> endswith(f, ".nu")) |> all
 true
 cozy> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
-5
+6
 ```
 
 **Discussion.** A directory listing maps under `~>` through `endswith`,

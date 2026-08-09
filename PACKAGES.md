@@ -503,6 +503,34 @@ deterministic throughout. Point a newcomer at this file first.
 cozy> load("packages/demo.nu")
 ```
 
+## 10. sparselin.nu — iterative sparse linear algebra
+
+The design's answer to `S \ b` and `eig(S)`: solvers as packages on the
+founding kernel `S * v`, in pure Cozy. `cg(A, b)` solves symmetric
+positive definite systems by conjugate gradient (returns `{x, iters,
+relres}`; zero start, relative tolerance 1e-10); `powerit(A)` finds the
+dominant eigenpair `{value, vector, iters}` by power iteration with a
+Rayleigh-quotient estimate (deterministic start; `powerit_from(A, x0)`
+to choose your own). Both also accept dense matrices — anything with `*`
+and a column vector works. The dense-only kernels gate with pointers
+here: `eig(S)` and friends name `sparselin.nu` in their error messages.
+
+```
+cozy> load("packages/sparselin.nu")
+cozy> let A = sparse([4, 1, 0; 1, 3, 1; 0, 1, 5]); let s = cg(A, [1; 2; 3]); s.x
+[0.137255; 0.45098; 0.509804]
+cozy> s.iters
+3
+cozy> powerit(sparse([2, 1; 1, 2])).value
+3
+cozy> rng(7); let W = sprandn(200, 200, 0.02); let S = W + W' + 10 * speye(200); cg(S, ones(200, 1)).relres < 1e-9
+true
+```
+
+CG's finite-termination property is visible above: a 3x3 system converges
+in exactly 3 iterations. The 200x200 line is the trigger workload the
+sparse design waited for, solved without ever forming a dense matrix.
+
 ## Writing your own
 
 The pattern all four follow: a file of `let` definitions, `assert`-validated
