@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.19 — the hearth: a new splash
+
+### Changed
+- **The banner is now a sleeping cat by the fire** — the owner's call:
+  the mug read as tea, and TEA is the owner's econometrics package; a
+  cat asleep at the hearth is coziness without the collision. Same
+  scene everywhere: the REPL banner (color and plain branches, cat in
+  grey, flames warm, log in ember), both logos (brand/ and docs/), and
+  the web page's banner(), which — found during this work — was still
+  drawing NEUTRINO in ASCII art: the 0.0.18 identity pass caught
+  strings, not artwork. The page's tagline is also corrected ("a small
+  functional array language" -> "a heavier numerical language, warmly
+  held").
+- **The wordmark is now figlet-standard**: the owner's eye caught the
+  misalignment — the hand-drawn z carried a stray | (| (_) |/ /|) and
+  row five doubled a slash (\___//___|). The glyphs are taken from
+  figlet's standard font verbatim and the composed banner was verified
+  by rendering, not by squinting at source.
+- Version/tagline indentation aligned; wasm bundle rebuilt so the
+  browser reports 0.0.19.
+
 ## 0.0.18 — the documentation becomes Cozy's own
 
 ### Changed

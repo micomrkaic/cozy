@@ -225,30 +225,32 @@ static const char *match_command(const char *line, const char *word)
 /* ------------------------------------------------------------------ */
 static void print_banner(bool color)
 {
-    /* the mug: Cozy is the machine that handles the particles gently */
+    /* the hearth: a sleeping cat by the fire — coziness itself. The wordmark
+     * is figlet standard (the old hand-drawn one had a stray | in the z and a
+     * doubled slash, caught by the owner's eye at 0.0.18). */
     if (color) {
-        fputs("  \033[38;2;120;132;150m( (\033[0m       \033[38;2;255;176;96m  ____\033[0m\n", stdout);
-        fputs("   \033[38;2;120;132;150m) )\033[0m      \033[38;2;255;176;96m / ___|___ _____   _\033[0m\n", stdout);
-        fputs("  \033[38;2;255;176;96m........\033[0m  \033[38;2;255;176;96m| |   / _ \\_  / | | |\033[0m\n", stdout);
-        fputs("  \033[38;2;255;176;96m|\033[0m      \033[38;2;255;176;96m|]\033[0m \033[38;2;255;176;96m| |__| (_) |/ /| |_| |\033[0m\n", stdout);
-        fputs("  \033[38;2;255;176;96m\\\033[0m      \033[38;2;255;176;96m/\033[0m  \033[38;2;255;176;96m \\____\\___//___|\\__, |\033[0m\n", stdout);
-        fputs("   \033[38;2;255;176;96m`----'\033[0m                    \033[38;2;255;176;96m|___/\033[0m\n", stdout);
-        fputs("           \033[38;2;120;132;150ma heavier numerical language, warmly held\033[0m\n", stdout);
+        fputs("                              \033[38;2;255;176;96m ( )    \033[0m\033[38;2;255;176;96m  ____               \033[0m\n", stdout);
+        fputs("\033[38;2;120;132;150m       |\\      _,,,---,,_     \033[0m\033[38;2;255;176;96m) ) (   \033[0m\033[38;2;255;176;96m / ___|___ _____   _ \033[0m\n", stdout);
+        fputs("\033[38;2;120;132;150m zzZZz /,`.-'`'    -.  ;-;;,_ \033[0m\033[38;2;255;176;96m ( ) )  \033[0m\033[38;2;255;176;96m| |   / _ \\_  / | | |\033[0m\n", stdout);
+        fputs("\033[38;2;120;132;150m      |,4-  ) )-,_..;\\ (  `'-'\033[0m\033[38;2;224;122;60m [####] \033[0m\033[38;2;255;176;96m| |__| (_) / /| |_| |\033[0m\n", stdout);
+        fputs("\033[38;2;120;132;150m     '---''(_/--'  `-'\\_)     \033[0m\033[38;2;224;122;60m |____| \033[0m\033[38;2;255;176;96m \\____\\___/___|\\__, |\033[0m\n", stdout);
+        fputs("                                      \033[38;2;255;176;96m               |___/ \033[0m\n", stdout);
+        fputs("              \033[38;2;120;132;150ma heavier numerical language, warmly held\033[0m\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("           \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
+        printf("              \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
                COZY_VERSION, COZY_BUILT, now);
     } else {
-        fputs("  ( (         ____\n", stdout);
-        fputs("   ) )       / ___|___ _____   _\n", stdout);
-        fputs("  ........  | |   / _ \\_  / | | |\n", stdout);
-        fputs("  |      |] | |__| (_) |/ /| |_| |\n", stdout);
-        fputs("  \\      /   \\____\\___//___|\\__, |\n", stdout);
-        fputs("   `----'                    |___/\n", stdout);
-        fputs("           a heavier numerical language, warmly held\n", stdout);
+fputs("                               ( )      ____               \n", stdout);
+        fputs("       |\\      _,,,---,,_     ) ) (    / ___|___ _____   _ \n", stdout);
+        fputs(" zzZZz /,`.-'`'    -.  ;-;;,_  ( ) )  | |   / _ \\_  / | | |\n", stdout);
+        fputs("      |,4-  ) )-,_..;\\ (  `'-' [####] | |__| (_) / /| |_| |\n", stdout);
+        fputs("     '---''(_/--'  `-'\\_)      |____|  \\____\\___/___|\\__, |\n", stdout);
+        fputs("                                                     |___/ \n", stdout);
+        fputs("              a heavier numerical language, warmly held\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("           v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
+        printf("              v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
     }
 }
 
