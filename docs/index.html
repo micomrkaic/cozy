@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Neutrino — a small functional array language</title>
+<title>Cozy — a heavier numerical language, warmly held</title>
   <meta property="og:image" content="og-card.png">
-  <meta property="og:title" content="Neutrino — a small functional array language">
-<meta name="description" content="Neutrino, a small functional array language, running in your browser via WebAssembly.">
+  <meta property="og:title" content="Cozy — a heavier numerical language, warmly held">
+<meta name="description" content="Cozy, a heavier numerical language — sparse matrices, exact derivatives, constrained optimization — running in your browser via WebAssembly.">
 <style>
   :root {
     --blue: #208bff;
@@ -138,12 +138,12 @@
 </head>
 <body>
 <header>
-  <span class="logo">Neutrino</span>
+  <span class="logo">Cozy</span>
   <span class="tagline">a small functional array language · in your browser</span>
   <span class="spacer"></span>
   <label class="btn">upload<input type="file" id="upload" multiple></label>
   <button class="btn" id="dl" title="download files your session created (saves, CSVs, plots)">download new files</button>
-  <a href="https://github.com/micomrkaic/Neutrino" target="_blank" rel="noopener">GitHub</a>
+  <a href="https://github.com/micomrkaic/cozy" target="_blank" rel="noopener">GitHub</a>
 </header>
 
 <div id="main">
@@ -180,9 +180,9 @@
   <div id="docs">
     <div id="docbar">
       <select id="doc-pick">
-        <option value="/MANUAL.md">The Neutrino Manual</option>
-        <option value="/PACKAGES.md">The Neutrino Packages</option>
-        <option value="/BOOK.md">Neutrino by Example</option>
+        <option value="/MANUAL.md">The Cozy Manual</option>
+        <option value="/PACKAGES.md">The Cozy Packages</option>
+        <option value="/BOOK.md">Cozy by Example</option>
         <option value="/CHANGELOG.md">Changelog</option>
         <option value="/LESSONS.md">Lessons</option>
         <option value="/DESIGN_NOTES.md">Design notes</option>
@@ -198,7 +198,7 @@
       <button class="btn" id="ed-save">Save .cz</button>
       <span class="hint">Ctrl+Enter runs selection (whole buffer if none)</span>
     </div>
-    <textarea id="edtext" spellcheck="false" placeholder="% write Neutrino here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
+    <textarea id="edtext" spellcheck="false" placeholder="% write Cozy here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
   </div>
 </div>
 </div>
@@ -306,7 +306,7 @@
     inputline.style.display = 'flex';
     input.focus();
   }).catch(function (e) {
-    writeLine('err', 'Failed to start Neutrino: ' + e.message);
+    writeLine('err', 'Failed to start Cozy: ' + e.message);
   });
 
   function run(line) {

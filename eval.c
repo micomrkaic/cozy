@@ -1777,7 +1777,7 @@ static const BuiltinDoc builtin_docs[] = {
     { "cd",    "cd(\"dir\") | cd",     "change the working directory (persists, unlike !cd); bare cd goes home", "io" , "cd(\"packages\")                    % ...then load(\"dist.cz\") works\ncd(\"..\")                          % back up" },
     { "ls",    "ls | ls(\"dir\") | ls(\"*.cz\")", "directory listing as a string array (globs supported)", "io" , "numel(ls(\"packages\")) >= 5        %= true" },
     { "load",  "load(\"file.cz\")",  "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core" , "load(\"tests/data/mathlib.cz\"); cube(3)   %= 27\nload(\"mylib.cz\"); mylib.f(2)     % record-of-closures as a namespace" },
-    { "eval",  "eval(\"code\")", "run a string as Neutrino code in this session; returns the last value", "core" , "eval(\"2 + 2\")                      % 4" },
+    { "eval",  "eval(\"code\")", "run a string as Cozy code in this session; returns the last value", "core" , "eval(\"2 + 2\")                      % 4" },
     { "names", "names() | names(\"vars\"|\"funcs\")", "your workspace names as a sorted string column (the programmatic who)", "core" , "let a = 1; names(\"vars\")           % [\"a\"]" },
     { "input", "input(\"prompt\")", "read one line from the keyboard as a string (window.prompt in the browser)", "io" , "let name = input(\"who? \")          % interactive" },
     { "pause", "pause() | pause(\"msg\")", "wait for the user before continuing (alert in the browser)", "io" , "pause()                            % interactive" },
@@ -3677,7 +3677,7 @@ static Value bi_fmt(Interp *I, Value *args, uint32_t n)
     return rs;
 }
 
-/* error(msg) / error(tmpl, ...): raise a runtime error from Neutrino code.
+/* error(msg) / error(tmpl, ...): raise a runtime error from Cozy code.
  * Uses fmt's templating, so packages validate like builtins do. */
 static Value bi_error(Interp *I, Value *args, uint32_t n)
 {

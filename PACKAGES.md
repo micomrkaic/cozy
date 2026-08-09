@@ -1,9 +1,9 @@
-# The Neutrino Packages
+# The Cozy Packages
 
-*The standard packages that ship with Neutrino: probability distributions,
+*The standard packages that ship with Cozy: probability distributions,
 polynomials, finance, a solar almanac, structured random matrices,
 physical constants, scatter plots,
-symbolic differentiation, and a guided tour — all written in Neutrino itself.*
+symbolic differentiation, and a guided tour — all written in Cozy itself.*
 
 A package is a file of `let` definitions; `load("packages/name.cz")` runs it
 in the current session and its bindings persist. Records of closures act as
@@ -77,7 +77,7 @@ cozy> student.inv(1.5, 10)
 
 Coefficients are row vectors, highest power first: `[2, -3, 1]` is
 2x² − 3x + 1. Roots come from the companion matrix and `eig` — the same
-algorithm Octave uses, on Neutrino's LAPACK-verified eigensolver.
+algorithm Octave uses, on Cozy's LAPACK-verified eigensolver.
 Cross-checked against NumPy (`tests/37_poly.test`).
 
 ```
@@ -393,7 +393,7 @@ cozy> size(jitter(rand(3, 4), 0.2))
 
 ## 8. symb.cz — symbolic differentiation
 
-A symbolic differentiator in pure Neutrino, addressed in mathematics and
+A symbolic differentiator in pure Cozy, addressed in mathematics and
 answering in it. The front door is a string:
 
 ```

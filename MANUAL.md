@@ -1,9 +1,9 @@
-# The Neutrino Manual
+# The Cozy Manual
 
 *A small functional array language — user manual for the language, the REPL, and
 the tools.*
 
-This manual covers Neutrino as implemented: every example below was executed
+This manual covers Cozy as implemented: every example below was executed
 against the interpreter and shows its actual output. For a quick pitch and build
 instructions see the [README](README.md); for the honest list of sharp edges see
 [KNOWN_LIMITATIONS](KNOWN_LIMITATIONS.md).
@@ -20,6 +20,7 @@ instructions see the [README](README.md); for the honest list of sharp edges see
 8. [Arrays and matrices](#8-arrays-and-matrices)
 9. [Linear algebra](#9-linear-algebra)
 10. [Complex numbers](#10-complex-numbers)
+— [Dual numbers and exact derivatives](#10b-dual-numbers-and-exact-derivatives)
 11. [Special functions and statistics](#11-special-functions-and-statistics)
 12. [Random numbers](#12-random-numbers)
 13. [Plotting](#13-plotting)
@@ -38,12 +39,12 @@ Build (a C23 compiler and `libm`; readline optional — see the README for macOS
 notes):
 
 ```sh
-make -j$(nproc)   # ./neutrino, the REPL (parallel; plain 'make' works too)
+make -j$(nproc)   # ./cozy, the REPL (parallel; plain 'make' works too)
 make test         # golden suite + codegen goldens
 ```
 
 The banner shows the version, when the binary was built, and when the
-session started. `neutrino --version` prints the same from the command line.
+session started. `cozy --version` prints the same from the command line.
 Start the REPL and type an expression; its value echoes back:
 
 ```
@@ -109,7 +110,7 @@ cozy> help(median)
 fn -> 42; f`.
 
 **Line editing.** With readline (or macOS libedit), you get history (persisted
-to `~/.neutrino_history`), completion on builtin and variable names, and the
+to `~/.cozy_history`), completion on builtin and variable names, and the
 usual Emacs keys. Multi-line constructs continue with a `     ...>` prompt until
 the `end` arrives.
 
@@ -177,7 +178,7 @@ scripts clobber it as a side effect.
 
 ## 3. Values and types
 
-Neutrino has nine value kinds. The scalar kinds:
+Cozy has eleven value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
 |---|---|---|
@@ -185,12 +186,14 @@ Neutrino has nine value kinds. The scalar kinds:
 | `Float` | `3.14`, `1e-9`, `2.5e3` | IEEE double |
 | `Bool` | `true`, `false` | distinct from numbers: `1 == true` is an error |
 | `Complex` | `2i`, `1 + 3i`, `2.5i` | double re/im pair |
+| `Dual` | `dual(2, 3)`, prints `2+3eps` | value + derivative pair, `eps^2 = 0`; see the dual numbers section |
 | `String` | `"hello"` | byte strings: `+` concatenates, comparisons are lexicographic, `s[i]`/`s[a:b]` index bytes (see the Strings section) |
 | `Null` | `null` | the "no value" value; a suppressed or valueless statement yields it |
 
 And the compound kinds: `Array` (the 2-D numeric matrix — every array is
 rows x cols; a scalar is *not* a 1x1 array), `Record` (`{x = 1, y = 2}`, fields
-via `.x`), and `Function` (builtins and closures).
+via `.x`), `Function` (builtins and closures), and `Sparse` (CSR sparse
+matrices — see the sparse matrices section).
 
 The type discipline is strict rather than coercive: `Bool` does not silently
 become a number in arithmetic or comparison (`1 == true` errors), and mixing
@@ -412,9 +415,10 @@ Pipes chain left to right, which reads as a data-flow pipeline.
 **The elementwise pipe `~>`.** Where `|>` feeds the *whole* value, `~>` feeds
 each *element*: `x ~> f` is `map(f, x)`. The same right-hand-side rules apply,
 with one deliberate twist: under `~>`, `@` binds the **element**, not the whole
-array. The operator extends Neutrino's whole-vs-elementwise distinction
-(`*` vs `.*`) to pipelines — and yes, in a language named Neutrino, the
-elementwise pipe oscillates. `~>` always means the map primitive itself, so
+array. The operator extends the whole-vs-elementwise distinction
+(`*` vs `.*`) to pipelines. (In Neutrino, Cozy's ancestor, it was said the
+elementwise pipe oscillates; the pun retires with the name — the operator
+does not.) `~>` always means the map primitive itself, so
 shadowing the name `map` cannot change what the operator does.
 
 ```
@@ -638,9 +642,10 @@ friends compare lexicographically, shorter prefixes first; indexing uses the
 same machinery as arrays, so ranges, `end`, and even permutations work:
 
 ```
-cozy> let s = "neutrino"
+cozy> let s = "cozy"
+"cozy"
 cozy> s[1:3] + "!" + s[end]
-"neu!o"
+"coz!y"
 cozy> "apple" < "banana"
 true
 ```
@@ -725,7 +730,7 @@ cozy> geo.hyp([3, 4])
 
 `save("ws.cz")` writes the whole workspace — every variable and function —
 as reloadable source; restore it with `load("ws.cz")`. The file is plain
-Neutrino, so it is readable and editable. Functions that capture variables
+Cozy, so it is readable and editable. Functions that capture variables
 (closures made by other functions) cannot be serialized and refuse with a
 clear message; a failed save leaves no file behind. `body(f)` prints the
 source of a user-defined function:
@@ -783,9 +788,9 @@ integer variates, scalar or matrix-shaped (`rand(3)`, `randn(2, 4)`).
 Plotting has three backends. **Natively** the default is **gnuplot**, out of
 process — a soft dependency: the language works without it, and `plot`
 reports cleanly if it is missing (`plot: gnuplot failed (exit 127) — is
-gnuplot installed?`). Setting `NEUTRINO_PLOT_TERM=ascii` renders
+gnuplot installed?`). Setting `COZY_PLOT_TERM=ascii` renders
 deterministic text plots into the terminal instead, and
-`NEUTRINO_PLOT_TERM=svg` writes standalone `plot_N.svg` files (dark
+`COZY_PLOT_TERM=svg` writes standalone `plot_N.svg` files (dark
 palette). In the **browser** the default is the SVG backend, rendered into
 the workbench's Plots pane. For scatter plots, `packages/scatter.cz` wraps
 the `style = "points"` path every backend honors.
@@ -834,15 +839,15 @@ cozy> hist(rand(1, 100000), 20, {yrange = [0, 6000]})
 
 Plots open in a gnuplot window that outlives the command (`gnuplot -persist`).
 For scripted rendering, two environment variables redirect output —
-`NEUTRINO_PLOT_TERM` sets the gnuplot terminal and `NEUTRINO_PLOT_OUT` the
+`COZY_PLOT_TERM` sets the gnuplot terminal and `COZY_PLOT_OUT` the
 file:
 
 ```sh
-NEUTRINO_PLOT_TERM="pngcairo size 800,500" NEUTRINO_PLOT_OUT=fig.png \
-  ./neutrino script.cz
+COZY_PLOT_TERM="pngcairo size 800,500" COZY_PLOT_OUT=fig.png \
+  ./cozy script.cz
 ```
 
-(`NEUTRINO_PLOT_TERM="dumb size 76,20"` draws ASCII plots straight into the
+(`COZY_PLOT_TERM="dumb size 76,20"` draws ASCII plots straight into the
 terminal, which is occasionally exactly what you want.) Complex data is
 rejected — plot `real(z)`, `imag(z)`, or `abs(z)` explicitly.
 
@@ -857,7 +862,7 @@ Ragged rows and non-numeric cells are errors that name the row and column.
 `readtable(file)` reads a CSV whose first line is a header and returns a
 **record of column vectors**, keys sanitized from the column names
 (`"GDP Growth (%)"` becomes `gdp_growth`; duplicates get `_2`, `_3`, ...).
-This is Neutrino's data frame — named columns plus the existing mask
+This is Cozy's data frame — named columns plus the existing mask
 machinery:
 
 ```
@@ -921,7 +926,7 @@ semantics (`{}` placeholders; double the braces for literals).
 
 ## 15b. Strings as code, and the keyboard (since 2.19)
 
-`eval` runs a string as Neutrino code in the current session and returns
+`eval` runs a string as Cozy code in the current session and returns
 its last value — which, among other things, gives dynamic record access:
 `eval("w." + col)`. `names` is the programmatic sibling of the `who`
 family (whose printed tables are unchanged): your workspace names as a
@@ -1030,14 +1035,14 @@ cozy> nnz(sprand(100, 100, 0.05))
 
 ## 16. Scripts and tools
 
-`neutrino file.cz` runs a script (top level is a statement sequence; `#`/`%`
+`cozy file.cz` runs a script (top level is a statement sequence; `#`/`%`
 comments). The binary also exposes the compiler pipeline:
 
 | Invocation | Shows |
 |---|---|
-| `neutrino --tokens file.cz` | the token stream |
-| `neutrino --ast file.cz` | the parse tree |
-| `neutrino --dis file.cz` | the compiled bytecode, statement by statement |
+| `cozy --tokens file.cz` | the token stream |
+| `cozy --ast file.cz` | the parse tree |
+| `cozy --dis file.cz` | the compiled bytecode, statement by statement |
 
 `tic` starts a monotonic wall-clock timer and `toc()` returns the elapsed
 seconds — bare `toc` as a statement echoes it, but in an expression position
@@ -1054,22 +1059,22 @@ line and echoes each result, so `printf 'sum(1:100)\n' | ./vmtest` prints
 (`make test`) and its ASan twin (`make test-asan`) are how changes prove
 themselves; `tests/dis/` pins the emitted bytecode for core constructs.
 
-**SVG plots.** `NEUTRINO_PLOT_TERM=svg` makes `plot` and `hist` write
+**SVG plots.** `COZY_PLOT_TERM=svg` makes `plot` and `hist` write
 `plot_N.svg` files instead of using gnuplot or ASCII. The browser build uses
 this by default: plots appear in the page's Plots panel, and "download new
 files" saves them.
 
 ## Editors
 
-**Emacs.** `editors/neutrino-mode.el` provides a major mode for `.cz` files:
+**Emacs.** `editors/cozy-mode.el` provides a major mode for `.cz` files:
 syntax highlighting (the builtin list is generated from the interpreter's own
 documentation table, so it cannot drift), `%` comments, block-aware
 indentation, and an inferior REPL. Put the file on your `load-path` and
-`(require 'neutrino-mode)`; then `M-x run-neutrino` starts the REPL, and from
+`(require 'cozy-mode)`; then `M-x run-cozy` starts the REPL, and from
 any `.cz` buffer `C-c C-r` sends the region, `C-c C-b` the buffer,
 `C-c C-l` loads the file, `C-c C-z` jumps to the REPL. On GitHub, a
 `.gitattributes` rule highlights `.cz` as Octave — close enough until
-linguist learns Neutrino.
+linguist learns Cozy.
 
 ### The workspace stays readable: load groups
 
@@ -1142,7 +1147,7 @@ cozy> clear("scatter"); who
 | `save("file.cz")` | write all variables and functions as reloadable source (restore with load) |
 | `body(f)` | print the source of a user-defined function |
 | `load("file.cz")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) |
-| `eval("code")` | run a string as Neutrino code in this session; returns the last value |
+| `eval("code")` | run a string as Cozy code in this session; returns the last value |
 | `names() \| names("vars"\|"funcs")` | your workspace names as a sorted string column (the programmatic who) |
 | `clear() \| clear("a", ...)` | remove all user variables, or the named ones; clearing a shadow restores the standard-library original |
 | `keep("a", "b", ...)` | remove all user variables except the named ones (the complement of clear) |

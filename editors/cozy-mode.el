@@ -340,7 +340,7 @@
   "Keymap for `cozy-mode'.")
 
 ;;;###autoload
-(define-derived-mode cozy-mode prog-mode "Neutrino"
+(define-derived-mode cozy-mode prog-mode "Cozy"
   "Major mode for editing Neutrino code."
   :syntax-table cozy-mode-syntax-table
   (setq-local comment-start "% ")

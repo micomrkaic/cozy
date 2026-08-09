@@ -1,4 +1,4 @@
-# Neutrino by Example
+# Cozy by Example
 
 *A book of worked problems — practical computing with a small array
 language.*
@@ -16,7 +16,7 @@ Random sessions are seeded and reproduce exactly.
 
 The [manual](MANUAL.md) is the systematic reference; the
 [packages guide](PACKAGES.md) documents the standard library written in
-Neutrino itself. This book is about *using* the thing.
+Cozy itself. This book is about *using* the thing.
 
 ## Contents
 
@@ -33,7 +33,8 @@ Neutrino itself. This book is about *using* the thing.
 11. Linear algebra
 12. Probability, statistics, and data
 13. Plotting
-14. The Neutrino idiom — combinations of the unique syntax
+14. The Cozy idiom — combinations of the unique syntax
+15. The Cozy instruments — sparse, exact derivatives, optimization
 Appendix A. Finance (finance.cz)
 Appendix B. Astronomy (astro.cz)
 Appendix C. Physics (phys.cz)
@@ -211,13 +212,13 @@ concatenates; `length` counts.
 **Problem 3.1 — Cleanup and assembly.**
 
 ```
-cozy> let name = "  Neutrino  ";
+cozy> let name = "  Cozy  ";
 cozy> trim(name)
-"Neutrino"
+"Cozy"
 cozy> upper(ans)
-"NEUTRINO"
+"COZY"
 cozy> length(trim(name))
-8
+4
 cozy> "version " + str(2.5) + ", " + str(153) + " builtins"
 "version 2.5, 153 builtins"
 ```
@@ -564,7 +565,7 @@ cozy> who("mycase")
   goal         int        = 250000
 ```
 
-**Discussion.** `save` writes the workspace as an ordinary Neutrino
+**Discussion.** `save` writes the workspace as an ordinary Cozy
 script — human-readable, editable, version-controllable — and `load`
 replays it. `clear()` proves the round trip: three variables gone, three
 variables back. The standard library never travels; only your names do.
@@ -1227,11 +1228,11 @@ live, on the poor man's Gaussian no less.
 
 ![](vignettes/vin13.png)
 
-Neutrino plots through three backends, chosen by environment: in the
+Cozy plots through three backends, chosen by environment: in the
 **browser** the default is SVG — dark-themed, rendered into the Plots pane
 and downloadable; **natively** the default is gnuplot (a soft dependency:
-its absence is a clean error), while `NEUTRINO_PLOT_TERM=svg` writes
-`plot_N.svg` files and `NEUTRINO_PLOT_TERM=ascii` renders into the
+its absence is a clean error), while `COZY_PLOT_TERM=svg` writes
+`plot_N.svg` files and `COZY_PLOT_TERM=ascii` renders into the
 terminal. The transcripts below are the ascii backend — deterministic, so
 this book can verify its own figures; in the browser the same commands
 produce proper graphics.
@@ -1292,7 +1293,7 @@ takes the same options; `yrange` anchors the axis when comparing
 histograms across runs.
 
 **Problem 13.3 — A scatter with the package.** Noisy line data through
-scatter.cz (Appendix and PACKAGES.md §7): pure Neutrino over the frozen
+scatter.cz (Appendix and PACKAGES.md §7): pure Cozy over the frozen
 `style = "points"` path.
 
 ```
@@ -1330,7 +1331,7 @@ working.
 
 ---
 
-## 14. The Neutrino idiom
+## 14. The Cozy idiom
 
 ![](vignettes/vin14.png)
 
@@ -1478,6 +1479,134 @@ denominators drown in cancellation. Operators compose like functions
 because they *are* functions.
 
 ---
+
+## 15. The Cozy instruments
+
+Everything before this chapter, Cozy inherited: every Neutrino program is
+a valid Cozy program with the same meaning, enforced by the inherited
+golden suite on every build. This chapter is what Cozy adds — sparse
+matrices, dual numbers with exact derivatives, and constrained
+optimization — the instruments the heavier language was built for. One
+line of context: `buildinfo().backend` names the linear-algebra backend
+your binary carries (`tier0` hand-rolled, `openblas`, or `accelerate`);
+the language is byte-identical under all three.
+
+**Problem 15.1 — A sparse system, solved without ever densifying.** The
+1-D Laplacian on 400 points is tridiagonal: 1198 nonzeros in a matrix of
+160,000 cells. Sparsity is legible — the value prints its own ledger —
+and the conjugate-gradient solver from sparselin.cz touches only `S * v`:
+
+```
+cozy> let n = 400;
+cozy> let i = [1:n, 1:n-1, 2:n]; let j = [1:n, 2:n, 1:n-1];
+cozy> let v = [2 * ones(1, n), -ones(1, n-1), -ones(1, n-1)];
+cozy> let L = sparse(i, j, v, n, n)
+sparse 400x400, nnz = 1198
+  (1,1)  2
+  (1,2)  -1
+  (2,1)  -1
+  (2,2)  2
+  (2,3)  -1
+  (3,2)  -1
+  (3,3)  2
+  (3,4)  -1
+  (4,3)  -1
+  (4,4)  2
+  (4,5)  -1
+  (5,4)  -1
+  ... (1186 more)
+cozy> load("packages/sparselin.cz");
+cozy> let s = cg(L, ones(n, 1)); s.iters
+200
+cozy> s.relres < 1e-9
+true
+cozy> sl_norm(dense(L) * s.x - ones(n, 1)) < 1e-7
+true
+```
+
+**Discussion.** The triplet constructor takes parallel index/value rows;
+`who` and the echo both speak nnz, never a wall of zeros. CG converges
+in 200 iterations — n/2, the textbook bound for this spectrum — and the
+residual check densifies only to *verify*, which is the one honest use
+of `dense` in a sparse workflow. The promotion law holds throughout:
+nothing densified silently, and anything that would have (`L + 1`,
+`L \\ b` direct) is an error naming the explicit route.
+
+**Problem 15.2 — Derivatives that are exact, not approximate.** A dual
+number carries a value and a derivative through every operation with
+`eps^2 = 0`; `d(f)` from autodiff.cz is the one-line consequence:
+
+```
+cozy> load("packages/autodiff.cz"); format(6)
+cozy> d(fn x -> exp(sin(x^2)))(1)
+2.50676
+cozy> 2 * cos(1) * exp(sin(1))
+2.50676
+cozy> let rosen = fn x -> (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2; grad(rosen)([1.0; 1.0])
+[ 0.00000
+  0.00000 ]
+```
+
+**Discussion.** The first pair is the point: the machine derivative of
+exp(sin(x²)) and the hand-derived 2x·cos(x²)·exp(sin(x²)) agree to
+every printed digit because they are the *same computation* — the chain
+rule executed by arithmetic, no step size anywhere. The Rosenbrock
+gradient at the known minimum is exactly zero, not small: dual
+arithmetic is exact, so its zeros are too.
+
+**Problem 15.3 — Constrained maximization: a portfolio.** Mean-variance
+selection: minimize risk minus a return bonus, subject to weights that
+sum to one and stay nonnegative — an equality and an inequality
+constraint, handled by the augmented Lagrangian in optim.cz:
+
+```
+cozy> load("packages/optim.cz"); format(4)
+cozy> let mu = [0.10; 0.06; 0.04];
+cozy> let Sig = [0.09, 0.01, 0.00; 0.01, 0.04, 0.01; 0.00, 0.01, 0.01];
+cozy> let obj = fn w -> sum(w .* (Sig * w)) - 0.5 * sum(mu .* w)
+<fn/1>
+cozy> let m = minimize_con(obj, [0.3; 0.3; 0.4], {eq = fn w -> [sum(w) - 1], ineq = fn w -> -w}); m.converged
+true
+cozy> m.x
+[  0.2414
+  0.08621
+   0.6724 ]
+cozy> sum(m.x)
+1.000
+```
+
+**Discussion.** The `cons` record is the whole constraint language:
+`eq` driven to zero, `ineq` driven nonpositive (`-w <= 0` *is* `w >=
+0`), each an ordinary function returning a column. The optimizer
+differentiates the augmented objective — kinks and all — with the same
+dual numbers as 15.2; no Lagrangian algebra was written by anyone. The
+weights tilt toward the high-return asset exactly as far as its
+variance allows, and the budget binds to the printed digit.
+
+**Problem 15.4 — Estimation: the closure is the estimator.** Nonlinear
+least squares in the pattern that generalizes to GMM and maximum
+likelihood: a factory takes the *data*, returns the objective, and the
+optimizer recovers the truth from noise:
+
+```
+cozy> load("packages/optim.cz"); format(4)
+cozy> let x = (1:20)' * 0.25; let y = 2.5 * exp(-0.8 * x) + 0.01 * randn(20, 1);
+cozy> let make_ssr = fn x, y -> fn b -> sum((y - b[1] * exp(b[2] * x)) .* (y - b[1] * exp(b[2] * x)))
+<fn/2>
+cozy> minimize(make_ssr(x, y), [1.0; -0.1]).x
+[   2.513
+  -0.8050 ]
+```
+
+**Discussion.** True parameters (2.5, −0.8); recovered (2.513, −0.805)
+from twenty noisy points — and the session reproduces exactly, because
+the RNG is seeded by default. The factory signature *is* the estimator:
+`make_ssr(x, y)` states what NLLS needs, the returned `fn b` is what
+optimizers eat, and capture-by-value pins the data without copying it
+(arrays are refcounted). Swap the inner expression for a moment
+condition times a weighting matrix and this same shape is GMM; take a
+log-density and it is maximum likelihood. One idiom, the whole
+estimation zoo.
 
 ## Appendix A. Finance (finance.cz)
 
@@ -1697,7 +1826,7 @@ folds to 60x² on its way through the simplifier.
 v2.12.1 recorded string extraction as impossible; v2.13.1 discovered the
 goldens said otherwise — strings index like arrays, always did. This
 problem is the correction made executable: a recursive-descent parser in
-pure Neutrino, so the differentiator takes mathematics as you would type
+pure Cozy, so the differentiator takes mathematics as you would type
 it:
 
 ```
@@ -1819,7 +1948,7 @@ language.
 | `erfc` | `erfc(x)` | complementary error function 1 - erf(x) | math |
 | `error` | `error(msg) \| error(tmpl, ...)` | raise a runtime error (fmt-style template) | core |
 | `eulergamma` | `eulergamma` | 0.57722..., the Euler-Mascheroni constant | constant |
-| `eval` | `eval("code")` | run a string as Neutrino code in this session; returns the last value | core |
+| `eval` | `eval("code")` | run a string as Cozy code in this session; returns the last value | core |
 | `exit` | `exit \| exit(code)` | end the session (also: quit) | repl |
 | `exp` | `exp(x)` | e raised to the x (complex-aware) | math |
 | `eye` | `eye(n)` | n-by-n identity matrix | arrays |
@@ -1948,15 +2077,15 @@ language.
 
 ## Appendix G. Two languages, five problems
 
-*The same five tasks in Neutrino and in Python — idiomatic Python, with
+*The same five tasks in Cozy and in Python — idiomatic Python, with
 numpy and scipy where a Python programmer would reach for them. Ground
 rules: no strawmen; every Python block below was executed (CPython 3.12,
 numpy 2.4.4, scipy 1.17.1) and produces the results shown; deterministic
-pairs match Neutrino digit for digit, and the stochastic pairs (G.1,
+pairs match Cozy digit for digit, and the stochastic pairs (G.1,
 G.4) match in distribution, since the two languages carry different
 random generators. Both sides show their full ceremony —
 seeds, and display rounding where the shown output is rounded; nothing a
-listing produced is hidden from it (Neutrino's rng lines are the same
+listing produced is hidden from it (Cozy's rng lines are the same
 honesty: verified transcripts must be reproducible). Cases where Python
 wins cleanly were left out on
 purpose and deserve naming: a Basel sum is a lovely generator
@@ -1982,7 +2111,7 @@ The mathematical sentence −1.96 < z < 1.96 is *illegal* on numpy arrays:
 Python's chained comparison desugars through `and`, which cannot work
 elementwise, so the idiom is two comparisons, both parenthesized
 (precedence bites otherwise), joined with `&` — a documented, famous
-wart. Neutrino's grammar just says the statistics.
+wart. Cozy's grammar just says the statistics.
 
 **G.2 — Formula first, constants after.**
 
@@ -2079,7 +2208,7 @@ out = {name: g(lambda x: x) for name, g in s.items()}
 
 Both sides from scratch — and fairness is acknowledged before it is
 overruled: factored properly, Python's coefficient functions weigh the
-same as Neutrino's, and the notorious `k=k` closure trick vanishes
+same as Cozy's, and the notorious `k=k` closure trick vanishes
 entirely (it haunts only inline lambdas). What survives fair treatment
 is isolated in the last line: applying one value to a bag of named
 functions. Python has no grammar for it — the applicator must be

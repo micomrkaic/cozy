@@ -1,5 +1,42 @@
 # Cozy changelog
 
+## 0.0.18 — the documentation becomes Cozy's own
+
+### Changed
+- **Full identity-and-accuracy pass over every document**, prompted by the
+  owner: the manual, book, packages guide, README, and the served web
+  page all titled and spoke as Neutrino, and some claims were actively
+  wrong — NEUTRINO_PLOT_TERM/`_OUT` (renamed at 0.0.7), `./neutrino`,
+  `~/.neutrino_history`, "nine value kinds", "frozen at 2.x", nine
+  packages. Everything now states Cozy's truth: eleven value kinds
+  (Dual and Sparse in the type table), COZY_ env vars, cozy binaries
+  and history, twelve packages, active development under the charter.
+  Deliberate lineage mentions remain (the oscillation pun is retired
+  with a nod). The eval doc row and mode-line name are fixed at their
+  generator sources.
+- **README rewritten for Cozy**: capabilities (duals, sparse, three
+  backends with the measured eig timings), status, the twelve packages,
+  build matrix including BACKEND= and wasm targets, and a sample
+  session captured by execution — including dualeps(dual(3,1)^2) = 6.
+- **New logos**: brand/logo.png and docs/logo.png now render Cozy's own
+  REPL banner (the steaming mug, warm on navy); the old assets spelled
+  Neutrino, including the one GitHub Pages served. index.html identity
+  updated (title, og tags, header, book titles, GitHub link).
+- **All three PDFs rebuilt** from the current markdown (they predated
+  even the rename).
+
+### Added
+- **BOOK chapter 15, "The Cozy instruments"**: four problems with
+  verified transcripts — a sparse Laplacian solved by cg without
+  densifying; exact derivatives (machine vs hand derivative agreeing
+  digit for digit, the Rosenbrock gradient exactly zero at the
+  minimum); a constrained portfolio (eq + ineq via the augmented
+  Lagrangian); and the estimation idiom (closure factories, NLLS
+  recovering truth from noise, the GMM/MLE generalization in prose).
+  BOOK transcripts: 358 -> 381, all captured by execution.
+- Manual: Dual and Sparse rows in the value-kind table; contents entry
+  for the dual-numbers section.
+
 ## 0.0.17 — the guard behind the wrong gate
 
 ### Fixed
