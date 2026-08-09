@@ -1,4 +1,4 @@
-/* eval.c — Neutrino tree-walking evaluator. */
+/* eval.c — Cozy evaluator and builtin library. */
 #define _XOPEN_SOURCE 700         /* open_memstream + jn/yn Bessel (superset of POSIX.1-2008) */
 #define _DARWIN_C_SOURCE 1        /* macOS: _XOPEN_SOURCE alone HIDES extension fields like
                                      rusage.ru_maxrss (Darwin clamps visibility to the requested
@@ -4299,7 +4299,7 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
         { "autodiff","autodiff" },
         { "repl",    "repl commands" },
     };
-    fputs("Neutrino builtins  —  help(name) for detail, e.g. help(svd)\n\n", vout());
+    fputs("Cozy builtins  —  help(name) for detail, e.g. help(svd)\n\n", vout());
     for (size_t gi = 0; gi < sizeof groups / sizeof *groups; gi++) {
         fprintf(vout(), "  %-15s", groups[gi].label);
         int col = 0;

@@ -1,4 +1,4 @@
-/* nrt.h — Neutrino runtime helpers shared between the tree-walker (eval.c)
+/* nrt.h — runtime helpers shared between the tree-walker (eval.c)
  * and the bytecode VM (vm.c / compile.c).
  *
  * These are the Value-level operations: they take fully-evaluated operands and

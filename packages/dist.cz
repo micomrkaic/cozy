@@ -1,4 +1,4 @@
-# dist.cz — probability distributions for Neutrino
+# dist.cz — probability distributions for Cozy
 # pdf / cdf / inv (quantile) / rand for: norm, student (t), chi2, fdist (F),
 # expo (exponential), unif (uniform). Cross-checked against SciPy; see
 # tests/34_dist.test. Quantile domain is 0 < p < 1.

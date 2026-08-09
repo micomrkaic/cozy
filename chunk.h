@@ -1,4 +1,4 @@
-/* chunk.h — a compiled unit of Neutrino bytecode.
+/* chunk.h — a compiled unit of Cozy bytecode.
  *
  * A Chunk holds a flat byte stream, a constant pool (owned Values, computed
  * once at compile time — this also folds literals so "3.14" is parsed once,

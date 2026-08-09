@@ -1,4 +1,4 @@
-/* vm.h — stack-based bytecode VM for Neutrino. */
+/* vm.h — stack-based bytecode VM for Cozy. */
 #ifndef COZY_VM_H
 #define COZY_VM_H
 

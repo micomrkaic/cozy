@@ -5,7 +5,7 @@
 #   for f in tests/dis/*.cz; do ./cozy --dis "$f" > "${f%.cz}.golden"; done
 set -u
 cd "$(dirname "$0")/.."
-BIN="${NEUTRINO:-./cozy}"
+BIN="${COZY:-./cozy}"
 [[ -x "$BIN" ]] || { echo "run_dis: $BIN not built" >&2; exit 2; }
 for src in *.c *.h; do
   [[ "$src" == vmtest.c ]] && continue

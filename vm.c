@@ -1,4 +1,4 @@
-/* vm.c — Neutrino bytecode VM (call-frame stack, lexical addressing).
+/* vm.c — Cozy bytecode VM (call-frame stack, lexical addressing).
  *
  * One operand stack and one CallFrame stack per vm_run invocation, with a single
  * setjmp at the top. A function's parameters and self live in stack slots, so a

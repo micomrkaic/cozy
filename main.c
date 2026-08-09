@@ -1,4 +1,4 @@
-/* main.c — Neutrino front-end driver.
+/* main.c — Cozy front-end driver.
  *   cozy [--tokens | --ast | --dis] [file.cz]
  * Default mode evaluates. With no file, runs a built-in sample. */
 #include <signal.h>
@@ -18,7 +18,7 @@
 #include <string.h>
 
 static const char SAMPLE[] =
-    "% Neutrino evaluator smoke test\n"
+    "% Cozy evaluator smoke test\n"
     "let A = [1, 2, 3; 4, 5, 6]\n"
     "let s = sum(A)\n"                 /* int 21 */
     "let d = A[2, 3]\n"                /* exact index -> 6 */

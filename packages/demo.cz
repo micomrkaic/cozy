@@ -1,6 +1,6 @@
-% demo.cz — the Neutrino tour, rebuilt on eval (v2.24.0).
+% demo.cz — the Cozy tour, rebuilt on eval (v2.24.0).
 %
-%     neutrino> load("packages/demo.cz")
+%     cozy> load("packages/demo.cz")
 %
 % Single-source honesty: every demonstration below is ONE string,
 % printed as the caption and executed by eval — what you read is,

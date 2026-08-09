@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-/* repl.c — Neutrino interactive REPL.
+/* repl.c — Cozy interactive REPL.
  *
  * Lifetime note: the evaluator stores environment names as non-owning slices
  * into the source and closures as raw pointers into the parse arena. So every
@@ -225,37 +225,41 @@ static const char *match_command(const char *line, const char *word)
 /* ------------------------------------------------------------------ */
 static void print_banner(bool color)
 {
-    /* the hearth: a sleeping cat by the fire — coziness itself. The wordmark
-     * is figlet standard (the old hand-drawn one had a stray | in the z and a
-     * doubled slash, caught by the owner's eye at 0.0.18). */
+    /* Cozy in figlet's nancyj — the Cooper Black of ASCII fonts: fat,
+     * round, warm, unmistakably 1970s. One word, simply (owner's call,
+     * 0.0.21). */
     if (color) {
-        fputs("                              \033[38;2;255;176;96m ( )    \033[0m\033[38;2;255;176;96m  ____               \033[0m\n", stdout);
-        fputs("\033[38;2;120;132;150m       |\\      _,,,---,,_     \033[0m\033[38;2;255;176;96m) ) (   \033[0m\033[38;2;255;176;96m / ___|___ _____   _ \033[0m\n", stdout);
-        fputs("\033[38;2;120;132;150m zzZZz /,`.-'`'    -.  ;-;;,_ \033[0m\033[38;2;255;176;96m ( ) )  \033[0m\033[38;2;255;176;96m| |   / _ \\_  / | | |\033[0m\n", stdout);
-        fputs("\033[38;2;120;132;150m      |,4-  ) )-,_..;\\ (  `'-'\033[0m\033[38;2;224;122;60m [####] \033[0m\033[38;2;255;176;96m| |__| (_) / /| |_| |\033[0m\n", stdout);
-        fputs("\033[38;2;120;132;150m     '---''(_/--'  `-'\\_)     \033[0m\033[38;2;224;122;60m |____| \033[0m\033[38;2;255;176;96m \\____\\___/___|\\__, |\033[0m\n", stdout);
-        fputs("                                      \033[38;2;255;176;96m               |___/ \033[0m\n", stdout);
-        fputs("              \033[38;2;120;132;150ma heavier numerical language, warmly held\033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m a88888b.                            \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96md8'   `88                            \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m88        .d8888b. d888888b dP    dP \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m88        88'  `88    .d8P' 88    88 \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96mY8.   .88 88.  .88  .Y8P    88.  .88 \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m Y88888P' `88888P' d888888P `8888P88 \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m                                 .88 \033[0m\n", stdout);
+        fputs("  \033[38;2;255;176;96m                             d8888P  \033[0m\n", stdout);
+        fputs("\n  \033[38;2;120;132;150ma heavier numerical language, warmly held\033[0m\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("              \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
+        printf("  \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
                COZY_VERSION, COZY_BUILT, now);
     } else {
-fputs("                               ( )      ____               \n", stdout);
-        fputs("       |\\      _,,,---,,_     ) ) (    / ___|___ _____   _ \n", stdout);
-        fputs(" zzZZz /,`.-'`'    -.  ;-;;,_  ( ) )  | |   / _ \\_  / | | |\n", stdout);
-        fputs("      |,4-  ) )-,_..;\\ (  `'-' [####] | |__| (_) / /| |_| |\n", stdout);
-        fputs("     '---''(_/--'  `-'\\_)      |____|  \\____\\___/___|\\__, |\n", stdout);
-        fputs("                                                     |___/ \n", stdout);
-        fputs("              a heavier numerical language, warmly held\n", stdout);
+        fputs("   a88888b.                            \n", stdout);
+        fputs("  d8'   `88                            \n", stdout);
+        fputs("  88        .d8888b. d888888b dP    dP \n", stdout);
+        fputs("  88        88'  `88    .d8P' 88    88 \n", stdout);
+        fputs("  Y8.   .88 88.  .88  .Y8P    88.  .88 \n", stdout);
+        fputs("   Y88888P' `88888P' d888888P `8888P88 \n", stdout);
+        fputs("                                   .88 \n", stdout);
+        fputs("                               d8888P  \n", stdout);
+        fputs("\n  a heavier numerical language, warmly held\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("              v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
+        printf("  v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
     }
 }
 
 /* ------------------------------------------------------------------ */
-/* ---- markdown -> ANSI: a renderer for Neutrino's own docs ------------- */
+/* ---- markdown -> ANSI: a renderer for Cozy's own docs ------------- */
 /* Handles the subset our documents use: #/##/### headers, ``` fences,
  * `inline code`, **bold**, bullets, --- rules, tables (passed through).
  * Colors only when writing to a terminal-bound pager. */
@@ -375,12 +379,12 @@ int repl_run(void)
     read_history(histpath);
     if (isatty(fileno(stdin))) {
         print_banner(isatty(fileno(stdout)) && !getenv("NO_COLOR"));
-        fputs("              type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels\n\n", stdout);
+        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels\n\n", stdout);
     }
 #else
     if (isatty(fileno(stdin))) {
         print_banner(isatty(fileno(stdout)) && !getenv("NO_COLOR"));
-        fputs("              type  help  for a tour  \u00b7  Ctrl-D to exit\n\n", stdout);
+        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit\n\n", stdout);
     }
 #endif
 

@@ -1,4 +1,4 @@
-/* compile.c — Neutrino AST -> bytecode, with lexical addressing.
+/* compile.c — Cozy AST -> bytecode, with lexical addressing.
  *
  * A resolver pass (the Compiler stack) classifies every identifier as a frame
  * slot (a function's self or parameters), an upvalue (a free variable captured

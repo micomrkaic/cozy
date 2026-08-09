@@ -1,2 +1,2 @@
-# Neutrino sources are not Nushell; render .nu as Octave (closest highlighting).
-*.nu linguist-language=Octave
+# Cozy sources: render .cz as Octave (closest highlighting).
+*.cz linguist-language=Octave

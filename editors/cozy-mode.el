@@ -1,8 +1,8 @@
-;;; cozy-mode.el --- Major mode for the Neutrino language -*- lexical-binding: t; -*-
+;;; cozy-mode.el --- Major mode for the Cozy language -*- lexical-binding: t; -*-
 
 ;; Author: Mico Mrkaic and Claude
 ;; Keywords: languages
-;; URL: https://github.com/micomrkaic/Neutrino
+;; URL: https://github.com/micomrkaic/cozy
 ;; Package-Requires: ((emacs "26.1"))
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -27,15 +27,15 @@
 (require 'comint)
 
 (defgroup cozy nil
-  "Editing Neutrino code."
+  "Editing Cozy code."
   :group 'languages)
 
 (defcustom cozy-indent-offset 2
-  "Indentation per block or bracket level in Neutrino."
+  "Indentation per block or bracket level in Cozy."
   :type 'integer :group 'cozy)
 
 (defcustom cozy-program "cozy"
-  "Program name for the inferior Neutrino REPL."
+  "Program name for the inferior Cozy REPL."
   :type 'string :group 'cozy)
 
 ;; ---------------------------------------------------------------------
@@ -55,11 +55,11 @@
 (defconst cozy--keywords
   '("let" "fn" "if" "then" "else" "elseif" "end" "for" "while" "where" "do" "in"
     "return" "break" "continue")
-  "Neutrino reserved words.")
+  "Cozy reserved words.")
 
 (defconst cozy--constants
   '("true" "false" "null" "ans")
-  "Neutrino literal words and the REPL's `ans'.")
+  "Cozy literal words and the REPL's `ans'.")
 
 (defconst cozy--builtins
   '("abs"
@@ -248,7 +248,7 @@
 ;; ---------------------------------------------------------------------
 ;; Indentation: bracket depth (via the parser state) plus block keywords
 ;; (if/for/while ... end). fn bodies are parenthesized in idiomatic
-;; Neutrino, so bracket depth carries most of the weight.
+;; Cozy, so bracket depth carries most of the weight.
 ;; ---------------------------------------------------------------------
 (defconst cozy--block-open-re
   "\\_<\\(if\\|for\\|while\\)\\_>")
@@ -270,7 +270,7 @@
       depth)))
 
 (defun cozy-indent-line ()
-  "Indent the current line of Neutrino code."
+  "Indent the current line of Cozy code."
   (interactive)
   (let* ((bol (save-excursion (beginning-of-line) (point)))
          (paren-depth (car (syntax-ppss bol)))
@@ -292,7 +292,7 @@
 
 ;;;###autoload
 (defun run-cozy ()
-  "Start (or switch to) an inferior Neutrino REPL."
+  "Start (or switch to) an inferior Cozy REPL."
   (interactive)
   (unless (comint-check-proc cozy-repl-buffer)
     (with-current-buffer (make-comint "cozy" cozy-program)
@@ -307,23 +307,23 @@
                         (concat text "\n"))))
 
 (defun cozy-send-region (beg end)
-  "Send the region to the Neutrino REPL."
+  "Send the region to the Cozy REPL."
   (interactive "r")
   (cozy--send (buffer-substring-no-properties beg end)))
 
 (defun cozy-send-buffer ()
-  "Send the whole buffer to the Neutrino REPL."
+  "Send the whole buffer to the Cozy REPL."
   (interactive)
   (cozy-send-region (point-min) (point-max)))
 
 (defun cozy-load-file ()
-  "Load the current file in the Neutrino REPL (saves first)."
+  "Load the current file in the Cozy REPL (saves first)."
   (interactive)
   (save-buffer)
   (cozy--send (format "load(%S)" (buffer-file-name))))
 
 (defun cozy-switch-to-repl ()
-  "Switch to the Neutrino REPL buffer."
+  "Switch to the Cozy REPL buffer."
   (interactive)
   (run-cozy))
 
@@ -341,7 +341,7 @@
 
 ;;;###autoload
 (define-derived-mode cozy-mode prog-mode "Cozy"
-  "Major mode for editing Neutrino code."
+  "Major mode for editing Cozy code."
   :syntax-table cozy-mode-syntax-table
   (setq-local comment-start "% ")
   (setq-local comment-start-skip "%+[ \t]*")

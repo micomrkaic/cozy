@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Neutrino regression runner.
+# Cozy regression runner.
 #
 # Each .test file is a flat list of cases. A case is one input line followed by
 # its expectation line:

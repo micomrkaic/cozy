@@ -1,4 +1,4 @@
-# finance.cz — the HP-12C's greatest hits, for Neutrino
+# finance.cz — the HP-12C's greatest hits, for Cozy
 # Time value of money, cash flows, bonds, amortization, and date arithmetic.
 # Sign convention (HP-12C): money you receive is positive, money you pay is
 # negative. All rates are per period as decimals (0.005 = 0.5%/month).

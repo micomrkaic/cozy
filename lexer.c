@@ -1,4 +1,4 @@
-/* lexer.c — Neutrino lexer, C23. */
+/* lexer.c — Cozy lexer, C23. */
 #include "lexer.h"
 #include <string.h>
 
@@ -28,7 +28,7 @@ static bool ends_value(enum TokenKind k)
 }
 
 /* ------------------------------------------------------------------ */
-/* keyword table — THE place to edit Neutrino's reserved words         */
+/* keyword table — THE place to edit Cozy's reserved words         */
 /* ------------------------------------------------------------------ */
 static enum TokenKind keyword_lookup(const char *s, size_t n)
 {

@@ -245,31 +245,33 @@
 
   // pause() support: the wasm side streams pending output here mid-eval,
   // then waits (Asyncify) until Enter releases the latch below.
-  window.__nuStream = writeResult;
+  window.__cozyStream = writeResult;
   document.addEventListener('keydown', function (e) {
-    if (window.__nuPauseWaiting && e.key === 'Enter') {
-      window.__nuPauseDone = 1;
+    if (window.__cozyPauseWaiting && e.key === 'Enter') {
+      window.__cozyPauseDone = 1;
       e.preventDefault(); e.stopPropagation();
     }
   }, true);
 
   function banner() {
-    // The hearth: a sleeping cat by the fire, and the figlet-standard
-    // wordmark — pure ASCII, so it aligns in any monospace fallback.
-    var rows = [
-      [['banner-dim','                              '],['banner-warm',' ( )    '],['banner-warm','  ____               ']],
-      [['banner-dim','       |\\      _,,,---,,_     '],['banner-warm',') ) (   '],['banner-warm',' / ___|___ _____   _ ']],
-      [['banner-dim',' zzZZz /,`.-\'`\'    -.  ;-;;,_ '],['banner-warm',' ( ) )  '],['banner-warm','| |   / _ \\_  / | | |']],
-      [['banner-dim','      |,4-  ) )-,_..;\\ (  `\'-\''],['banner-ember',' [####] '],['banner-warm','| |__| (_) / /| |_| |']],
-      [['banner-dim','     \'---\'\'(_/--\'  `-\'\\_)     '],['banner-ember',' |____| '],['banner-warm',' \\____\\___/___|\\__, |']],
-      [['banner-dim','                              '],['banner-ember','        '],['banner-warm','               |___/ ']],
+    // Cozy in figlet nancyj — fat, round, 1970s-warm; pure ASCII so it
+    // aligns in any monospace fallback.
+    var art = [
+      ' a88888b.                            ',
+      'd8\'   `88                            ',
+      '88        .d8888b. d888888b dP    dP ',
+      '88        88\'  `88    .d8P\' 88    88 ',
+      'Y8.   .88 88.  .88  .Y8P    88.  .88 ',
+      ' Y88888P\' `88888P\' d888888P `8888P88 ',
+      '                                 .88 ',
+      '                             d8888P  ',
     ];
-    for (var i = 0; i < rows.length; i++) {
+    for (var i = 0; i < art.length; i++) {
       var d = document.createElement('div');
-      for (var j = 0; j < rows[i].length; j++) d.appendChild(el(rows[i][j][0], rows[i][j][1]));
+      d.appendChild(el('banner-warm', art[i]));
       term.appendChild(d);
     }
-    writeLine('banner-dim', '              a heavier numerical language, warmly held');
+    writeLine('banner-dim', 'a heavier numerical language, warmly held');
     scroll();
   }
 
@@ -278,12 +280,12 @@
       var n = M.lengthBytesUTF8(s) + 1;
       var p = M._malloc(n);
       M.stringToUTF8(s, p, n);
-      var r = M.UTF8ToString(M._nu_eval(p));
+      var r = M.UTF8ToString(M._cozy_eval(p));
       M._free(p);
       return r;
     };
-    M._nu_init();
-    window.NU = M;
+    M._cozy_init();
+    window.COZY = M;
     M.cozyPlot = function (fname) {
       try {
         var svg = new TextDecoder().decode(M.FS.readFile(fname));
@@ -294,7 +296,7 @@
       } catch (e) {}
     };
     for (var fi = 0; fi < M.FS.readdir('/').length; fi++) known.add(M.FS.readdir('/')[fi]);
-    var ver = M.UTF8ToString(M._nu_version());
+    var ver = M.UTF8ToString(M._cozy_version());
     term.innerHTML = '';
     banner();
     writeLine('banner-dim', ver);
@@ -384,7 +386,7 @@
     writeLine: writeLine,
     scroll: scroll,
     focusInput: function () { input.focus(); },
-    /* run editor text as if typed at the prompt: nu_eval takes a whole
+    /* run editor text as if typed at the prompt: cozy_eval takes a whole
      * program and echoes each statement's value (v1.8.3) */
     runBuffer: function (text) {
       writeLine('dim', '% editor script:');
@@ -482,10 +484,10 @@
   function loadDoc(path) {
     if (path) docPick.value = path;
     var p = docPick.value;
-    if (!window.NU) return;
+    if (!window.COZY) return;
     if (!docCache[p]) {
       try {
-        docCache[p] = mdToHtml(new TextDecoder().decode(window.NU.FS.readFile(p)));
+        docCache[p] = mdToHtml(new TextDecoder().decode(window.COZY.FS.readFile(p)));
       } catch (e) { docCache[p] = '<p>(document not found in this build)</p>'; }
     }
     document.getElementById('docview').innerHTML = docCache[p];
@@ -503,7 +505,7 @@
     edTimer = setTimeout(function () { try { localStorage.setItem(EDKEY, edtext.value); } catch (e) {} }, 400);
   });
   function runScript(text) {
-    if (!window.NU || !text.trim().length) return;
+    if (!window.COZY || !text.trim().length) return;
     nuTerm.runBuffer(text);              /* interactive echo; focus stays in the editor */
   }
   document.getElementById('ed-run').addEventListener('click', function () { runScript(edtext.value); });
@@ -540,7 +542,7 @@
     var files = Array.prototype.slice.call(ev.target.files);
     files.forEach(function (f) {
       f.arrayBuffer().then(function (buf) {
-        window.NU.FS.writeFile('/' + f.name, new Uint8Array(buf));
+        window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
         known.add(f.name);
         var hint = /\.cz$/i.test(f.name) ? 'run it with: load("/' + f.name + '")'
                                           : 'e.g. readtable("/' + f.name + '")';
@@ -551,14 +553,14 @@
     ev.target.value = '';
   });
   document.getElementById('dl').addEventListener('click', function () {
-    if (!window.NU) return;
-    var n = 0, names = window.NU.FS.readdir('/');
+    if (!window.COZY) return;
+    var n = 0, names = window.COZY.FS.readdir('/');
     for (var i = 0; i < names.length; i++) {
       var f = names[i];
       if (known.has(f) || f === '.' || f === '..' || f === '_editor.cz') continue;
       try {
-        if (!window.NU.FS.isFile(window.NU.FS.stat('/' + f).mode)) continue;
-        var data = window.NU.FS.readFile('/' + f);
+        if (!window.COZY.FS.isFile(window.COZY.FS.stat('/' + f).mode)) continue;
+        var data = window.COZY.FS.readFile('/' + f);
         var a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([data]));
         a.download = f; a.click(); URL.revokeObjectURL(a.href); n++;
@@ -575,7 +577,7 @@
   window.addEventListener('dragover', function (ev) { ev.preventDefault(); });
   window.addEventListener('drop', function (ev) {
     ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
-    if (!window.NU) return;
+    if (!window.COZY) return;
     var files = Array.prototype.slice.call(ev.dataTransfer.files);
     files.forEach(function (f) {
       if (/\.(nu|txt)$/i.test(f.name)) {
@@ -588,7 +590,7 @@
         });
       } else {
         f.arrayBuffer().then(function (buf) {
-          window.NU.FS.writeFile('/' + f.name, new Uint8Array(buf));
+          window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
           known.add(f.name);
           nuTerm.writeLine('dim', '(uploaded ' + f.name + ', ' + buf.byteLength + ' bytes)');
           nuTerm.scroll();

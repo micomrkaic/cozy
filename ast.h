@@ -1,4 +1,4 @@
-/* ast.h — Neutrino abstract syntax tree. */
+/* ast.h — Cozy abstract syntax tree. */
 #ifndef COZY_AST_H
 #define COZY_AST_H
 
