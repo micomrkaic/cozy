@@ -8,7 +8,7 @@ let p = pwd(); cd("tests"); let moved = pwd() != p; cd(".."); moved && (pwd() ==
 numel(ls("packages")) >= 5
 => true
 # globs work
-numel(ls("packages/*.nu")) >= 5
+numel(ls("packages/*.cz")) >= 5
 => true
 # a listing is a value: map over it (regression: string arrays through map)
 (ls("packages") ~> length |> min) > 5

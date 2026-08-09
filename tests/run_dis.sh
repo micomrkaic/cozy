@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Codegen goldens: disassemble each tests/dis/*.nu and diff against its .golden.
+# Codegen goldens: disassemble each tests/dis/*.cz and diff against its .golden.
 # These lock in the *emitted bytecode*, not just behaviour — e.g. the loop
 # MARK_PUSH/RESET/POP sequence. Regenerate after an intentional codegen change:
-#   for f in tests/dis/*.nu; do ./cozy --dis "$f" > "${f%.nu}.golden"; done
+#   for f in tests/dis/*.cz; do ./cozy --dis "$f" > "${f%.cz}.golden"; done
 set -u
 cd "$(dirname "$0")/.."
 BIN="${NEUTRINO:-./cozy}"
@@ -12,9 +12,9 @@ for src in *.c *.h; do
   [[ -e "$src" && "$src" -nt "$BIN" ]] && { echo "run_dis: WARNING: $src newer than $BIN (stale binary?)" >&2; break; }
 done
 fails=0; total=0
-for nu in tests/dis/*.nu; do
+for nu in tests/dis/*.cz; do
   total=$((total+1))
-  gold="${nu%.nu}.golden"
+  gold="${nu%.cz}.golden"
   if ! diff -u "$gold" <("$BIN" --dis "$nu") > /tmp/dis_diff.$$ 2>&1; then
     echo "FAIL $(basename "$nu"): disassembly differs from golden:"
     sed 's/^/      /' /tmp/dis_diff.$$

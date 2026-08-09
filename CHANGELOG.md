@@ -1,5 +1,28 @@
 # Cozy changelog
 
+## 0.0.10 — packages speak .cz
+
+### Changed
+- **The package extension is .cz** (was .nu, the Neutrino residue kept
+  deliberately at 0.0.7 and unkept deliberately now, by owner decision).
+  20 files renamed (packages/, tests/dis/, tests/data/), 42 files
+  edited: every load()/ls()/save() string in goldens, books, doc-table
+  examples, test harnesses, generators, and the emacs mode's
+  auto-mode-alist. load() itself never had extension logic — filenames
+  are strings — so the language changed not at all.
+- **Conformance edits, recorded per the charter**: inherited goldens
+  and transcripts naming package files were amended (.nu -> .cz). These
+  pin environmental facts, not semantics — the same amendable class as
+  version strings and the exact package list. "Every Neutrino program
+  is a valid Cozy program" survives: no grammar, builtin, or meaning
+  changed; a Neutrino script calling load("dist.nu") needs its file
+  renamed, nothing else.
+- Fixed in passing: the emacs mode header still read "Editing support
+  for Neutrino" — a straggler from the 0.0.7 rename.
+- Deliberate keep: heritage/ verbatim, changelog history, and the
+  charter's lineage prose ("symb.nu-style") — true statements about
+  Neutrino, whose files were .nu.
+
 ## 0.0.9 — sparse linear algebra, the designed way
 
 ### Added

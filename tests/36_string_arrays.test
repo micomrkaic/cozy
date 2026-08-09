@@ -50,7 +50,7 @@ norm(["a", "b"])
 sum(["a", "b"])
 => !arithmetic on non-numbers
 # save/load roundtrip
-let v = ["x", "y\"q"]; save("/tmp/nu_sa.nu"); clear(); load("/tmp/nu_sa.nu"); v[2]
+let v = ["x", "y\"q"]; save("/tmp/nu_sa.cz"); clear(); load("/tmp/nu_sa.cz"); v[2]
 => "y"q"
 # str() of a string array
 str(["a", "b"])

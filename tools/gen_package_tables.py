@@ -12,7 +12,7 @@ import json, re, subprocess, sys
 
 PLACES_EX = "places.duluth_ga.lat"
 SPECS = {
-  "dist": ("load(\"packages/dist.nu\"); format(6); rng(7)", [
+  "dist": ("load(\"packages/dist.cz\"); format(6); rng(7)", [
     ("norm.pdf/cdf/inv(x, mu, sigma)", "norm.cdf(1.96, 0, 1)"),
     ("norm.rand(n, mu, sigma)",        "mean(norm.rand(500, 10, 2)) > 9"),
     ("student.pdf/cdf/inv(x, v)",      "student.inv(0.975, 30)"),
@@ -21,7 +21,7 @@ SPECS = {
     ("expo.pdf/cdf/inv(x, rate)",      "expo.inv(0.5, 2)"),
     ("unif.pdf/cdf/inv(x, a, b)",      "unif.cdf(3, 0, 10)"),
   ]),
-  "poly": ("load(\"packages/poly.nu\"); format(6)", [
+  "poly": ("load(\"packages/poly.cz\"); format(6)", [
     ("polyval(c, x)",    "polyval([2, -3, 1], 4)"),
     ("roots(c)",         "sort(real(roots([1, -6, 11, -6])))\x27"),
     ("companion(c)",     "companion([1, 0, -4])"),
@@ -30,7 +30,7 @@ SPECS = {
     ("polyint(c, k)",    "polyint([3, -12, 11], -6)"),
     ("conv(a, b)",       "conv([1, -1], [1, -2])"),
   ]),
-  "finance": ("load(\"packages/finance.nu\"); format(6)", [
+  "finance": ("load(\"packages/finance.cz\"); format(6)", [
     ("pmt(n, i, pv, fv)",    "pmt(360, 0.005, 250000, 0)"),
     ("pv(n, i, pmt, fv)",    "pv(360, 0.005, -1498.88, 0)"),
     ("fv(n, i, pv, pmt)",    "fv(120, 0.004, 0, -200)"),
@@ -53,7 +53,7 @@ SPECS = {
     ("days(y1,m1,d1, y2,m2,d2)",    "days(2026, 1, 1, 2026, 7, 17)"),
     ("days360(y1,m1,d1, y2,m2,d2)", "days360(2024, 1, 31, 2024, 7, 31)"),
   ]),
-  "astro": ("load(\"packages/astro.nu\"); format(6)", [
+  "astro": ("load(\"packages/astro.cz\"); format(6)", [
     ("sunrise(lat, lon, y, m, d, tz)", "hm(sunrise(38.8048, -77.0469, 2026, 7, 17, -4))"),
     ("sunset(lat, lon, y, m, d, tz)",  "hm(sunset(38.8048, -77.0469, 2026, 7, 17, -4))"),
     ("dawn_civil / dusk_civil(lat, lon, y, m, d, tz)", "hm(dawn_civil(38.8048, -77.0469, 2026, 7, 17, -4))"),
@@ -68,7 +68,7 @@ SPECS = {
     ("places",              PLACES_EX),
     ("drive_daylight(from, to, y, m, d, tz)", "drive_daylight(places.alexandria_va, places.duluth_ga, 2026, 7, 17, -4).window_hours"),
   ]),
-  "rmt": ("load(\"packages/rmt.nu\"); format(6); rng(7)", [
+  "rmt": ("load(\"packages/rmt.cz\"); format(6); rng(7)", [
     ("randsym(n)",   "let S = randsym(3); max(max(abs(S - S\x27))) == 0"),
     ("randspd(n)",   "let P = randspd(3); min(eig(P).values) >= 1"),
     ("wishart(n)",   "let W = wishart(3); min(eig(W).values) > 0"),
@@ -80,7 +80,7 @@ SPECS = {
     ("goe(n)",       "let H = goe(150); max(abs(eig(H).values)) < 2.4"),
   ]),
 
-  "phys": ("load(\"packages/phys.nu\"); format(6)", [
+  "phys": ("load(\"packages/phys.cz\"); format(6)", [
     ("phys.c",     "phys.c == 299792458"),
     ("phys.h",     "phys.h"),
     ("phys.hbar",  "abs(phys.hbar * 2 * pi - phys.h) < 1e-45"),
@@ -93,12 +93,12 @@ SPECS = {
     ("phys.sigma", "phys.sigma"),
     ("phys.ly / phys.au", "phys.ly / phys.au"),
   ]),
-  "scatter": ("load(\"packages/scatter.nu\"); rng(1)", [
+  "scatter": ("load(\"packages/scatter.cz\"); rng(1)", [
     ("jitter(x, a) stays within a/2", "max(abs(jitter(1:100, 0.1) - (1:100))) <= 0.05"),
     ("jitter preserves shape", "size(jitter(rand(3, 4), 0.2)) == [3, 4]"),
     ("mean displacement is small", "abs(mean(jitter(zeros(1, 2000), 0.2))) < 0.01"),
   ]),
-  "symb": ("load(\"packages/symb.nu\")", [
+  "symb": ("load(\"packages/symb.cz\")", [
     ("d/dx of x^3 at 2 is 12", "evalx(ddx(powc(X, 3)), 2) == 12"),
     ("chain rule through exp(2x)", "abs(evalx(ddx(subst(expx(X), mul(C(2), X))), 0) - 2) < 1e-12"),
     ("taylor of exp begins 1, 1, 1/2", "max(abs(taylor(expx(X), 2) - [1, 1, 0.5])) < 1e-9"),

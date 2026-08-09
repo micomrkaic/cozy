@@ -61,5 +61,5 @@ num("hello")
 upper(5)
 => !expected a string
 # strings roundtrip through save (existing machinery)
-let greet = "hi \"you\""; save("/tmp/nu_s1.nu"); clear(); load("/tmp/nu_s1.nu"); greet + "!"
+let greet = "hi \"you\""; save("/tmp/nu_s1.cz"); clear(); load("/tmp/nu_s1.cz"); greet + "!"
 => "hi "you"!"

@@ -1,5 +1,5 @@
 /* main.c — Neutrino front-end driver.
- *   cozy [--tokens | --ast | --dis] [file.nu]
+ *   cozy [--tokens | --ast | --dis] [file.cz]
  * Default mode evaluates. With no file, runs a built-in sample. */
 #include <signal.h>
 #include "version.h"

@@ -1651,7 +1651,7 @@ static const BuiltinDoc builtin_docs[] = {
     /* reductions ------------------------------------------------------ */
     { "sum",   "sum(A) | sum(A, dim)", "sum of all elements, or along dim (1 = columns, 2 = rows)", "reduce" , "sum([1, 2, 3])                    %= 6\nsum([1, 2; 3, 4], 1)              %= [4, 6]" },
     { "prod",  "prod(A) | prod(A, dim)","product of all elements, or along dim", "reduce" , "prod([1, 2, 3, 4])                %= 24" },
-    { "save",  "save(\"file.nu\")",  "write all variables and functions as reloadable source (restore with load)", "core" , "save(\"ws.nu\")                    % then later: load(\"ws.nu\")" },
+    { "save",  "save(\"file.cz\")",  "write all variables and functions as reloadable source (restore with load)", "core" , "save(\"ws.cz\")                    % then later: load(\"ws.cz\")" },
     { "body",  "body(f)",           "print the source of a user-defined function", "core" , "let cube = fn x -> x^3; body(cube)   %= fn x -> x^3" },
     { "pi",    "pi",   "3.14159..., the circle constant", "const" , "cos(pi)                           %= -1" },
     { "e",     "e",    "2.71828..., Euler's number", "const" , "log(e)                            %= 1" },
@@ -1661,9 +1661,9 @@ static const BuiltinDoc builtin_docs[] = {
     { "inf",   "inf",  "positive infinity (Float)", "const" , "inf > 1e308                       %= true" },
     { "nan",   "nan",  "not-a-number (Float); nan never equals anything, itself included", "const" , "nan == nan                        %= false" },
     { "pwd",   "pwd",                "the current working directory, as a string", "io" , "length(pwd()) > 0                 %= true" },
-    { "cd",    "cd(\"dir\") | cd",     "change the working directory (persists, unlike !cd); bare cd goes home", "io" , "cd(\"packages\")                    % ...then load(\"dist.nu\") works\ncd(\"..\")                          % back up" },
-    { "ls",    "ls | ls(\"dir\") | ls(\"*.nu\")", "directory listing as a string array (globs supported)", "io" , "numel(ls(\"packages\")) >= 5        %= true" },
-    { "load",  "load(\"file.nu\")",  "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core" , "load(\"tests/data/mathlib.nu\"); cube(3)   %= 27\nload(\"mylib.nu\"); mylib.f(2)     % record-of-closures as a namespace" },
+    { "cd",    "cd(\"dir\") | cd",     "change the working directory (persists, unlike !cd); bare cd goes home", "io" , "cd(\"packages\")                    % ...then load(\"dist.cz\") works\ncd(\"..\")                          % back up" },
+    { "ls",    "ls | ls(\"dir\") | ls(\"*.cz\")", "directory listing as a string array (globs supported)", "io" , "numel(ls(\"packages\")) >= 5        %= true" },
+    { "load",  "load(\"file.cz\")",  "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core" , "load(\"tests/data/mathlib.cz\"); cube(3)   %= 27\nload(\"mylib.cz\"); mylib.f(2)     % record-of-closures as a namespace" },
     { "eval",  "eval(\"code\")", "run a string as Neutrino code in this session; returns the last value", "core" , "eval(\"2 + 2\")                      % 4" },
     { "names", "names() | names(\"vars\"|\"funcs\")", "your workspace names as a sorted string column (the programmatic who)", "core" , "let a = 1; names(\"vars\")           % [\"a\"]" },
     { "input", "input(\"prompt\")", "read one line from the keyboard as a string (window.prompt in the browser)", "io" , "let name = input(\"who? \")          % interactive" },
@@ -1823,7 +1823,7 @@ static Value bi_dis(Interp *I, Value *args, uint32_t n)
 }
 
 /* ------------------------------------------------------------------ */
-/* load("file.nu"): run a file of definitions in the current session   */
+/* load("file.cz"): run a file of definitions in the current session   */
 /* ------------------------------------------------------------------ */
 
 /* Loaded (arena, source) pairs must outlive the call: identifiers in the
@@ -1874,7 +1874,7 @@ static Value bi_body(Interp *I, Value *args, uint32_t n)
     return val_null();
 }
 
-/* ---- save("file.nu"): serialize user globals as reloadable source ---- */
+/* ---- save("file.cz"): serialize user globals as reloadable source ---- */
 
 static bool ident_ok(const char *s, uint32_t len)
 {
@@ -1964,7 +1964,7 @@ static Value bi_save(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
     if (args[0].kind != VAL_STRING)
-        runtime_error(I, "save: expected a file name string, e.g. save(\"ws.nu\")");
+        runtime_error(I, "save: expected a file name string, e.g. save(\"ws.cz\")");
     StrObj *ps = as_str(args[0]);
     char path[1024];
     if (ps->len >= sizeof path) runtime_error(I, "save: file name too long");
@@ -2186,7 +2186,7 @@ static Value bi_load(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
     if (args[0].kind != VAL_STRING)
-        runtime_error(I, "load: expected a file name string, e.g. load(\"stats.nu\")");
+        runtime_error(I, "load: expected a file name string, e.g. load(\"stats.cz\")");
     StrObj *ps = as_str(args[0]);
     char path[1024];
     if (ps->len >= sizeof path) runtime_error(I, "load: file name too long");
@@ -2271,7 +2271,7 @@ static Value bi_load(Interp *I, Value *args, uint32_t n)
                 const char *slash = strrchr(path, '/');
                 const char *base = slash ? slash + 1 : path;
                 size_t bl = strlen(base);
-                if (bl > 3 && !strcmp(base + bl - 3, ".nu")) bl -= 3;
+                if (bl > 3 && !strcmp(base + bl - 3, ".cz")) bl -= 3;
                 ng.shortn = malloc(bl + 1);
                 if (ng.path && ng.shortn) {
                     memcpy(ng.shortn, base, bl); ng.shortn[bl] = '\0';
@@ -4218,7 +4218,7 @@ void interp_init(Interp *I) { *I = (Interp){0}; rng_seed(I, 0x9E3779B97F4A7C15UL
 static Cplx *to_cplx(Interp *I, Value v, uint32_t *rows, uint32_t *cols, const char *who)
 {
     if (is_sparse(v))
-        runtime_error(I, "%s on sparse is not supported — load(\"sparselin.nu\") for cg and powerit "
+        runtime_error(I, "%s on sparse is not supported — load(\"sparselin.cz\") for cg and powerit "
                          "on S * v, or %s(dense(S)) if it fits in memory",
                       who, who);
     if (!is_array(v)) runtime_error(I, "%s: expected a matrix, got %s", who, type_name(v.kind));
@@ -4328,7 +4328,7 @@ static Value bi_inv(Interp *I, Value *args, uint32_t n)
     (void)n;
     if (is_sparse(args[0]))
         runtime_error(I, "inv on sparse is not supported (and usually unwanted: the inverse of "
-                         "a sparse matrix is dense) — cg from sparselin.nu solves A x = b instead");
+                         "a sparse matrix is dense) — cg from sparselin.cz solves A x = b instead");
     if (!is_array(args[0])) runtime_error(I, "inv: expected a square matrix, got %s", type_name(args[0].kind));
     ArrObj *a = as_arr(args[0]);
     if (a->rows != a->cols) runtime_error(I, "inv: matrix must be square (got %ux%u)", a->rows, a->cols);

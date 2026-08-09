@@ -15,7 +15,7 @@ loops, and a linear algebra core — matrix multiply, left/right division,
 least-squares, matrix power, `det`/`inv`, and `lu`/`qr`/`chol`/`eig`/`svd`
 decompositions (all carried out in complex, so real inputs give real results).
 It runs as a REPL with line editing, history, tab completion, and `ans` (the
-last value you saw and didn't name), or executes `.nu` scripts. Pipelines come
+last value you saw and didn't name), or executes `.cz` scripts. Pipelines come
 in three flavours: `|>` feeds the whole value, `~>` feeds each element
 (`x ~> f` is `map(f, x)` — the elementwise pipe oscillates), `|>>` tees the
 flowing value for debugging, and piping into a record literal fans out:
@@ -101,7 +101,7 @@ build with `make WERROR=` to drop `-Werror` for that build. The test harness
 Convenience targets: `make run` / `make repl` (start the REPL), `make sample`
 (run the built-in demo), `make ast` / `make tokens` (dump the demo's AST/tokens).
 
-**Bytecode introspection.** `neutrino --dis file.nu` disassembles each top-level
+**Bytecode introspection.** `neutrino --dis file.cz` disassembles each top-level
 statement's compiled chunk — mnemonics, resolved constants and names, jump
 targets as absolute offsets, source-line annotations, and a recursive listing of
 every nested function proto. Interactively, `dis(f)` disassembles a function to
@@ -152,7 +152,7 @@ sanitizers, so the error-unwind paths are leak-checked on every run. See
 
 ```
 neutrino                 # interactive REPL
-neutrino script.nu       # run a file
+neutrino script.cz       # run a file
 neutrino --sample        # run the built-in demo program
 neutrino --ast    file   # dump the AST and exit
 neutrino --tokens file   # dump the token stream and exit

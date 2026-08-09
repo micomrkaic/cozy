@@ -102,7 +102,7 @@ compiled.
 - **Plotting: no per-point sizes or colors.** The plot backends draw each
   series in one style; bubble charts and per-point color maps would need
   backend changes and are deferred to the successor language.
-  `packages/scatter.nu` covers plain scatter via `style = "points"`.
+  `packages/scatter.cz` covers plain scatter via `style = "points"`.
 - **Strings: extraction exists (correction of the v2.12.1 entry); only
   strfind is missing.** The v2.12.1 printing of this entry claimed no
   substr and no character indexing — wrong, and the error is a lesson:
@@ -113,7 +113,7 @@ compiled.
   redundant, which is why it does not exist. The genuine gap is
   narrower: no strfind (contains says whether a pattern occurs, nothing
   reports where), so pattern-directed slicing needs a char-by-char scan.
-  Tokenizers are therefore writable, just laborious — symb.nu's
+  Tokenizers are therefore writable, just laborious — symb.cz's
   constructor API was a choice made on a false premise, and a parser
   remains possible under the freeze. Successor: add strfind; character
   indexing needs nothing.

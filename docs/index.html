@@ -108,7 +108,7 @@
   #docview th { background: #161b22; }
   #docview hr { border: none; border-top: 1px solid #e3e6ea; margin: 22px 0; }
   #docview li { margin: 3px 0; }
-    body.dragging::after { content: ".nu files open in the editor \00b7 data files upload";
+    body.dragging::after { content: ".cz files open in the editor \00b7 data files upload";
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     background: rgba(11,14,20,.85); color: var(--cyan); font-size: 16px;
     border: 2px dashed var(--cyan); z-index: 40; }
@@ -194,8 +194,8 @@
   <div id="editor">
     <div id="edbar">
       <button class="btn" id="ed-run">Run &nbsp;&#9654;</button>
-      <label class="btn">Open<input type="file" id="ed-open" accept=".nu,.txt"></label>
-      <button class="btn" id="ed-save">Save .nu</button>
+      <label class="btn">Open<input type="file" id="ed-open" accept=".cz,.txt"></label>
+      <button class="btn" id="ed-save">Save .cz</button>
       <span class="hint">Ctrl+Enter runs selection (whole buffer if none)</span>
     </div>
     <textarea id="edtext" spellcheck="false" placeholder="% write Neutrino here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
@@ -299,8 +299,8 @@
     writeLine('dim', 'Type an expression and press Enter. help lists the builtins;');
     writeLine('dim', 'help(name) shows one with examples. format(n) sets precision.');
     writeLine('dim', 'plot and hist render as SVG in the Plots panel. Drop files anywhere:');
-    writeLine('dim', '.nu opens in the editor, data files upload for readtable/load.');
-    writeLine('dim', 'The standard packages are preloaded: try load("packages/dist.nu").');
+    writeLine('dim', '.cz opens in the editor, data files upload for readtable/load.');
+    writeLine('dim', 'The standard packages are preloaded: try load("packages/dist.cz").');
     writeLine('dim', 'Type manual (or manual packages) to read the docs in the Docs tab.');
     writeLine('dim', '');
     inputline.style.display = 'flex';
@@ -529,7 +529,7 @@
   document.getElementById('ed-save').addEventListener('click', function () {
     var a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([edtext.value], { type: 'text/plain' }));
-    a.download = 'script.nu'; a.click(); URL.revokeObjectURL(a.href);
+    a.download = 'script.cz'; a.click(); URL.revokeObjectURL(a.href);
   });
 
   /* ---- upload + download-new-files ---- */
@@ -539,7 +539,7 @@
       f.arrayBuffer().then(function (buf) {
         window.NU.FS.writeFile('/' + f.name, new Uint8Array(buf));
         known.add(f.name);
-        var hint = /\.nu$/i.test(f.name) ? 'run it with: load("/' + f.name + '")'
+        var hint = /\.cz$/i.test(f.name) ? 'run it with: load("/' + f.name + '")'
                                           : 'e.g. readtable("/' + f.name + '")';
         nuTerm.writeLine('dim', '(uploaded ' + f.name + ', ' + buf.byteLength + ' bytes — ' + hint + ')');
         nuTerm.scroll();
@@ -552,7 +552,7 @@
     var n = 0, names = window.NU.FS.readdir('/');
     for (var i = 0; i < names.length; i++) {
       var f = names[i];
-      if (known.has(f) || f === '.' || f === '..' || f === '_editor.nu') continue;
+      if (known.has(f) || f === '.' || f === '..' || f === '_editor.cz') continue;
       try {
         if (!window.NU.FS.isFile(window.NU.FS.stat('/' + f).mode)) continue;
         var data = window.NU.FS.readFile('/' + f);
@@ -565,7 +565,7 @@
     nuTerm.scroll();
   });
 
-  /* ---- drag & drop: .nu -> editor, everything else -> MEMFS ---- */
+  /* ---- drag & drop: .cz -> editor, everything else -> MEMFS ---- */
   var dragDepth = 0;
   window.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
   window.addEventListener('dragleave', function () { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });

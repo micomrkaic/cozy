@@ -7,14 +7,14 @@
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 
 ;;; Commentary:
-;; Editing support for Neutrino (.nu): syntax highlighting, block-aware
+;; Editing support for Cozy (.cz): syntax highlighting, block-aware
 ;; indentation, and an inferior REPL.
 ;;
 ;; Install: put this file on your `load-path' and add to your init file:
 ;;   (require 'cozy-mode)
-;; Files ending in .nu open in `cozy-mode' automatically.
+;; Files ending in .cz open in `cozy-mode' automatically.
 ;;
-;; REPL: M-x run-cozy, then from a .nu buffer:
+;; REPL: M-x run-cozy, then from a .cz buffer:
 ;;   C-c C-r  send region      C-c C-b  send buffer
 ;;   C-c C-l  load this file   C-c C-z  switch to the REPL
 ;;
@@ -347,7 +347,7 @@
   (setq-local indent-line-function #'cozy-indent-line))
 
 ;;;###autoload
-(add-to-list 'auto-mode-alist '("\\.nu\\'" . cozy-mode))
+(add-to-list 'auto-mode-alist '("\\.cz\\'" . cozy-mode))
 
 (provide 'cozy-mode)
 ;;; cozy-mode.el ends here

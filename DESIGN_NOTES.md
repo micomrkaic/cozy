@@ -195,7 +195,7 @@ is remembered.
 
 ## 8. Newline-tolerant expressions inside brackets  *(RESOLVED in v1.4.0)*
 
-Writing `packages/dist.nu`, the natural formatting
+Writing `packages/dist.cz`, the natural formatting
 
 ```
 let dist_t_pdf = fn x, v ->
@@ -215,7 +215,7 @@ mean a row separator (Octave) — decide explicitly and document.
 `(`/`[`/`{` — one rule, no special cases; matrix rows always take an
 explicit `;`. Implemented as a bracket-depth counter in the lexer; the
 REPL's existing unterminated-input heuristic then gives multi-line entry
-for free. `dist.nu` reformatted as the proof.
+for free. `dist.cz` reformatted as the proof.
 
 ---
 

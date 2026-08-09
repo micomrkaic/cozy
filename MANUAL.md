@@ -121,14 +121,14 @@ and numbers in a terse 6-significant-digit format; both are configurable — see
 builtins, so they work bare at the prompt (shell muscle memory intact) *and*
 as values: `ls` returns a string array you can pipe, and `cd` actually
 changes the interpreter's directory — which `!cd` cannot (the shell escape
-runs in a child process). Globs work: `ls("*.nu")`. Flags belong to the
+runs in a child process). Globs work: `ls("*.cz")`. Flags belong to the
 shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "sparselin.nu"; "symb.nu"]
+["astro.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
 cozy> cd("packages");
-cozy> load("dist.nu"); norm.cdf(0, 0, 1)
+cozy> load("dist.cz"); norm.cdf(0, 0, 1)
 0.5
 cozy> cd("..");
 ```
@@ -683,20 +683,20 @@ cozy> fields({} |> setfield(@, "lo", 1) |> setfield(@, "hi", 2))
 
 ### Packages: `load`
 
-`load("file.nu")` runs a file in the current session; its `let` bindings
+`load("file.cz")` runs a file in the current session; its `let` bindings
 persist afterwards. A package is just a file of definitions — and a record
 of closures makes a namespace, so packages don't collide:
 
 ```
-cozy> load("tests/data/mathlib.nu")
+cozy> load("tests/data/mathlib.cz")
 cozy> cube(4)
 64
 cozy> geo.hyp([3, 4])
 5
 ```
 
-`save("ws.nu")` writes the whole workspace — every variable and function —
-as reloadable source; restore it with `load("ws.nu")`. The file is plain
+`save("ws.cz")` writes the whole workspace — every variable and function —
+as reloadable source; restore it with `load("ws.cz")`. The file is plain
 Neutrino, so it is readable and editable. Functions that capture variables
 (closures made by other functions) cannot be serialized and refuse with a
 clear message; a failed save leaves no file behind. `body(f)` prints the
@@ -759,7 +759,7 @@ gnuplot installed?`). Setting `NEUTRINO_PLOT_TERM=ascii` renders
 deterministic text plots into the terminal instead, and
 `NEUTRINO_PLOT_TERM=svg` writes standalone `plot_N.svg` files (dark
 palette). In the **browser** the default is the SVG backend, rendered into
-the workbench's Plots pane. For scatter plots, `packages/scatter.nu` wraps
+the workbench's Plots pane. For scatter plots, `packages/scatter.cz` wraps
 the `style = "points"` path every backend honors.
 
 `plot(y)` plots a vector against its index; `plot(x, y)` plots pairs; if `y` is
@@ -811,7 +811,7 @@ file:
 
 ```sh
 NEUTRINO_PLOT_TERM="pngcairo size 800,500" NEUTRINO_PLOT_OUT=fig.png \
-  ./neutrino script.nu
+  ./neutrino script.cz
 ```
 
 (`NEUTRINO_PLOT_TERM="dumb size 76,20"` draws ASCII plots straight into the
@@ -998,14 +998,14 @@ cozy> nnz(sprand(100, 100, 0.05))
 
 ## 16. Scripts and tools
 
-`neutrino file.nu` runs a script (top level is a statement sequence; `#`/`%`
+`neutrino file.cz` runs a script (top level is a statement sequence; `#`/`%`
 comments). The binary also exposes the compiler pipeline:
 
 | Invocation | Shows |
 |---|---|
-| `neutrino --tokens file.nu` | the token stream |
-| `neutrino --ast file.nu` | the parse tree |
-| `neutrino --dis file.nu` | the compiled bytecode, statement by statement |
+| `neutrino --tokens file.cz` | the token stream |
+| `neutrino --ast file.cz` | the parse tree |
+| `neutrino --dis file.cz` | the compiled bytecode, statement by statement |
 
 `tic` starts a monotonic wall-clock timer and `toc()` returns the elapsed
 seconds — bare `toc` as a statement echoes it, but in an expression position
@@ -1029,14 +1029,14 @@ files" saves them.
 
 ## Editors
 
-**Emacs.** `editors/neutrino-mode.el` provides a major mode for `.nu` files:
+**Emacs.** `editors/neutrino-mode.el` provides a major mode for `.cz` files:
 syntax highlighting (the builtin list is generated from the interpreter's own
 documentation table, so it cannot drift), `%` comments, block-aware
 indentation, and an inferior REPL. Put the file on your `load-path` and
 `(require 'neutrino-mode)`; then `M-x run-neutrino` starts the REPL, and from
-any `.nu` buffer `C-c C-r` sends the region, `C-c C-b` the buffer,
+any `.cz` buffer `C-c C-r` sends the region, `C-c C-b` the buffer,
 `C-c C-l` loads the file, `C-c C-z` jumps to the REPL. On GitHub, a
-`.gitattributes` rule highlights `.nu` as Octave — close enough until
+`.gitattributes` rule highlights `.cz` as Octave — close enough until
 linguist learns Neutrino.
 
 ### The workspace stays readable: load groups
@@ -1049,11 +1049,11 @@ session your own definitions stay findable at a glance. `who("name")`
 (`who("functions")`, `who("vars")`, ...) remain flat, as before.
 
 ```
-cozy> load("packages/scatter.nu")
+cozy> load("packages/scatter.cz")
 cozy> let zq = 5
 5
 cozy> who
-  packages/scatter.nu      3 names   (who("scatter") to list)
+  packages/scatter.cz      3 names   (who("scatter") to list)
   zq           int        = 5
 cozy> who("scatter")
   scatter      function   (2 params)
@@ -1068,11 +1068,11 @@ with the same name as a shelf wins the dispute). The registry follows
 names, not values — a rebound name stays on its shelf.
 
 ```
-cozy> load("packages/scatter.nu")
+cozy> load("packages/scatter.cz")
 cozy> let zq = 5
 5
 cozy> clear("scatter"); who
-  packages/scatter.nu      2 names   (who("scatter") to list)
+  packages/scatter.cz      2 names   (who("scatter") to list)
   zq           int        = 5
 ```
 
@@ -1107,9 +1107,9 @@ cozy> clear("scatter"); who
 | `size(x)` | [rows, cols] of x (a scalar is 1x1) |
 | `length(x)` | longest dimension of x (0 if empty) |
 | `numel(x)` | number of elements (rows*cols) |
-| `save("file.nu")` | write all variables and functions as reloadable source (restore with load) |
+| `save("file.cz")` | write all variables and functions as reloadable source (restore with load) |
 | `body(f)` | print the source of a user-defined function |
-| `load("file.nu")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) |
+| `load("file.cz")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) |
 | `eval("code")` | run a string as Neutrino code in this session; returns the last value |
 | `names() \| names("vars"\|"funcs")` | your workspace names as a sorted string column (the programmatic who) |
 | `clear() \| clear("a", ...)` | remove all user variables, or the named ones; clearing a shadow restores the standard-library original |
@@ -1162,7 +1162,7 @@ cozy> clear("scatter"); who
 | `readtable(file[, opts])` | CSV with a header -> record of column vectors named from the header |
 | `pwd` | the current working directory, as a string |
 | `cd("dir") \| cd` | change the working directory (persists, unlike !cd); bare cd goes home |
-| `ls \| ls("dir") \| ls("*.nu")` | directory listing as a string array (globs supported) |
+| `ls \| ls("dir") \| ls("*.cz")` | directory listing as a string array (globs supported) |
 | `input("prompt")` | read one line from the keyboard as a string (window.prompt in the browser) |
 | `pause() \| pause("msg")` | wait for the user before continuing (alert in the browser) |
 

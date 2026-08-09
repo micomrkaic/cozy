@@ -5,7 +5,7 @@ polynomials, finance, a solar almanac, structured random matrices,
 physical constants, scatter plots,
 symbolic differentiation, and a guided tour — all written in Neutrino itself.*
 
-A package is a file of `let` definitions; `load("packages/name.nu")` runs it
+A package is a file of `let` definitions; `load("packages/name.cz")` runs it
 in the current session and its bindings persist. Records of closures act as
 namespaces (`norm.cdf`), and packages validate their inputs with `assert`, so
 they fail like builtins do — with a message, not an accident. Every transcript
@@ -16,7 +16,7 @@ against an independent reference (SciPy, NumPy, Python's `datetime`, or the
 
 ---
 
-## 1. dist.nu — probability distributions
+## 1. dist.cz — probability distributions
 
 Six distributions — `norm`, `student`, `chi2`, `fdist`, `expo`, `unif` —
 each a record with `pdf`, `cdf`, `inv` (quantile), and `rand`. Parameters are
@@ -25,7 +25,7 @@ expansion plus `fzero` on the CDF; the quantile domain is `0 < p < 1`.
 Cross-checked against SciPy (`tests/34_dist.test`).
 
 ```
-cozy> load("packages/dist.nu")
+cozy> load("packages/dist.cz")
 cozy> norm.cdf(1.96, 0, 1)
 0.975002
 cozy> norm.inv(0.975, 0, 1)
@@ -41,7 +41,7 @@ cozy> fdist.cdf(3.0, 4, 20)
 A complete two-sample t-test — simulate, test, decide:
 
 ```
-cozy> load("packages/dist.nu")
+cozy> load("packages/dist.cz")
 cozy> rng(42)
 cozy> let x1 = norm.rand(40, 100, 15)
 [75.8016; 123.017; 111.725; 93.9971; 100.238; 98.0904; 107.158; 90.1486; 90.4082; 94.4609; 96.6851; 112.686; 95.6656; 109.003; 108.909; 91.3959; 108.772; 88.1456; 96.7325; 87.9582; 114.106; 129.505; 84.513; 88.4457; 77.2211; 101.549; 104.948; 80.2774; 101.673; 114.196; 85.7196; 86.121; 107.652; 97.2319; 99.8187; 90.3843; 110.037; 102.904; 118.182; 96.7784]
@@ -56,7 +56,7 @@ cozy> 2 * (1 - student.cdf(abs(t), 78))
 Out-of-domain probabilities refuse with the package's own message:
 
 ```
-cozy> load("packages/dist.nu")
+cozy> load("packages/dist.cz")
 error: quantile: p must be in (0,1), got 1.5
 cozy> student.inv(1.5, 10)
 ```
@@ -73,7 +73,7 @@ cozy> student.inv(1.5, 10)
 
 ---
 
-## 2. poly.nu — polynomials
+## 2. poly.cz — polynomials
 
 Coefficients are row vectors, highest power first: `[2, -3, 1]` is
 2x² − 3x + 1. Roots come from the companion matrix and `eig` — the same
@@ -81,7 +81,7 @@ algorithm Octave uses, on Neutrino's LAPACK-verified eigensolver.
 Cross-checked against NumPy (`tests/37_poly.test`).
 
 ```
-cozy> load("packages/poly.nu")
+cozy> load("packages/poly.cz")
 cozy> polyval([2, -3, 1], 4)
 21
 cozy> roots([1, -6, 11, -6])'
@@ -95,7 +95,7 @@ cozy> companion([1, -6, 11, -6])
 Least-squares fitting (Vandermonde + backslash), and calculus that inverts:
 
 ```
-cozy> load("packages/poly.nu")
+cozy> load("packages/poly.cz")
 cozy> let x = [0, 1, 2, 3, 4]
 [0, 1, 2, 3, 4]
 cozy> let y = [1.1, 2.9, 9.2, 19.1, 32.8]
@@ -122,7 +122,7 @@ cozy> conv([1, -1], [1, -2])
 
 ---
 
-## 3. finance.nu — the HP-12C's greatest hits
+## 3. finance.cz — the HP-12C's greatest hits
 
 Time value of money, cash flows, bonds, amortization, and date arithmetic.
 Sign convention (HP-12C): money received is positive, money paid is negative;
@@ -132,7 +132,7 @@ rates are per period, as decimals. Cross-checked against SciPy and Python's
 The mortgage block — payment, implied rate, savings growth:
 
 ```
-cozy> load("packages/finance.nu")
+cozy> load("packages/finance.cz")
 cozy> pmt(360, 0.005, 250000, 0)
 -1498.88
 cozy> rate(360, 250000, -1498.876313, 0)
@@ -144,7 +144,7 @@ cozy> fv(120, 0.004, 0, -200)
 Cash flows and bonds:
 
 ```
-cozy> load("packages/finance.nu")
+cozy> load("packages/finance.cz")
 cozy> npv(0.10, [-1000, 300, 420, 680])
 130.729
 cozy> irr([-1000, 300, 420, 680])
@@ -161,7 +161,7 @@ cozy> bond_mduration(100, 0.08, 0.06, 10, 1)
 frame you can index, sum, and plot:
 
 ```
-cozy> load("packages/finance.nu")
+cozy> load("packages/finance.cz")
 cozy> let s = amort(1000, 0.01, 3)
 {period = [1; 2; 3], payment = [340.022; 340.022; 340.022], interest = [10; 6.69978; 3.36656], principal = [330.022; 333.322; 336.656], balance = [669.978; 336.656; 4.26326e-12]}
 cozy> fields(s)'
@@ -180,7 +180,7 @@ the bond market's 30/360 convention. `datestr` returns a display string,
 arithmetic reads naturally — `datestr(today() + 90)` is the date in 90 days:
 
 ```
-cozy> load("packages/finance.nu")
+cozy> load("packages/finance.cz")
 cozy> days(2026, 1, 1, 2026, 7, 9)
 189
 cozy> datestr(datenum(2026, 7, 17) + 90)
@@ -223,7 +223,7 @@ true
 
 ---
 
-## 4. astro.nu — the solar almanac
+## 4. astro.cz — the solar almanac
 
 Sunrise, sunset, three grades of twilight, solar noon, day length, sun
 position, and moon phase, for any latitude and longitude (degrees; north and
@@ -233,7 +233,7 @@ minute of the `astral` reference library (`tests/39_astro.test`). A `places`
 record preloads coordinates for several cities.
 
 ```
-cozy> load("packages/astro.nu")
+cozy> load("packages/astro.cz")
 cozy> hm(sunrise(places.alexandria_va.lat, places.alexandria_va.lon, 2026, 7, 10, -4))
 "05:52"
 cozy> hm(sunset(places.duluth_ga.lat, places.duluth_ga.lon, 2026, 7, 10, -4))
@@ -248,7 +248,7 @@ Planning a drive to arrive before dark — civil dawn at the origin to civil
 dusk at the destination:
 
 ```
-cozy> load("packages/astro.nu")
+cozy> load("packages/astro.cz")
 cozy> let w = drive_daylight(places.alexandria_va, places.duluth_ga, 2026, 7, 10, -4)
 {depart_dawn = 5.34382, depart_rise = 5.86728, arrive_set = 20.8376, arrive_dusk = 21.3161, window_hours = 15.9723}
 cozy> hm(w.depart_dawn) + " to " + hm(w.arrive_dusk)
@@ -260,7 +260,7 @@ cozy> w.window_hours
 Sun position, moon illumination, and the honest polar refusal:
 
 ```
-cozy> load("packages/astro.nu")
+cozy> load("packages/astro.cz")
 error: the sun does not cross 90.833 degrees at latitude 80 on 2026-6-21
 cozy> let p = sun_position(38.8048, -77.0469, 2026, 7, 10, 13.22, -4)
 {alt = 73.3594, az = 179.65}
@@ -289,9 +289,9 @@ cozy> sunrise(80, 0, 2026, 6, 21, 0)
 
 ---
 
-## 5. rmt.nu — random matrices, structured
+## 5. rmt.cz — random matrices, structured
 
-`packages/rmt.nu` is sugar over `randn`/`qr`/`eye` for the matrices you
+`packages/rmt.cz` is sugar over `randn`/`qr`/`eye` for the matrices you
 actually reach for at the prompt: symmetric, positive definite (chol-safe by
 construction: eigenvalues at least 1), Haar orthogonal, permutations and
 their matrices, correlation, row-stochastic (random Markov chains), and the
@@ -300,7 +300,7 @@ Gaussian orthogonal ensemble — whose spectrum follows Wigner's semicircle on
 reproducible under `rng(seed)`.
 
 ```
-cozy> load("packages/rmt.nu")
+cozy> load("packages/rmt.cz")
 cozy> format(6)
 cozy> rng(11)
 cozy> randorth(2)
@@ -327,9 +327,9 @@ cozy> let H = goe(200); max(abs(eig(H).values))
 | `randstoch(n)` | `let T = randstoch(4); max(abs(sum(T, 2) - 1)) < 1e-12` | `true` |
 | `goe(n)` | `let H = goe(150); max(abs(eig(H).values)) < 2.4` | `true` |
 
-## 6. phys.nu — physical constants
+## 6. phys.cz — physical constants
 
-`packages/phys.nu` is the CODATA 2018 constants as a record — exact where
+`packages/phys.cz` is the CODATA 2018 constants as a record — exact where
 the 2019 SI redefinition makes them exact (`c`, `h`, `k`, `NA`, `qe`), the
 recommended values elsewhere. The transcript computes Earth's surface
 gravity from `G`, recovers the speed of light from Maxwell's relation
@@ -337,7 +337,7 @@ gravity from `G`, recovers the speed of light from Maxwell's relation
 electron volts:
 
 ```
-cozy> load("packages/phys.nu")
+cozy> load("packages/phys.cz")
 cozy> format(6)
 cozy> phys.c
 299792458
@@ -365,7 +365,7 @@ cozy> phys.k * 300 / phys.eV
 | `phys.sigma` | `phys.sigma` | `5.67037e-08` |
 | `phys.ly / phys.au` | `phys.ly / phys.au` | `63241.1` |
 
-## 7. scatter.nu — scatter plots without touching the core
+## 7. scatter.cz — scatter plots without touching the core
 
 Proof that the frozen language plots more than it appears to: `plot()`'s
 `style = "points"` option is honored by every backend (SVG circles in the
@@ -377,7 +377,7 @@ the package's header says so. The transcript exercises the numeric helper;
 the SVG output itself is asserted by the plot test suite:
 
 ```
-cozy> load("packages/scatter.nu")
+cozy> load("packages/scatter.cz")
 cozy> rng(1); let j = jitter(1:100, 0.1);
 cozy> max(abs(j - (1:100))) <= 0.05
 true
@@ -391,14 +391,14 @@ cozy> size(jitter(rand(3, 4), 0.2))
 | `jitter preserves shape` | `size(jitter(rand(3, 4), 0.2)) == [3, 4]` | `[true, true]` |
 | `mean displacement is small` | `abs(mean(jitter(zeros(1, 2000), 0.2))) < 0.01` | `true` |
 
-## 8. symb.nu — symbolic differentiation
+## 8. symb.cz — symbolic differentiation
 
 A symbolic differentiator in pure Neutrino, addressed in mathematics and
 answering in it. The front door is a string:
 
 ```
 cozy> format(6)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> deriv("sin(x)/x")
 "((cos(x) / x) - (sin(x) / x^2))"
 cozy> deriv("x^x")
@@ -447,7 +447,7 @@ from pure record recursion:
 
 ```
 cozy> format(4)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> let e = add(powc(X, 3), mul(C(5), sinx(X)));
 cozy> show(simp(ddx(e)))
 "((3 * x^2) + (5 * cos(x)))"
@@ -479,15 +479,15 @@ KNOWN_LIMITATIONS — the goldens outrank the maintainer's memory.)*
 | `dfun: derivative as a function` | `abs(dfun("x^3")(2) - 12) < 1e-12` | `true` |
 | `FTC: integral of dfun is the change` | `abs(integral(dfun("x^3"), 1, 2) - 7) < 1e-6` | `true` |
 
-## 9. demo.nu — the tour
+## 9. demo.cz — the tour
 
-Not a library: a performance. `load("packages/demo.nu")` plays a guided
+Not a library: a performance. `load("packages/demo.cz")` plays a guided
 tour in six acts — executable mathematics (Basel, the Gaussian
 integral), the blackboard's word order (`where`, chained masks),
 functions as values (anonymous application, Euclid's recursion, n-fold
 self-composition converging on the golden ratio), the pipelines act with
 both crown jewels (the oscillation pipe — values flavor-changing between
-~> and |> down one chain — and the fan-out dashboard), the calculus (symb.nu's `deriv` and a symbolic derivative fed to
+~> and |> down one chain — and the fan-out dashboard), the calculus (symb.cz's `deriv` and a symbolic derivative fed to
 `fzero`), money (the HP-12C mortgage), and a plotted finale. Every
 demonstration is a SINGLE SOURCE STRING — printed as the caption and
 executed by `eval` — so what the tour shows is, byte for byte, what it
@@ -500,10 +500,10 @@ instantly at EOF. One file, every temperament. Seeded where random,
 deterministic throughout. Point a newcomer at this file first.
 
 ```
-cozy> load("packages/demo.nu")
+cozy> load("packages/demo.cz")
 ```
 
-## 10. sparselin.nu — iterative sparse linear algebra
+## 10. sparselin.cz — iterative sparse linear algebra
 
 The design's answer to `S \ b` and `eig(S)`: solvers as packages on the
 founding kernel `S * v`, in pure Cozy. `cg(A, b)` solves symmetric
@@ -513,10 +513,10 @@ dominant eigenpair `{value, vector, iters}` by power iteration with a
 Rayleigh-quotient estimate (deterministic start; `powerit_from(A, x0)`
 to choose your own). Both also accept dense matrices — anything with `*`
 and a column vector works. The dense-only kernels gate with pointers
-here: `eig(S)` and friends name `sparselin.nu` in their error messages.
+here: `eig(S)` and friends name `sparselin.cz` in their error messages.
 
 ```
-cozy> load("packages/sparselin.nu")
+cozy> load("packages/sparselin.cz")
 cozy> let A = sparse([4, 1, 0; 1, 3, 1; 0, 1, 5]); let s = cg(A, [1; 2; 3]); s.x
 [0.137255; 0.45098; 0.509804]
 cozy> s.iters

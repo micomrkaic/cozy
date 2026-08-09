@@ -102,7 +102,7 @@ prompt that deserved a verb.
 
 ## 4. First-class differentiation (dual numbers + quotation)
 
-**Motivation.** Neutrino's symb.nu proved symbolic differentiation is
+**Motivation.** Neutrino's symb.cz proved symbolic differentiation is
 expressible with expression trees as records — but only via constructor
 entry (add(powc(X, 3), ...)), because functions' syntax is invisible and
 operators cannot be overloaded. Cozy should differentiate *functions as
@@ -121,11 +121,11 @@ Estimated scope: the complex kind's footprint again — well-trodden.
 
 **4b. Quotation — ast(f) exposes the tree the function already carries.**
 One reflection builtin returning a function's body as nested records in
-the symb.nu encoding ({op, l, r, v, n}), differentiation-by-recursion
+the symb.cz encoding ({op, l, r, v, n}), differentiation-by-recursion
 staying entirely in packages. Rules: the tree is reported with respect to
 the lambda's parameters; free and captured names appear as named
 constants; ast of a builtin is an error. Optional inverse (defn(tree))
-can wait — symb.nu's evalx already interprets trees. Deleting symb.nu's
+can wait — symb.cz's evalx already interprets trees. Deleting symb.cz's
 constructors and pointing ddx at ast(f) upgrades the package from clever
 hack to real symbolic engine with no grammar change.
 
@@ -184,7 +184,7 @@ by asking "how do I iterate columns?". The setfield fold needs no such
 container and replaces the constructor outright. Canonical idioms:
   fields(t) ~> (fn n -> mean(getfield(t, n)))          % consume, uniform
   colmap = fold {} over names with setfield             % produce a table
-table.nu's colmap/select/filter/summary are all the second shape.
+table.cz's colmap/select/filter/summary are all the second shape.
 With these, generic record map/filter/merge, k=v parsing, and
 serialization round-trips (str one way, parse + record the other) all
 live in packages. Same reflection family as ast(f) (entry 4b): the core
@@ -216,13 +216,13 @@ table).
 
 **Patterns, not kinds.**
 - *Tables* = record-of-columns (readtable's existing shape) + the
-  reflection trio (entry 5) + a table.nu package for select/filter/
+  reflection trio (entry 5) + a table.cz package for select/filter/
   group-by. R's data.frame is a library convention; so is Cozy's table.
   Core owes at most a pretty-printer.
-- *Sets* = set.nu over sorted arrays (union is unique of concat). A set
+- *Sets* = set.cz over sorted arrays (union is unique of concat). A set
   kind waits for a hashing-performance friction transcript that does not
   yet exist.
-- *Dates* = Julian day numbers as floats — finance.nu is the friction
+- *Dates* = Julian day numbers as floats — finance.cz is the friction
   transcript FOR parsimony; no datetime kind.
 
 **Rejected: lists (heterogeneous sequences).** This is Octave's cell
@@ -258,7 +258,7 @@ third-order derivative a session actually needs.
 
 **Decision.** Cozy gets no module kind, no import statement, no namespace
 syntax. Packages that want a namespace pack their public API into a
-record — dist.nu's norm.cdf proved the pattern in Neutrino production —
+record — dist.cz's norm.cdf proved the pattern in Neutrino production —
 and the reflection pair (entry 5) makes such records programmable:
 fields(pkg) is the manifest, getfield the dynamic door. One mechanism,
 no new kind: the type inventory's patterns-over-kinds philosophy applied

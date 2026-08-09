@@ -18,17 +18,17 @@ eulergamma < 0.58
 # constants shadow like builtins
 let pi = 3; pi * 2
 => 6
-# phys.nu: CODATA constants, exact where the SI defines them exactly
-load("packages/phys.nu"); phys.c == 299792458
+# phys.cz: CODATA constants, exact where the SI defines them exactly
+load("packages/phys.cz"); phys.c == 299792458
 => true
-load("packages/phys.nu"); phys.NA == 6.02214076e23
+load("packages/phys.cz"); phys.NA == 6.02214076e23
 => true
-load("packages/phys.nu"); abs(phys.R - phys.k * phys.NA) == 0
+load("packages/phys.cz"); abs(phys.R - phys.k * phys.NA) == 0
 => true
-load("packages/phys.nu"); abs(phys.hbar * 2 * pi - phys.h) < 1e-45
+load("packages/phys.cz"); abs(phys.hbar * 2 * pi - phys.h) < 1e-45
 => true
 # Maxwell's relation from the constants themselves
-load("packages/phys.nu"); abs(1 / sqrt(phys.eps0 * phys.mu0) - phys.c) / phys.c < 1e-9
+load("packages/phys.cz"); abs(1 / sqrt(phys.eps0 * phys.mu0) - phys.c) / phys.c < 1e-9
 => true
 # constants are standard library: invisible to who, immune to clear
 who

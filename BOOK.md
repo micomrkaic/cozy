@@ -34,11 +34,11 @@ Neutrino itself. This book is about *using* the thing.
 12. Probability, statistics, and data
 13. Plotting
 14. The Neutrino idiom — combinations of the unique syntax
-Appendix A. Finance (finance.nu)
-Appendix B. Astronomy (astro.nu)
-Appendix C. Physics (phys.nu)
-Appendix D. Random matrices (rmt.nu)
-Appendix E. Symbolic differentiation (symb.nu)
+Appendix A. Finance (finance.cz)
+Appendix B. Astronomy (astro.cz)
+Appendix C. Physics (phys.cz)
+Appendix D. Random matrices (rmt.cz)
+Appendix E. Symbolic differentiation (symb.cz)
 Appendix F. Index of builtins
 
 ---
@@ -262,8 +262,8 @@ string functions ride the pipes like everything else:
 
 ```
 cozy> ls("packages")
-["astro.nu"; "demo.nu"; "dist.nu"; "finance.nu"; "phys.nu"; "poly.nu"; "rmt.nu"; "scatter.nu"; "sparselin.nu"; "symb.nu"]
-cozy> ans ~> (fn f -> endswith(f, ".nu")) |> all
+["astro.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
+cozy> ans ~> (fn f -> endswith(f, ".cz")) |> all
 true
 cozy> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
 6
@@ -553,11 +553,11 @@ week, preserved and restored:
 
 ```
 cozy> let rate = 0.0575; let horizon = 30; let goal = 250000;
-cozy> save("/tmp/mycase.nu")
+cozy> save("/tmp/mycase.cz")
 cozy> clear(); who
 (no variables defined)
-cozy> load("/tmp/mycase.nu"); who
-  /tmp/mycase.nu           3 names   (who("mycase") to list)
+cozy> load("/tmp/mycase.cz"); who
+  /tmp/mycase.cz           3 names   (who("mycase") to list)
 cozy> who("mycase")
   rate         float      = 0.0575
   horizon      int        = 30
@@ -724,7 +724,7 @@ the fan-out doesn't care who wrote its entries.
 ![](vignettes/vin10.png)
 
 `integral` (adaptive Simpson), `fzero` (Brent root-finding), `fminbnd`
-(bounded minimization), and poly.nu's exact polynomial calculus.
+(bounded minimization), and poly.cz's exact polynomial calculus.
 
 **Problem 10.1 — Work against gravity.** Lifting 4000 N to 400 km, gravity
 fading with altitude as 1/(1 + h/R)²; h in km, R = 6371 km.
@@ -783,7 +783,7 @@ orbit propagator on Earth does this daily.
 exact integral (via `polyint`) with adaptive quadrature.
 
 ```
-cozy> load("packages/poly.nu"); format(4)
+cozy> load("packages/poly.cz"); format(4)
 cozy> let p = [1, -2, 0, 3];
 cozy> polyval(p, 2)
 3
@@ -1042,7 +1042,7 @@ centuries of analysis.
 ![](vignettes/vin11.png)
 
 Matrices are the native tongue: `\` solves systems, `eig`, `lu`, `qr`,
-`svd`, `chol` decompose, and poly.nu's `polyfit` does least squares.
+`svd`, `chol` decompose, and poly.cz's `polyfit` does least squares.
 
 **Problem 11.1 — The mixing problem.**
 
@@ -1089,7 +1089,7 @@ final demand, the rest consumed in production itself.
 fit a line, predict the next point.
 
 ```
-cozy> load("packages/poly.nu"); format(4)
+cozy> load("packages/poly.cz"); format(4)
 cozy> let t = [0, 1, 2, 3, 4, 5]; let y = [2.1, 3.9, 6.2, 7.8, 10.1, 12.2];
 cozy> let c = polyfit(t, y, 1)
 [2.020, 2.000]
@@ -1132,7 +1132,7 @@ algebra is in the core.
 
 ![](vignettes/vin12.png)
 
-dist.nu supplies the distributions; `writecsv`/`readcsv` move data in and
+dist.cz supplies the distributions; `writecsv`/`readcsv` move data in and
 out; seeded `rng` makes every simulation a repeatable experiment.
 
 **Problem 12.1 — Acceptance sampling.** A lot ships if a 20-piece sample
@@ -1140,7 +1140,7 @@ shows at most 2 defectives. At a true 5% defect rate, how often does a lot
 fail? The binomial probability, from first principles:
 
 ```
-cozy> load("packages/dist.nu"); format(4)
+cozy> load("packages/dist.cz"); format(4)
 cozy> let p_defect = fn k -> gamma(21) / (gamma(k + 1) * gamma(21 - k)) * 0.05 ^ k * 0.95 ^ (20 - k)
 <fn/1>
 cozy> sum[k = 0:2] p_defect(k)
@@ -1282,11 +1282,11 @@ takes the same options; `yrange` anchors the axis when comparing
 histograms across runs.
 
 **Problem 13.3 — A scatter with the package.** Noisy line data through
-scatter.nu (Appendix and PACKAGES.md §7): pure Neutrino over the frozen
+scatter.cz (Appendix and PACKAGES.md §7): pure Neutrino over the frozen
 `style = "points"` path.
 
 ```
-cozy> load("packages/scatter.nu")
+cozy> load("packages/scatter.cz")
 cozy> rng(4); let x = rand(1, 40); let noise = randn(1, 40) * 0.15;
 cozy> scatter_titled(x, 2 * x + noise, "y = 2x + noise")
   y = 2x + noise
@@ -1469,7 +1469,7 @@ because they *are* functions.
 
 ---
 
-## Appendix A. Finance (finance.nu)
+## Appendix A. Finance (finance.cz)
 
 ![](vignettes/vinA.png)
 
@@ -1478,7 +1478,7 @@ because they *are* functions.
 extra per month.
 
 ```
-cozy> load("packages/finance.nu")
+cozy> load("packages/finance.cz")
 cozy> let price = 425000; let down = 0.20;
 cozy> let principal = price * (1 - down)
 340000
@@ -1498,7 +1498,7 @@ cozy> nper(0.0575 / 12, principal, -1984.15 - 300, 0) / 12
 the market yields 5.2%.
 
 ```
-cozy> load("packages/finance.nu"); format(4)
+cozy> load("packages/finance.cz"); format(4)
 cozy> bond_price(0.045, 0.052, 10, 2, 100)
 0.0002340
 cozy> bond_duration(0.045, 0.052, 10, 2, 100)
@@ -1512,7 +1512,7 @@ modified-duration machinery one call away.
 years of cash flows.
 
 ```
-cozy> load("packages/finance.nu"); format(2)
+cozy> load("packages/finance.cz"); format(2)
 cozy> let cf = [-50000, 12000, 15000, 18000, 21000, 9000];
 cozy> npv(0.08, cf)
 9.8e+03
@@ -1527,7 +1527,7 @@ decision survives any discount rate below that.
 by 200,000 simulated paths.
 
 ```
-cozy> load("packages/dist.nu"); format(4)
+cozy> load("packages/dist.cz"); format(4)
 cozy> let s0 = 100; let strike = 105; let r = 0.03; let sig = 0.2; let T = 1;
 cozy> let d1 = (log(s0 / strike) + (r + sig ^ 2 / 2) * T) / (sig * sqrt(T));
 cozy> let bs = s0 * norm.cdf(d1, 0, 1) - strike * exp(-r * T) * norm.cdf(d1 - sig * sqrt(T), 0, 1)
@@ -1543,7 +1543,7 @@ begin to trust it on the contracts that have no formula.
 
 ---
 
-## Appendix B. Astronomy (astro.nu)
+## Appendix B. Astronomy (astro.cz)
 
 ![](vignettes/vinB.png)
 
@@ -1551,7 +1551,7 @@ begin to trust it on the contracts that have no formula.
 length at 46.05°N, 14.51°E, UTC+2.
 
 ```
-cozy> load("packages/astro.nu")
+cozy> load("packages/astro.cz")
 cozy> hm(sunrise(46.05, 14.51, 2026, 7, 25, 2))
 "05:36"
 cozy> hm(sunset(46.05, 14.51, 2026, 7, 25, 2))
@@ -1567,7 +1567,7 @@ package carries coordinates so you needn't.
 **Problem B.2 — Tonight's moon.**
 
 ```
-cozy> load("packages/astro.nu"); format(3)
+cozy> load("packages/astro.cz"); format(3)
 cozy> moon_age(2026, 7, 25)
 10.7
 cozy> moon_illum(2026, 7, 25) * 100
@@ -1580,7 +1580,7 @@ twenty days.
 
 ---
 
-## Appendix C. Physics (phys.nu)
+## Appendix C. Physics (phys.cz)
 
 ![](vignettes/vinC.png)
 
@@ -1588,7 +1588,7 @@ twenty days.
 orbit; escape speed from the surface.
 
 ```
-cozy> load("packages/phys.nu"); format(4)
+cozy> load("packages/phys.cz"); format(4)
 cozy> let Me = 5.972e24; let Re = 6.371e6;
 cozy> sqrt(phys.G * Me / (Re + 4e5))
 7672.
@@ -1604,7 +1604,7 @@ electron volts, and the thermal wavelength of the cosmic microwave
 background.
 
 ```
-cozy> load("packages/phys.nu"); format(4)
+cozy> load("packages/phys.cz"); format(4)
 cozy> phys.k * 300 / phys.eV
 0.02585
 cozy> phys.hbar * phys.c / (phys.k * 2.7255) * 1000
@@ -1617,7 +1617,7 @@ found by a microwave antenna.
 
 ---
 
-## Appendix D. Random matrices (rmt.nu)
+## Appendix D. Random matrices (rmt.cz)
 
 ![](vignettes/vinD.png)
 
@@ -1625,7 +1625,7 @@ found by a microwave antenna.
 400 × 400 GOE matrix.
 
 ```
-cozy> load("packages/rmt.nu"); rng(1); format(3)
+cozy> load("packages/rmt.cz"); rng(1); format(3)
 cozy> let H = goe(400);
 cozy> let lam = eig(H).values;
 cozy> max(abs(lam))
@@ -1641,7 +1641,7 @@ hardware.
 
 ---
 
-## Appendix E. Symbolic differentiation (symb.nu)
+## Appendix E. Symbolic differentiation (symb.cz)
 
 ![](vignettes/vinE.png)
 
@@ -1649,7 +1649,7 @@ hardware.
 
 ```
 cozy> format(4)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> let e = add(powc(X, 3), mul(C(5), sinx(X)));
 cozy> show(simp(ddx(e)))
 "((3 * x^2) + (5 * cos(x)))"
@@ -1669,7 +1669,7 @@ operators are all just values.
 
 ```
 cozy> format(4)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> taylor(sinx(X), 7)
 [0.000, 1.000, -0.000, -0.1667, 0.000, 0.008333, -0.000, -0.0001984]
 cozy> taylor(expx(X), 5)
@@ -1692,7 +1692,7 @@ it:
 
 ```
 cozy> format(4)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> deriv("sin(x)/x")
 "((cos(x) / x) - (sin(x) / x^2))"
 cozy> deriv("x^3 + 5*sin(x)")
@@ -1724,7 +1724,7 @@ ecosystem:
 
 ```
 cozy> format(6)
-cozy> load("packages/symb.nu")
+cozy> load("packages/symb.cz")
 cozy> let f = dfun("sin(x)/x");
 cozy> fzero(f, 4, 5)
 4.49341
@@ -1840,12 +1840,12 @@ language.
 | `lgamma` | `lgamma(x)` | log of \|gamma(x)\| (real, elementwise) | math |
 | `linspace` | `linspace(a, b, n)` | row of n points evenly spaced from a to b inclusive | arrays |
 | `ln` | `ln(x)` | natural logarithm (alias for log) | math |
-| `load` | `load("file.nu")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) | core |
+| `load` | `load("file.cz")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) | core |
 | `log` | `log(x)` | natural logarithm (complex for negatives) | math |
 | `log10` | `log10(x)` | base-10 logarithm (complex for negatives) | math |
 | `log2` | `log2(x)` | base-2 logarithm (complex for negatives) | math |
 | `lower` | `lower(s)` | lowercase (ASCII bytes) | strings |
-| `ls` | `ls \| ls("dir") \| ls("*.nu")` | directory listing as a string array (globs supported) | files |
+| `ls` | `ls \| ls("dir") \| ls("*.cz")` | directory listing as a string array (globs supported) | files |
 | `lu` | `lu(A)` | LU with partial pivoting -> {L, U, p}, so P*A = L*U | linear algebra |
 | `manual` | `manual [doc]` | page rendered documentation: manual, manual book\|packages\|changelog\|lessons\|design\|readme | repl |
 | `map` | `map(f, A)` | apply f to each element of A, returning an array of results | functional |
@@ -1887,7 +1887,7 @@ language.
 | `reshape` | `reshape(A, r, c)` | reinterpret A's elements as r-by-c (row-major), element count must match | arrays |
 | `rng` | `rng(seed)` | reseed the generator (xoshiro256**); same seed, same stream | random |
 | `round` | `round(x)` | round to nearest (componentwise on complex) | math |
-| `save` | `save("file.nu")` | write all variables and functions as reloadable source (restore with load) | core |
+| `save` | `save("file.cz")` | write all variables and functions as reloadable source (restore with load) | core |
 | `setfield` | `setfield(r, name, v)` | a new record with the field replaced or appended; r is untouched | core |
 | `sign` | `sign(x)` | -1 / 0 / +1 by sign; z/\|z\| for complex | math |
 | `sin` | `sin(x)` | sine (complex-aware, elementwise) | trig |
