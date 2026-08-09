@@ -1,5 +1,37 @@
 # Cozy changelog
 
+## 0.0.23 — entry 7 reviewed; the rite gains a lint
+
+### Design (entry 7: namespaces — the last unreviewed docket item)
+- **Review conducted by execution, every claim re-verified in Cozy**:
+  sibling recursion through a record's own global name works (late
+  binding); getfield is the dynamic door (landed 0.0.6, satisfying the
+  entry's one open condition); who's load groups arrived intact from
+  upstream 2.28 (packages/optim.cz 11 names — clutter solved
+  orthogonally, as the baton predicted); and the pack-then-prune trap
+  reproduced verbatim — keep() of a record of optimizer faces killed
+  the first call on the helpers the record hid. The design stands:
+  records are the module system, no new kind.
+- **Ruling recorded** (same logic as the entry's own anti-decision):
+  the three instrument packages — autodiff, optim, sparselin — are
+  grandfathered flat. Short daily-typed faces (d, grad, minimize, cg)
+  are the feature; helpers are already tag-prefixed (ad_, op_, sl_).
+  Record namespaces are the recommendation for future large-API
+  packages.
+- **The namespace law is now written where authors read**: PACKAGES.md
+  "Writing your own" carries the pattern, the late-binding law, the
+  helper-prefix convention, and the trap — "a record namespace hides
+  the face, never the body." (The section also no longer claims the
+  language has four packages.)
+
+### Added
+- **Release lint** (charter fix-from-day-one debt, paid):
+  tools/check_release.py refuses the suite when CHANGELOG.md lacks an
+  entry for version.h's version — wired into make test, python-only so
+  it can never be environment-gated into a dead guard, and verified to
+  FIRE before being trusted (run against the stale state first, per
+  the 0.0.17 lesson).
+
 ## 0.0.22 — the owner's vignettes
 
 ### Changed

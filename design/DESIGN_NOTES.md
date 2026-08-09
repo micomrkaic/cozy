@@ -299,7 +299,20 @@ tame this:
 **Trigger.** The first co-skewness/co-kurtosis workload, or the first
 third-order derivative a session actually needs.
 
-## 7. Namespaces: records are the module system (with one law attached)
+## 7. Namespaces — REVIEWED 0.0.23 (design confirmed; all claims re-verified
+by execution in Cozy: sibling recursion via the record's global name, the
+getfield dynamic door — getfield LANDED at 0.0.6, so "dot is literal-only
+until getfield lands" below is satisfied — who's load groups inherited from
+upstream 2.28 (clutter solved orthogonally, exactly as the baton predicted),
+and the pack-then-prune trap reproduced verbatim: keep() of a record of
+optimizer faces killed the first call on the helpers it hid. RULING, same
+logic as the Neutrino anti-decision: the three instrument packages
+(autodiff, optim, sparselin) are GRANDFATHERED flat — short daily-typed
+faces are the feature, helpers are already tag-prefixed — and the record
+namespace is the recommendation for future large-API packages. The law is
+now written in PACKAGES.md "Writing your own", where authors will read it.)
+
+## 7-old. Namespaces: records are the module system (with one law attached)
 
 **Decision.** Cozy gets no module kind, no import statement, no namespace
 syntax. Packages that want a namespace pack their public API into a

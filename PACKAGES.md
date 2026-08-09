@@ -593,8 +593,24 @@ and all, because `max` on duals takes the one-sided derivative.
 
 ## Writing your own
 
-The pattern all four follow: a file of `let` definitions, `assert`-validated
-inputs, a record of closures when a namespace helps, and a golden test file
-whose reference values come from an independent implementation. Multi-line
-definitions are fine wherever a bracket is open. `save` your workspace, `load`
-it tomorrow — a package is just a workspace you chose to keep.
+The pattern the twelve packages follow: a file of `let` definitions,
+`assert`-validated inputs, and a golden test file whose reference values
+come from an independent implementation. Multi-line definitions are fine
+wherever a bracket is open. `save` your workspace, `load` it tomorrow — a
+package is just a workspace you chose to keep.
+
+**The namespace law** (design entry 7 — records are the module system).
+A package that wants a namespace packs its public API into a record:
+`{cdf = fn ..., pdf = fn ...}` — `fields(pkg)` is then the manifest and
+`getfield(pkg, name)` the dynamic door, and sibling fields may call each
+other through the record's own global name (functions resolve globals at
+CALL time, so `p.isod` inside `p.isev` works). The same late binding is
+also the one trap: **a record namespace hides the face, never the body.**
+Helpers that your public functions call remain ordinary globals forever —
+pack the faces into a record, `keep()` the record alone, and every call
+dies with "undefined name". So: prefix internal helpers with the package's
+tag (`op_`, `sl_`, `ad_`), document that `keep()` must spare them, and
+never expect the record to encapsulate. Small instrument packages with a
+handful of daily-typed faces (`minimize`, `d`, `grad`, `cg`) stay flat by
+deliberate choice — brevity is the feature — with prefixed helpers; a
+large API is where the record namespace earns its keep.
