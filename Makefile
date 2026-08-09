@@ -1,4 +1,4 @@
-# Neutrino build.
+# Cozy build.
 #
 # Toolchain: a C23 compiler. gcc 14+ spells the flag -std=c23; gcc 13 calls the
 # same thing -std=c2x. Apple Clang from Xcode 15+ accepts -std=c2x and the C23
@@ -158,7 +158,7 @@ EMCC_C23   ?=
 WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c linalg_tier0.c
 WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Cozy -sALLOW_MEMORY_GROWTH=1 \
               -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web -sSINGLE_FILE=1 -sASYNCIFY=1 \
-              -sEXPORTED_FUNCTIONS=_nu_init,_nu_eval,_nu_version,_malloc,_free \
+              -sEXPORTED_FUNCTIONS=_cozy_init,_cozy_eval,_cozy_version,_malloc,_free \
               -sEXPORTED_RUNTIME_METHODS=cwrap,ccall,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS
 wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_FLAGS) \

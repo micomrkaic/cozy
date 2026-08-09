@@ -1,4 +1,4 @@
-# Neutrino regression suite
+# Cozy regression suite
 
 Run from the project root:
 

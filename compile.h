@@ -1,4 +1,4 @@
-/* compile.h — compile one Neutrino statement (AST) into a bytecode Chunk. */
+/* compile.h — compile one Cozy statement (AST) into a bytecode Chunk. */
 #ifndef COZY_COMPILE_H
 #define COZY_COMPILE_H
 

@@ -1,4 +1,4 @@
-/* repl.h — interactive read-eval-print loop for Neutrino. */
+/* repl.h — interactive read-eval-print loop for Cozy. */
 #ifndef COZY_REPL_H
 #define COZY_REPL_H
 

@@ -1,4 +1,4 @@
-# astro.cz — solar and lunar almanac for Neutrino
+# astro.cz — solar and lunar almanac for Cozy
 # Sunrise, sunset, dawn, dusk, solar noon, day length, sun position, and
 # moon phase, for any latitude and longitude (degrees; east and north are
 # positive). Times are local decimal hours given a UTC offset tz (e.g. -4

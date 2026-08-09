@@ -1,4 +1,4 @@
-/* parser.h — recursive-descent + Pratt parser for Neutrino. */
+/* parser.h — recursive-descent + Pratt parser for Cozy. */
 #ifndef COZY_PARSER_H
 #define COZY_PARSER_H
 

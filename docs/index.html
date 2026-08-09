@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Neutrino — a small functional array language</title>
+<title>Cozy — a heavier numerical language, warmly held</title>
   <meta property="og:image" content="og-card.png">
-  <meta property="og:title" content="Neutrino — a small functional array language">
-<meta name="description" content="Neutrino, a small functional array language, running in your browser via WebAssembly.">
+  <meta property="og:title" content="Cozy — a heavier numerical language, warmly held">
+<meta name="description" content="Cozy, a heavier numerical language — sparse matrices, exact derivatives, constrained optimization — running in your browser via WebAssembly.">
 <style>
   :root {
     --blue: #208bff;
@@ -125,6 +125,8 @@
   .banner-dot1 { color: var(--purple); }
   .banner-dot2 { color: var(--cyan); }
   .banner-dim { color: var(--grey); }
+  .banner-warm { color: #ffb060; }
+  .banner-ember { color: #e07a3c; }
   .chip {
     display: inline-block; padding: 1px 7px; margin: 0 2px;
     border: 1px solid #232a3a; border-radius: 5px; color: var(--dim);
@@ -138,12 +140,12 @@
 </head>
 <body>
 <header>
-  <span class="logo">Neutrino</span>
+  <span class="logo">Cozy</span>
   <span class="tagline">a small functional array language · in your browser</span>
   <span class="spacer"></span>
   <label class="btn">upload<input type="file" id="upload" multiple></label>
   <button class="btn" id="dl" title="download files your session created (saves, CSVs, plots)">download new files</button>
-  <a href="https://github.com/micomrkaic/Neutrino" target="_blank" rel="noopener">GitHub</a>
+  <a href="https://github.com/micomrkaic/cozy" target="_blank" rel="noopener">GitHub</a>
 </header>
 
 <div id="main">
@@ -180,9 +182,9 @@
   <div id="docs">
     <div id="docbar">
       <select id="doc-pick">
-        <option value="/MANUAL.md">The Neutrino Manual</option>
-        <option value="/PACKAGES.md">The Neutrino Packages</option>
-        <option value="/BOOK.md">Neutrino by Example</option>
+        <option value="/MANUAL.md">The Cozy Manual</option>
+        <option value="/PACKAGES.md">The Cozy Packages</option>
+        <option value="/BOOK.md">Cozy by Example</option>
         <option value="/CHANGELOG.md">Changelog</option>
         <option value="/LESSONS.md">Lessons</option>
         <option value="/DESIGN_NOTES.md">Design notes</option>
@@ -198,7 +200,7 @@
       <button class="btn" id="ed-save">Save .cz</button>
       <span class="hint">Ctrl+Enter runs selection (whole buffer if none)</span>
     </div>
-    <textarea id="edtext" spellcheck="false" placeholder="% write Neutrino here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
+    <textarea id="edtext" spellcheck="false" placeholder="% write Cozy here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
   </div>
 </div>
 </div>
@@ -243,30 +245,33 @@
 
   // pause() support: the wasm side streams pending output here mid-eval,
   // then waits (Asyncify) until Enter releases the latch below.
-  window.__nuStream = writeResult;
+  window.__cozyStream = writeResult;
   document.addEventListener('keydown', function (e) {
-    if (window.__nuPauseWaiting && e.key === 'Enter') {
-      window.__nuPauseDone = 1;
+    if (window.__cozyPauseWaiting && e.key === 'Enter') {
+      window.__cozyPauseDone = 1;
       e.preventDefault(); e.stopPropagation();
     }
   }, true);
 
   function banner() {
-    // Pure-ASCII wordmark: every glyph is fixed-width, so it aligns in any
-    // monospace fallback (the Unicode atom logo sheared on proportional fonts).
+    // Cozy in figlet nancyj — fat, round, 1970s-warm; pure ASCII so it
+    // aligns in any monospace fallback.
     var art = [
-      ' _   _            _        _             ',
-      '| \\ | | ___ _   _| |_ _ __(_)_ __   ___  ',
-      '|  \\| |/ _ \\ | | | __| \'__| | \'_ \\ / _ \\ ',
-      '| |\\  |  __/ |_| | |_| |  | | | | | (_) |',
-      '|_| \\_|\\___|\\__,_|\\__|_|  |_|_| |_|\\___/ '
+      ' a88888b.                            ',
+      'd8\'   `88                            ',
+      '88        .d8888b. d888888b dP    dP ',
+      '88        88\'  `88    .d8P\' 88    88 ',
+      'Y8.   .88 88.  .88  .Y8P    88.  .88 ',
+      ' Y88888P\' `88888P\' d888888P `8888P88 ',
+      '                                 .88 ',
+      '                             d8888P  ',
     ];
     for (var i = 0; i < art.length; i++) {
       var d = document.createElement('div');
-      d.appendChild(el('banner-logo', art[i]));
+      d.appendChild(el('banner-warm', art[i]));
       term.appendChild(d);
     }
-    writeLine('banner-dim', 'a small functional array language');
+    writeLine('banner-dim', 'a heavier numerical language, warmly held');
     scroll();
   }
 
@@ -275,12 +280,12 @@
       var n = M.lengthBytesUTF8(s) + 1;
       var p = M._malloc(n);
       M.stringToUTF8(s, p, n);
-      var r = M.UTF8ToString(M._nu_eval(p));
+      var r = M.UTF8ToString(M._cozy_eval(p));
       M._free(p);
       return r;
     };
-    M._nu_init();
-    window.NU = M;
+    M._cozy_init();
+    window.COZY = M;
     M.cozyPlot = function (fname) {
       try {
         var svg = new TextDecoder().decode(M.FS.readFile(fname));
@@ -291,7 +296,7 @@
       } catch (e) {}
     };
     for (var fi = 0; fi < M.FS.readdir('/').length; fi++) known.add(M.FS.readdir('/')[fi]);
-    var ver = M.UTF8ToString(M._nu_version());
+    var ver = M.UTF8ToString(M._cozy_version());
     term.innerHTML = '';
     banner();
     writeLine('banner-dim', ver);
@@ -306,7 +311,7 @@
     inputline.style.display = 'flex';
     input.focus();
   }).catch(function (e) {
-    writeLine('err', 'Failed to start Neutrino: ' + e.message);
+    writeLine('err', 'Failed to start Cozy: ' + e.message);
   });
 
   function run(line) {
@@ -381,7 +386,7 @@
     writeLine: writeLine,
     scroll: scroll,
     focusInput: function () { input.focus(); },
-    /* run editor text as if typed at the prompt: nu_eval takes a whole
+    /* run editor text as if typed at the prompt: cozy_eval takes a whole
      * program and echoes each statement's value (v1.8.3) */
     runBuffer: function (text) {
       writeLine('dim', '% editor script:');
@@ -479,10 +484,10 @@
   function loadDoc(path) {
     if (path) docPick.value = path;
     var p = docPick.value;
-    if (!window.NU) return;
+    if (!window.COZY) return;
     if (!docCache[p]) {
       try {
-        docCache[p] = mdToHtml(new TextDecoder().decode(window.NU.FS.readFile(p)));
+        docCache[p] = mdToHtml(new TextDecoder().decode(window.COZY.FS.readFile(p)));
       } catch (e) { docCache[p] = '<p>(document not found in this build)</p>'; }
     }
     document.getElementById('docview').innerHTML = docCache[p];
@@ -500,7 +505,7 @@
     edTimer = setTimeout(function () { try { localStorage.setItem(EDKEY, edtext.value); } catch (e) {} }, 400);
   });
   function runScript(text) {
-    if (!window.NU || !text.trim().length) return;
+    if (!window.COZY || !text.trim().length) return;
     nuTerm.runBuffer(text);              /* interactive echo; focus stays in the editor */
   }
   document.getElementById('ed-run').addEventListener('click', function () { runScript(edtext.value); });
@@ -537,7 +542,7 @@
     var files = Array.prototype.slice.call(ev.target.files);
     files.forEach(function (f) {
       f.arrayBuffer().then(function (buf) {
-        window.NU.FS.writeFile('/' + f.name, new Uint8Array(buf));
+        window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
         known.add(f.name);
         var hint = /\.cz$/i.test(f.name) ? 'run it with: load("/' + f.name + '")'
                                           : 'e.g. readtable("/' + f.name + '")';
@@ -548,14 +553,14 @@
     ev.target.value = '';
   });
   document.getElementById('dl').addEventListener('click', function () {
-    if (!window.NU) return;
-    var n = 0, names = window.NU.FS.readdir('/');
+    if (!window.COZY) return;
+    var n = 0, names = window.COZY.FS.readdir('/');
     for (var i = 0; i < names.length; i++) {
       var f = names[i];
       if (known.has(f) || f === '.' || f === '..' || f === '_editor.cz') continue;
       try {
-        if (!window.NU.FS.isFile(window.NU.FS.stat('/' + f).mode)) continue;
-        var data = window.NU.FS.readFile('/' + f);
+        if (!window.COZY.FS.isFile(window.COZY.FS.stat('/' + f).mode)) continue;
+        var data = window.COZY.FS.readFile('/' + f);
         var a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([data]));
         a.download = f; a.click(); URL.revokeObjectURL(a.href); n++;
@@ -572,7 +577,7 @@
   window.addEventListener('dragover', function (ev) { ev.preventDefault(); });
   window.addEventListener('drop', function (ev) {
     ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
-    if (!window.NU) return;
+    if (!window.COZY) return;
     var files = Array.prototype.slice.call(ev.dataTransfer.files);
     files.forEach(function (f) {
       if (/\.(nu|txt)$/i.test(f.name)) {
@@ -585,7 +590,7 @@
         });
       } else {
         f.arrayBuffer().then(function (buf) {
-          window.NU.FS.writeFile('/' + f.name, new Uint8Array(buf));
+          window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
           known.add(f.name);
           nuTerm.writeLine('dim', '(uploaded ' + f.name + ', ' + buf.byteLength + ' bytes)');
           nuTerm.scroll();

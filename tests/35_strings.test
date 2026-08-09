@@ -1,6 +1,6 @@
 # Strings phase 1: scalar operations, byte semantics
-"neu" + "trino"
-=> "neutrino"
+"co" + "zy"
+=> "cozy"
 "a" == "a"
 => true
 "a" != "b"
@@ -11,27 +11,27 @@
 => true
 "b" >= "a"
 => true
-let s = "neutrino"; s[1] + s[4:8]
-=> "ntrino"
-let s = "neutrino"; s[end - 3 : end]
-=> "rino"
+let s = "cozy language"; s[1] + s[6:9]
+=> "clang"
+let s = "cozy language"; s[end - 3 : end]
+=> "uage"
 let s = "abc"; s[[3, 2, 1]]
 => "cba"
-length("neutrino")
-=> 8
+length("cozy language")
+=> 13
 length("")
 => 0
-upper("neutrino")
-=> "NEUTRINO"
+upper("cozy language")
+=> "COZY LANGUAGE"
 lower("Hi There")
 => "hi there"
 trim("  x  ")
 => "x"
-contains("neutrino", "trin")
+contains("cozy language", "lang")
 => true
-contains("neutrino", "xyz")
+contains("cozy language", "xyz")
 => false
-startswith("neutrino", "neu")
+startswith("cozy language", "coz")
 => true
 endswith("data.csv", ".csv")
 => true

@@ -1,4 +1,4 @@
-/* value.h — Neutrino runtime values.
+/* value.h — Cozy runtime values.
  *
  * Scalars (null, bool, int64, f64, complex) are immediate — stored inline in
  * Value, no allocation. Everything else (string, array, record, closure,

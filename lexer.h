@@ -1,4 +1,4 @@
-/* lexer.h — Neutrino lexer, C23.
+/* lexer.h — Cozy lexer, C23.
  *
  * Zero-copy tokenizer: every Token points back into the original source
  * buffer (no allocation, no string copying). The buffer must outlive the

@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-/* wasm_api.c — Neutrino in the browser: a persistent session exposed as
+/* wasm_api.c — Cozy in the browser: a persistent session exposed as
  * string-in / string-out calls. Mirrors vmtest.c's loop, but output (echo,
  * print, help, errors) is captured into a buffer returned to JavaScript. */
 #include <stdio.h>
@@ -32,12 +32,12 @@ static EnvObj *globals;
 static Keep    keep;
 static char   *g_buf;      /* last result, owned here, freed on next call */
 static size_t  g_cap_len;  /* memstream size, updated on fflush */
-static FILE   *g_cap;      /* live capture stream during nu_eval (pause streams from it) */
+static FILE   *g_cap;      /* live capture stream during cozy_eval (pause streams from it) */
 static size_t  g_streamed; /* bytes already streamed to the page mid-eval */
 
 /* Real pause in the browser (called from bi_pause under __EMSCRIPTEN__).
  * Output accumulates in the memstream and normally reaches the page only
- * when nu_eval returns — so a blocking pause must first flush and stream
+ * when cozy_eval returns — so a blocking pause must first flush and stream
  * the pending text (or the user waits at a blank screen, the v2.25.2
  * lesson), then yield to the event loop via Asyncify until the page's
  * Enter latch fires. Stale pages without the latch skip the wait. */
@@ -48,21 +48,21 @@ void nu_wasm_pause(const char *msg, uint32_t mlen)
     fflush(g_cap);             /* POSIX: buffer and size now current */
     EM_ASM({
         var t = UTF8ToString($0);
-        if (window.__nuStream) { window.__nuStream(t);
-                                 window.__nuPauseWaiting = 1; window.__nuPauseDone = 0; }
-        else                   { window.__nuPauseDone = 1; }
+        if (window.__cozyStream) { window.__cozyStream(t);
+                                 window.__cozyPauseWaiting = 1; window.__cozyPauseDone = 0; }
+        else                   { window.__cozyPauseDone = 1; }
     }, g_buf + g_streamed);
     g_streamed = g_cap_len;
-    while (!EM_ASM_INT({ return (window.__nuPauseDone | 0); }))
+    while (!EM_ASM_INT({ return (window.__cozyPauseDone | 0); }))
         emscripten_sleep(60);
-    EM_ASM({ window.__nuPauseWaiting = 0; });
+    EM_ASM({ window.__cozyPauseWaiting = 0; });
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char *nu_version(void) { return COZY_VERSION " (wasm, built " COZY_BUILT ")"; }
+const char *cozy_version(void) { return COZY_VERSION " (wasm, built " COZY_BUILT ")"; }
 
 EMSCRIPTEN_KEEPALIVE
-void nu_init(void)
+void cozy_init(void)
 {
     interp_init(&I);
     globals = globals_new();
@@ -84,7 +84,7 @@ static const char *wasm_command(const char *line, const char *word)
 }
 
 EMSCRIPTEN_KEEPALIVE
-const char *nu_eval(const char *line)
+const char *cozy_eval(const char *line)
 {
     free(g_buf); g_buf = NULL;
     g_cap_len = 0; g_streamed = 0;

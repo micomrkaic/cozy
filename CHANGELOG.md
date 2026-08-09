@@ -1,5 +1,120 @@
 # Cozy changelog
 
+## 0.0.21 — one word, warmly: the nancyj splash
+
+### Changed
+- **The splash is now just "Cozy"**, set in figlet's nancyj — the
+  Cooper Black of ASCII fonts: fat, round, and unmistakably 1970s
+  (owner's call: simplify, one word, seventies-cozy lettering). The
+  hearth scene retires after one release; the wordmark, tagline, and
+  version line share one left margin. Same face everywhere: REPL
+  (color and plain), the web page's banner(), and both logos.
+- print_banner rebuilt wholesale from a generated template rather than
+  patched — the third banner edit in three releases had made the
+  function regex-hostile; whole-function replacement is the durable
+  editing strategy for generated-art code.
+
+### Fixed
+- **GitHub Pages instructions restored to docs/README.md** — the
+  0.0.20 rewrite dropped the "Enabling Pages" section, and the owner
+  hit exactly the failure it prevented: Pages enabled with the default
+  root folder renders README.md as the site (no root index.html). The
+  fix is Settings -> Pages -> branch main, folder /docs; now
+  documented again, with the failure mode named.
+
+## 0.0.20 — the trace sweep: the codebase speaks Cozy
+
+### Changed
+- **Systematic sweep of every Neutrino trace outside heritage and
+  history**, prompted by the owner catching "Neutrino builtins" in the
+  help header. Fixed: the help header itself; every C source and header
+  file banner comment (~20 files); the --sample program's title;
+  demo.cz's header and prompt; every package header ("for Neutrino" ->
+  "for Cozy"); cozy-mode.el's docstrings, group, and URL (which still
+  pointed at micomrkaic/Neutrino); docs/README.md (rewritten — it
+  documented neutrino.js at the old Pages URL); .gitattributes (mapped
+  the extinct .nu extension; now maps .cz); the Makefile and test-runner
+  comments; run_dis.sh's NEUTRINO env override (now COZY).
+- **The wasm API is now cozy_init/cozy_eval/cozy_version** (was nu_*),
+  renamed in wasm_api.c, the Makefile export list, and index.html's
+  call sites together; the page's internal module global is window.COZY
+  (was NU) and the stream/pause latch globals are __cozy* (were __nu*).
+  Bundle rebuilt; the renamed API is verified end to end by the page
+  test against the real bundle.
+- **Golden test data de-Neutrinoed** (conformance edits, recorded):
+  the strings suite now exercises "cozy language" (same coverage:
+  concatenation, indexing, end-arithmetic, case, containment — with
+  the pleasing accident that s[1] + s[6:9] spells "clang"), and the
+  records suite's sample name is "cozy". 1046 goldens green.
+- **tests/run_page.js exercised for real for the first time in this
+  container** (jsdom installed from the allowlisted npm registry): its
+  stub still mocked window.Neutrino and _nu_* — the jsdom-gated cousin
+  of 0.0.17's dead-guard lesson — and phase 2 caught a genuine
+  sequencing bug during this work (bundle exporting _nu_* while the
+  page called _cozy_*). Fixed and green against the real bundle.
+
+Deliberate lineage survives on purpose: heritage/ is Neutrino's own
+literature; CHANGELOG history is history; and prose that says
+"inherited from Neutrino" says something true.
+
+## 0.0.19 — the hearth: a new splash
+
+### Changed
+- **The banner is now a sleeping cat by the fire** — the owner's call:
+  the mug read as tea, and TEA is the owner's econometrics package; a
+  cat asleep at the hearth is coziness without the collision. Same
+  scene everywhere: the REPL banner (color and plain branches, cat in
+  grey, flames warm, log in ember), both logos (brand/ and docs/), and
+  the web page's banner(), which — found during this work — was still
+  drawing NEUTRINO in ASCII art: the 0.0.18 identity pass caught
+  strings, not artwork. The page's tagline is also corrected ("a small
+  functional array language" -> "a heavier numerical language, warmly
+  held").
+- **The wordmark is now figlet-standard**: the owner's eye caught the
+  misalignment — the hand-drawn z carried a stray | (| (_) |/ /|) and
+  row five doubled a slash (\___//___|). The glyphs are taken from
+  figlet's standard font verbatim and the composed banner was verified
+  by rendering, not by squinting at source.
+- Version/tagline indentation aligned; wasm bundle rebuilt so the
+  browser reports 0.0.19.
+
+## 0.0.18 — the documentation becomes Cozy's own
+
+### Changed
+- **Full identity-and-accuracy pass over every document**, prompted by the
+  owner: the manual, book, packages guide, README, and the served web
+  page all titled and spoke as Neutrino, and some claims were actively
+  wrong — NEUTRINO_PLOT_TERM/`_OUT` (renamed at 0.0.7), `./neutrino`,
+  `~/.neutrino_history`, "nine value kinds", "frozen at 2.x", nine
+  packages. Everything now states Cozy's truth: eleven value kinds
+  (Dual and Sparse in the type table), COZY_ env vars, cozy binaries
+  and history, twelve packages, active development under the charter.
+  Deliberate lineage mentions remain (the oscillation pun is retired
+  with a nod). The eval doc row and mode-line name are fixed at their
+  generator sources.
+- **README rewritten for Cozy**: capabilities (duals, sparse, three
+  backends with the measured eig timings), status, the twelve packages,
+  build matrix including BACKEND= and wasm targets, and a sample
+  session captured by execution — including dualeps(dual(3,1)^2) = 6.
+- **New logos**: brand/logo.png and docs/logo.png now render Cozy's own
+  REPL banner (the steaming mug, warm on navy); the old assets spelled
+  Neutrino, including the one GitHub Pages served. index.html identity
+  updated (title, og tags, header, book titles, GitHub link).
+- **All three PDFs rebuilt** from the current markdown (they predated
+  even the rename).
+
+### Added
+- **BOOK chapter 15, "The Cozy instruments"**: four problems with
+  verified transcripts — a sparse Laplacian solved by cg without
+  densifying; exact derivatives (machine vs hand derivative agreeing
+  digit for digit, the Rosenbrock gradient exactly zero at the
+  minimum); a constrained portfolio (eq + ineq via the augmented
+  Lagrangian); and the estimation idiom (closure factories, NLLS
+  recovering truth from noise, the GMM/MLE generalization in prose).
+  BOOK transcripts: 358 -> 381, all captured by execution.
+- Manual: Dual and Sparse rows in the value-kind table; contents entry
+  for the dual-numbers section.
+
 ## 0.0.17 — the guard behind the wrong gate
 
 ### Fixed

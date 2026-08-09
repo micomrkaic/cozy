@@ -1,4 +1,4 @@
-/* eval.h — interpreter state and runtime entry points for Neutrino.
+/* eval.h — interpreter state and runtime entry points for Cozy.
  *
  * The evaluator is the bytecode VM (vm.c); this header owns the shared Interp
  * state, builtin-environment construction, and the runtime helpers the VM and
