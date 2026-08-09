@@ -101,6 +101,9 @@
     "digamma"
     "dis"
     "dot"
+    "dual"
+    "dualeps"
+    "dualval"
     "e"
     "eig"
     "endswith"
@@ -229,7 +232,6 @@
     "whos"
     "whov"
     "writecsv"
-    "y"
     "zeros")
   "Builtin names, generated from eval.c — do not edit by hand.")
 

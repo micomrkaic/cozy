@@ -166,8 +166,14 @@ static int ob_chol(const Cplx *A, uint32_t n, Cplx *L)
     return 0;
 }
 
+/* The same source serves any library exporting the Fortran LAPACK symbols:
+ * OpenBLAS on Linux, Accelerate on macOS (LP64 interface: 32-bit ints,
+ * matching the externs above). The Makefile sets the reported name. */
+#ifndef COZY_LAPACK_NAME
+#define COZY_LAPACK_NAME "openblas"
+#endif
 static const LinalgKernels openblas = {
-    .name     = "openblas",
+    .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,

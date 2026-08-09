@@ -1,0 +1,87 @@
+# dual numbers + autodiff (design entry 4a) — derivatives are EXACT, so
+# every assert here is equality, not tolerance. The gates (dual/complex,
+# dual/sparse, linalg) are goldens too: the promotion law is language law.
+dual(3, 1) * dual(3, 1)
+=> 9+6eps
+dual(2, 3) + dual(5, 7)
+=> 7+10eps
+dual(1, 2) / dual(2, 0)
+=> 0.5+1eps
+dualval(dual(2, 5))
+=> 2
+dualeps(dual(2, 5))
+=> 5
+dualval(7)
+=> 7
+dualeps(7)
+=> 0
+dualeps(dual(3, 1) ^ 2)
+=> 6
+dualeps(dual(4, 1) ^ -1)
+=> -0.0625
+sin(dual(0, 1))
+=> 1eps
+dualeps(exp(dual(0, 1)))
+=> 1
+dualeps(log(dual(1, 1)))
+=> 1
+dualeps(sqrt(dual(4, 1)))
+=> 0.25
+dualeps(log(sqrt(dual(4, 1))))
+=> 0.125
+abs(dual(-3, 1))
+=> 3-1eps
+dualeps(abs(dual(0, 5)))
+=> 0
+dualeps(floor(dual(2.7, 9)))
+=> 0
+dual(2, 3) < 3
+=> true
+dual(2, 1) == 2
+=> true
+min(dual(1, 9), dual(2, 1))
+=> 1+9eps
+dual(0, 5)
+=> 5eps
+dual(2, 0)
+=> 2+0eps
+dual([1.0; 2.0], [1; 0]) .* dual([1.0; 2.0], [1; 0])
+=> [1+2eps; 4+0eps]
+dualeps(sum(dual([1.0; 2.0], [0; 1]) .* dual([1.0; 2.0], [0; 1])))
+=> 4
+dualval(dual([1.0, 2.0; 3.0, 4.0], 1))
+=> [1, 2; 3, 4]
+dual(2, 3) + 1i
+=> !dual and complex do not mix
+[dual(1, 2), 3i]
+=> !cannot mix complex and dual elements
+speye(2) * dual(1, 1)
+=> !sparse and dual do not mix
+eig([dual(1, 1), 0; 0, 1.0])
+=> !eig on dual matrices is not supported
+norm(dual(1, 1))
+=> !norm on dual is not supported
+sqrt(dual(-1, 1))
+=> !sqrt: dual input is negative
+load("packages/autodiff.cz"); d(fn x -> x ^ 2)(3)
+=> 6
+load("packages/autodiff.cz"); d(fn x -> sin(x) * exp(x))(0)
+=> 1
+load("packages/autodiff.cz"); d(fn x -> 5)(2)
+=> 0
+load("packages/autodiff.cz"); d(abs)(-3)
+=> -1
+load("packages/autodiff.cz"); d(abs)(0)
+=> 0
+load("packages/autodiff.cz"); d(fn x -> if x < 2 then 3 * x else x ^ 2 end)(1)
+=> 3
+load("packages/autodiff.cz"); d(fn x -> if x < 2 then 3 * x else x ^ 2 end)(5)
+=> 10
+load("packages/autodiff.cz"); d(d(fn x -> x ^ 2))(7)
+=> !components are already dual
+load("packages/autodiff.cz"); grad(fn x -> sum(x .* x))([1.0; 2.0; 3.0])
+=> [2; 4; 6]
+load("packages/autodiff.cz"); grad(fn x -> sum(x .* ([2.0, 0; 0, 4.0] * x)))([1.0; 1.0])
+=> [4; 8]
+load("packages/autodiff.cz"); grad(fn x -> exp(x[1]) * x[2])([0.0; 3.0])
+=> [3; 1]

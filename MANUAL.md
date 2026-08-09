@@ -126,7 +126,7 @@ shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
 cozy> cd("packages");
 cozy> load("dist.cz"); norm.cdf(0, 0, 1)
 0.5
@@ -561,6 +561,34 @@ through arithmetic and the math library; results stay complex (`1i * 1i` is
 `-1+0i`, not `-1`). `real`, `imag`, `conj`, `angle` access the parts, `abs` is
 the modulus. Functions with limited real domains return complex off it:
 `sqrt(-4)` is `2i`, `log(-1)` is `3.14159i`, `asin(2)` is complex.
+
+## 10b. Dual numbers and exact derivatives
+
+A dual number is `a + b*eps` with `eps^2 = 0` — the derivative-carrying
+sibling of complex. `dual(a, b)` builds one (elementwise over arrays),
+`dualval`/`dualeps` read the parts, and both accessors are total on plain
+numbers (`dualval(7)` is `7`, `dualeps(7)` is `0`), so a function whose
+branch returns a constant still differentiates. Arithmetic and the whole
+transcendental library apply the chain rule exactly: no step size, no
+differencing. Comparisons read the value part, so conditionals inside a
+differentiated function take the branch the values take (the derivative
+of `abs` at its kink is one-sided). Dual and complex do not mix — that
+is the promotion law, and mixing them is an error naming `dualval`.
+The dense linear-algebra kernels (`eig`, `svd`, `\`, `det`, `norm`)
+gate on dual matrices; autodiff flows through elementwise ops, `*`,
+and reductions, which is what objective functions are made of.
+
+```
+cozy> dual(3, 1) * dual(3, 1)
+9+6eps
+cozy> sin(dual(0, 1))
+1eps
+cozy> dualeps(sqrt(dual(4, 1)))
+0.25
+```
+
+`load("packages/autodiff.cz")` turns this into `d(f)` and `grad(f)` —
+see the packages guide.
 
 ## 11. Special functions and statistics
 
@@ -1292,6 +1320,14 @@ cozy> clear("scatter"); who
 | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) |
 | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) |
 | `svd(A)` | thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending) |
+
+### autodiff
+
+| Signature | Description |
+|---|---|
+| `dual(a, b)` | the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction) |
+| `dualval(x)` | the value part of a dual; a plain number passes through (total, so constant branches differentiate) |
+| `dualeps(x)` | the eps (derivative) part of a dual; 0 for a plain number |
 
 ### Trigonometric & hyperbolic
 

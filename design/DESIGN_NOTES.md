@@ -58,7 +58,7 @@ showing tier0 matvec as the bottleneck.
 workload (a Markov chain, a PDE grid, a network) that a dense matrix
 cannot hold.
 
-## 2. External LAPACK
+## 2. External LAPACK — SHIPPED (seam 0.0.5, tier-1 OpenBLAS 0.0.11; 990 goldens + 606 transcripts byte-identical under both backends)
 
 **Requirement (owner, restated).** Cozy is a production-level tool: the
 native REPL is fully performant; WASM remains available for reach and
@@ -93,14 +93,26 @@ fallback kernels is not verifiable.
 ceiling or accuracy is actually hit — or the fork itself, since the
 dispatch seam is cheapest to cut before kernels multiply.
 
-## 3. Optimization
+## 3. Optimization — SHIPPED 0.0.13 (packages/optim.cz on autodiff: BFGS +
+Armijo `minimize`/`maximize`; box bounds by projection; general eq/ineq by
+augmented Lagrangian whose inner solver is minimize itself — the owner's
+constrained-maximization requirement is the Cobb-Douglas golden). PARKED
+RESIDUE: the `minimize[x = x0] f(x)` index-bound binder syntax — pure
+desugar onto the function form when it comes; trigger: the first session
+where wrapping the objective in fn is the visible friction.
+
+## 3-old. Optimization
 
 **Sketch.** `minimize[x = x0] f(x)` on the index-binder surface;
 Nelder–Mead and a quasi-Newton to start; constrained later or never.
 **Trigger.** The first optimization done by hand-rolled iteration at the
 prompt that deserved a verb.
 
-## 4. First-class differentiation (dual numbers + quotation)
+## 4. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
+dense element + autodiff.cz d/grad; complex×dual a recorded rejection with a
+teaching gate; jet(k) parked — dual is its k=1 instantiation, trigger: the
+first Hessian or Taylor-series need). 4b (ast quotation) still parked on its
+own trigger. ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
 
 **Motivation.** Neutrino's symb.cz proved symbolic differentiation is
 expressible with expression trees as records — but only via constructor
@@ -157,6 +169,39 @@ the visible friction.
 
 **Freeze compliance.** Both are additive builtins/value kinds; no legal
 Neutrino program changes meaning; the conformance suite is untouched.
+
+## 8. Tier-1 optimization backend (industrial-strength robustness)
+
+**Status: parked, but WHEN, not if — the owner has ruled that industrial-
+strength robustness will eventually be required; this entry exists so the
+revisit starts from a design, not a blank page.**
+
+**Motivation.** optim.cz (entry 3, shipped 0.0.13) is the tier-0: pure
+Cozy, transparent, zero-dependency, every failure mode ours. Its known
+limits, recorded honestly: the augmented Lagrangian runs a fixed penalty
+schedule with no infeasibility detection; BFGS uses Armijo only (no Wolfe
+curvature condition); no derivative-free path exists, so an objective
+that cannot flow duals cannot be optimized at all today.
+
+**Design sketch.** Mirror the linalg seam at the package contract level:
+a tier-1 answers the same {x, fx, iters, converged} record behind the
+same names. Candidate: NLopt (the nearest thing to a standard C API;
+libnlopt-dev is in Ubuntu; SLSQP and interior-point for constraints,
+COBYLA/BOBYQA/Nelder-Mead for derivative-free). Differences from the
+LAPACK case, so the implementer is not surprised: (1) the performance
+argument is weak — objective evaluations run in Cozy either way, and
+the FFI crosses PER EVALUATION via callbacks from C into call_value, an
+inversion the linalg seam never needed; the win is robustness and
+algorithm breadth, not speed. (2) License diligence required: NLopt
+mixes MIT and LGPL parts; select algorithms accordingly or document the
+linking story. (3) Selection: a BACKEND-style Makefile seam or a
+separate package (optim1.cz) loading a native-backed builtin — decide
+at implementation time; the record contract is the invariant either way.
+
+**Triggers (either fires the revisit):** the first real problem where
+optim.cz fails to converge or is painfully slow on a legitimate
+formulation; or the first objective that cannot flow duals (external
+code, gated builtins) and therefore needs derivative-free.
 
 ## 5. Record reflection (the trio)
 

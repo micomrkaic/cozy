@@ -531,6 +531,66 @@ CG's finite-termination property is visible above: a 3x3 system converges
 in exactly 3 iterations. The 200x200 line is the trigger workload the
 sparse design waited for, solved without ever forming a dense matrix.
 
+## 11. autodiff.cz — forward-mode automatic differentiation
+
+Derivatives as exact language values (design entry 4a). `d(f)` returns
+the derivative of a scalar function as a function; `grad(f)` returns the
+gradient of `f : R^n -> R`, one dual pass per component. Both are
+machine-exact — dual numbers apply the chain rule through the numeric
+tower itself, so closures, conditionals, and composition all just work.
+This is the gradient infrastructure the optimization capability builds
+on.
+
+```
+cozy> load("packages/autodiff.cz")
+cozy> let df = d(fn x -> x^3 - 2*x); df(2)
+10
+cozy> d(abs)(-3)
+-1
+cozy> grad(fn x -> sum(x .* x))([1.0; 2.0; 3.0])
+[2; 4; 6]
+cozy> let rosen = fn x -> (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2; grad(rosen)([1.0; 1.0])
+[0; 0]
+cozy> grad(rosen)([0.0; 0.0])
+[-2; 0]
+```
+
+**Discussion.** The Rosenbrock gradient vanishing at `[1; 1]` is the
+textbook minimum, found here without a single hand-written derivative.
+`grad` seeds one coordinate direction per pass with `dual(x, e_i)`, and
+`dualeps` of the result is the exact partial — the `d` one-liner is
+`fn f -> fn x -> dualeps(f(dual(x, 1)))`, the whole engine in one line.
+
+## 12. optim.cz — multivariate optimization
+
+Design entry 3, on autodiff's exact gradients: BFGS with Armijo
+backtracking. `minimize(f, x0)` and `maximize(f, x0)` (maximization is
+negation) return `{x, fx, iters, converged}`. `minimize_box` /
+`maximize_box(f, x0, lb, ub)` handle bounds by gradient projection.
+`minimize_con` / `maximize_con(f, x0, cons)` handle general constraints
+by augmented Lagrangian — `cons` is a record with `eq` (driven to 0)
+and/or `ineq` (driven `<= 0`), each a function returning a column — and
+the inner solver is `minimize` itself. Objectives must flow dual
+numbers: elementwise ops, `*`, and reductions (see the manual's dual
+section).
+
+```
+cozy> load("packages/optim.cz")
+cozy> minimize(fn x -> (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2, [-1.2; 1.0]).x
+[1; 1]
+cozy> let cd = fn x -> x[1]^0.3 * x[2]^0.7
+cozy> let bud = fn x -> [2 * x[1] + 3 * x[2] - 12]
+cozy> maximize_con(cd, [1.0; 1.0], {eq = bud}).x
+[1.8; 2.8]
+```
+
+**Discussion.** The last transcript is a Cobb-Douglas utility maximum
+on a budget line — the constrained maximization the design was scoped
+around — and `[1.8; 2.8]` is the analytic answer `(a m / p, b m / q)`
+to the digits shown, with no hand-written derivative or Lagrangian
+algebra anywhere: `grad` differentiates the augmented objective, kink
+and all, because `max` on duals takes the one-sided derivative.
+
 ## Writing your own
 
 The pattern all four follow: a file of `let` definitions, `assert`-validated

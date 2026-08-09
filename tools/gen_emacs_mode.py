@@ -6,8 +6,13 @@ import re, sys
 
 def builtin_names():
     src = open("eval.c").read()
+    # The FULL five-field row, identical to gen_reference's pattern: a looser
+    # four-field prefix once matched a { "y", "m", ... } unit-key array and
+    # put a phantom builtin in the editor list (found by the 0.0.16 X1 run).
+    # Two generators reading one table must read it with one regex.
     names = re.findall(
-        r'\{\s*"([a-z_0-9]+)",\s*"(?:[^"\\]|\\.)*",\s*"(?:[^"\\]|\\.)*",\s*"[a-z]+"\s*,', src)
+        r'\{\s*"([a-z_0-9]+)",\s*"(?:[^"\\]|\\.)*",\s*"(?:[^"\\]|\\.)*",'
+        r'\s*"[a-z]+"\s*,\s*"(?:[^"\\]|\\.)*"\s*\},', src)
     return sorted(set(names))
 
 def main():

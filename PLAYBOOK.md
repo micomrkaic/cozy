@@ -258,3 +258,25 @@ therefore globs for the newest:
 The version in the name must equal version.h inside — deploy.sh's
 banner is the cross-check.
 
+### The Ubuntu emscripten recipe (Cozy 0.0.14 — the wasm capability, restored)
+
+The container can build the wasm bundle; the path is crooked and now
+recorded. Ubuntu 24's emscripten (3.1.6) hard-pins clang-15 and its
+node tooling; a third-party nodesource nodejs poisons apt twice over
+(its repo signature breaks `apt-get update`, and its package fails the
+`nodejs:any` multiarch dep of node-acorn). The sequence that works:
+(1) delete /etc/apt/sources.list.d/nodesource.sources, apt-get update;
+(2) `apt-get install -y --fix-broken` after a first forced emscripten
+install pulls clang-15/llvm-15/lld-15 in — it removes emscripten but
+leaves the toolchain; (3) `apt-get download emscripten node-acorn` and
+`dpkg -i --force-depends` both (nodejs 22 satisfies the real >= 12
+constraint; the pin apt refuses is the multiarch annotation, not the
+version); (4) lld-15 + liblld-15 the same way if step 2 missed them;
+(5) build with `make wasm-ubuntu` — the target carries the four C23
+shims clang-15 needs (nullptr, alignof, typeof, static_assert mapped
+to their C11 spellings) and NODE_PATH for the acorn minifier. Verify
+by EXECUTION under node (ccall nu_init/nu_eval), never by grepping the
+bundle: --embed-file encodes the payload, so absent strings prove
+nothing. The old law held both ways here: the stale bundle served
+stale docs for ten releases, and the fresh one was proven fresh by
+running dualeps and a constrained maximum inside it.

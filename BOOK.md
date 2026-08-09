@@ -262,7 +262,7 @@ string functions ride the pipes like everything else:
 
 ```
 cozy> ls("packages")
-["astro.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
 cozy> ans ~> (fn f -> endswith(f, ".cz")) |> all
 true
 cozy> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
@@ -806,13 +806,15 @@ definitions turn `integral` into a Fourier analyzer:
 
 ```
 cozy> format(4)
+cozy> let zap = fn v -> pick(abs(v) < 1e-12, 0, v)
+<fn/1>
 cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
 cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
 cozy> let sq = fn x -> pick(x > 0, 1, -1);
-cozy> 1:5 ~> (fn k -> fb(sq, k))
-[1.273, 1.060e-16, 0.4244, -3.534e-17, 0.2546]
+cozy> zap(1:5 ~> (fn k -> fb(sq, k)))
+[1.273, 0.000, 0.4244, 0.000, 0.2546]
 cozy> 4 / pi * [1, 0, 1/3, 0, 1/5]
 [1.273, 0.000, 0.4244, 0.000, 0.2546]
 cozy> (sum[k = 1:n] fb(sq, k) * sin(k * x)) where n = 40, x = 1
@@ -821,9 +823,11 @@ cozy> (sum[k = 1:n] fb(sq, k) * sin(k * x)) where n = 40, x = 1
 
 **Discussion.** `fb(f, k)` is the textbook formula verbatim:
 (1/π)∫f(x)sin(kx)dx. Fed the square wave, it recovers the classic
-spectrum 4/π · (1, 0, 1/3, 0, 1/5, ...) — the even coefficients come back
-as ~1e-16, which is quadrature telling you "zero" as precisely as floats
-can say it. The last line *resynthesizes* the wave from forty terms of
+spectrum 4/π · (1, 0, 1/3, 0, 1/5, ...). Raw, the even coefficients come
+back as quadrature dust at ~1e-16 — floats saying "zero" as precisely as
+they can, in last digits that vary by platform and libm — so `zap` chops
+anything below 1e-12 to the exact zero it is; the display is then the
+same on every machine. The last line *resynthesizes* the wave from forty terms of
 its own spectrum via a sigma, landing near 1 at x = 1 (the wiggle is
 Gibbs' phenomenon, honestly reported). Analysis and synthesis, three
 lines total, any integrable `f` you can write.
@@ -835,17 +839,19 @@ Fourier table.
 
 ```
 cozy> format(4)
+cozy> let zap = fn v -> pick(abs(v) < 1e-12, 0, v)
+<fn/1>
 cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
 cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-cozy> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
+cozy> let spectrum = fn n -> {a = fn f -> zap(0:n ~> (fn k -> fa(f, k))), b = fn f -> zap(1:n ~> (fn k -> fb(f, k)))}
 <fn/1>
 cozy> let s = spectrum(4);
 cozy> (fn x -> x) |> {a = s.a, b = s.b}
-{a = [0.000, 2.827e-16, 1.325e-16, 1.767e-17, 1.414e-16], b = [2.000, -1.000, 0.6667, -0.5000]}
+{a = [0, 0, 0, 0, 0], b = [2.000, -1.000, 0.6667, -0.5000]}
 cozy> (fn x -> x ^ 2) |> {a = s.a, b = s.b}
-{a = [6.580, -4.000, 1.000, -0.4444, 0.2500], b = [5.654e-16, 0.000, 0.000, 2.827e-16]}
+{a = [6.580, -4.000, 1.000, -0.4444, 0.2500], b = [0, 0, 0, 0]}
 ```
 
 **Discussion.** The sawtooth's sines read 2, −1, 2/3, −1/2 — the
@@ -870,10 +876,12 @@ functional, one map, one sigma closure — and a two-curve plot:
 
 ```
 cozy> format(4)
+cozy> let zap = fn v -> pick(abs(v) < 1e-12, 0, v)
+<fn/1>
 cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
-cozy> let a = 0:9 ~> (fn k -> fa(abs, k))
-[3.142, -1.273, 1.944e-16, -0.1415, -1.237e-16, -0.05093, -2.288e-15, -0.02598, -8.844e-15, -0.01572]
+cozy> let a = zap(0:9 ~> (fn k -> fa(abs, k)))
+[3.142, -1.273, 0.000, -0.1415, 0.000, -0.05093, 0.000, -0.02598, 0.000, -0.01572]
 cozy> [pi, -4/pi, -4/(9*pi), -4/(25*pi)]
 [3.142, -1.273, -0.1415, -0.05093]
 cozy> let S = fn x -> a[1] / 2 + (sum[k = 1:9] a[k + 1] * cos(k * x))
@@ -908,8 +916,8 @@ cozy> plot(xs, [xs ~> abs; xs ~> S]', {title = "|x| and its 10-term Fourier seri
 ```
 
 **Discussion.** The computed coefficients sit beside the analytic row —
-π, −4/π, −4/9π, −4/25π — digit for digit, with the even entries showing
-honest quadrature dust; `abs` rides into `fa` bare, a builtin as a
+π, −4/π, −4/9π, −4/25π — digit for digit, with the even entries chopped
+by zap to the exact zeros they are; `abs` rides into `fa` bare, a builtin as a
 first-class value; and `[y1; y2]'` is the two-curves-one-plot spelling
 (columns are series, label1/label2 name the legend). The error line
 tells the story before the picture does: 0.0634, concentrated at the
@@ -926,12 +934,14 @@ fraction no number of terms can cure — only sharpen:
 
 ```
 cozy> format(4)
+cozy> let zap = fn v -> pick(abs(v) < 1e-12, 0, v)
+<fn/1>
 cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
 cozy> let sq = fn x -> pick(x > 0, 1, -1)
 <fn/1>
-cozy> let b = 1:9 ~> (fn k -> fb(sq, k))
-[1.273, 1.060e-16, 0.4244, -3.534e-17, 0.2546, 3.534e-17, 0.1819, -8.835e-18, 0.1415]
+cozy> let b = zap(1:9 ~> (fn k -> fb(sq, k)))
+[1.273, 0.000, 0.4244, 0.000, 0.2546, 0.000, 0.1819, 0.000, 0.1415]
 cozy> let S9 = fn x -> sum[k = 1:9] b[k] * sin(k * x)
 <fn/1>
 cozy> max((0:0.002:1) ~> S9)
@@ -1109,7 +1119,7 @@ eigenvector of Pᵀ at eigenvalue 1.
 cozy> format(4)
 cozy> let P = [0.9, 0.1; 0.3, 0.7];
 cozy> let r = eig(P.')
-{values = [0.6000; 1.000], vectors = [-0.7071, 0.9487; 0.7071, 0.3162]}
+{values = [0.6000; 1.000], vectors = [0.7071, 0.9487; -0.7071, 0.3162]}
 cozy> let idx = find(abs(r.values - 1) < 1e-9)[1]
 2
 cozy> let v = r.vectors[:, idx]; let s = v / sum(v)
@@ -1798,6 +1808,9 @@ language.
 | `digamma` | `digamma(x)` | digamma psi(x) = d/dx log gamma(x) | math |
 | `dis` | `dis(f)` | disassemble a function's bytecode (compiler/VM introspection) | core |
 | `dot` | `dot(a, b)` | inner product of two vectors | linear algebra |
+| `dual` | `dual(a, b)` | the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction) | autodiff |
+| `dualeps` | `dualeps(x)` | the eps (derivative) part of a dual; 0 for a plain number | autodiff |
+| `dualval` | `dualval(x)` | the value part of a dual; a plain number passes through (total, so constant branches differentiate) | autodiff |
 | `e` | `e` | 2.71828..., Euler's number | constant |
 | `eig` | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) | linear algebra |
 | `endswith` | `endswith(s, p)` | true if s ends with p | strings |
@@ -1928,7 +1941,7 @@ language.
 | `writecsv` | `writecsv(file, A[, opts])` | matrix -> CSV, full precision (round-trips); opts: {delim} | files |
 | `zeros` | `zeros(r, c)` | r-by-c matrix of zeros | arrays |
 
-*168 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
+*171 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
 <!-- INDEX:END -->
 
 ---
@@ -2031,15 +2044,17 @@ the value once, and the record syntax *is* the report.
 **G.5 — The spectrum analyzer, from first principles.**
 
 ```
+cozy> let zap = fn v -> pick(abs(v) < 1e-12, 0, v)
+<fn/1>
 cozy> let fa = fn f, k -> integral(fn x -> f(x) * cos(k * x), -pi, pi) / pi
 <fn/2>
 cozy> let fb = fn f, k -> integral(fn x -> f(x) * sin(k * x), -pi, pi) / pi
 <fn/2>
-cozy> let spectrum = fn n -> {a = fn f -> 0:n ~> (fn k -> fa(f, k)), b = fn f -> 1:n ~> (fn k -> fb(f, k))}
+cozy> let spectrum = fn n -> {a = fn f -> zap(0:n ~> (fn k -> fa(f, k))), b = fn f -> zap(1:n ~> (fn k -> fb(f, k)))}
 <fn/1>
 cozy> let s = spectrum(4);
 cozy> (fn x -> x) |> {a = s.a, b = s.b}
-{a = [0, 2.82716e-16, 1.32523e-16, 1.76697e-17, 1.41358e-16], b = [2, -1, 0.666667, -0.5]}
+{a = [0, 0, 0, 0, 0], b = [2, -1, 0.666667, -0.5]}
 ```
 
 ```python

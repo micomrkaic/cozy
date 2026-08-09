@@ -1,0 +1,22 @@
+# autodiff.cz — forward-mode automatic differentiation for Cozy
+# (design entry 4a: dual numbers make derivatives exact language values).
+# d(f) differentiates a scalar function; grad(f) differentiates
+# f: R^n -> R by seeding one direction per component. Machine-exact —
+# no step size, no differencing — and works through closures,
+# conditionals, and composition, because duals flow through the
+# numeric tower itself. See tests/58_autodiff.test.
+
+# d(f): the derivative of a scalar function, as a function.
+# f evaluated at x + 1*eps carries f'(x) in its eps part; dualeps is
+# total on plain numbers, so an f with a constant branch returns 0.
+let d = fn f -> fn x -> dualeps(f(dual(x, 1)))
+
+# ad_seed(x, i): the i-th coordinate direction, in x's own shape.
+let ad_seed = fn x, i -> ( let z = 0.0 * x; z[i] = 1; z )
+
+# grad(f): the gradient of f: R^n -> R, as a function of the vector x.
+# One dual pass per component (n passes), each seeded with e_i; the
+# result is a column of exact partial derivatives.
+let grad = fn f -> fn x -> (
+  map(fn i -> dualeps(f(dual(x, ad_seed(x, i)))), (1:numel(x))')
+)

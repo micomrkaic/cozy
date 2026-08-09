@@ -69,8 +69,12 @@ ifeq ($(BACKEND),tier0)
 else ifeq ($(BACKEND),openblas)
   LINALG = linalg_openblas
   LINALG_LIBS = -lopenblas
+else ifeq ($(BACKEND),accelerate)
+  LINALG = linalg_openblas
+  CFLAGS += -DCOZY_LAPACK_NAME='"accelerate"'
+  LINALG_LIBS = -framework Accelerate
 else
-  $(error unknown BACKEND '$(BACKEND)' — available: tier0, openblas)
+  $(error unknown BACKEND '$(BACKEND)' — available: tier0, openblas, accelerate)
 endif
 CORE     = lexer arena ast parser value eval chunk compile vm sparse $(LINALG)
 CORE_O   = $(CORE:%=$(OBJDIR)/%.o)
@@ -152,7 +156,7 @@ clean:; rm -rf $(BIN) vmtest vmtest-asan build
 EMCC       ?= emcc
 EMCC_C23   ?=
 WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c linalg_tier0.c
-WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Neutrino -sALLOW_MEMORY_GROWTH=1 \
+WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Cozy -sALLOW_MEMORY_GROWTH=1 \
               -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web -sSINGLE_FILE=1 -sASYNCIFY=1 \
               -sEXPORTED_FUNCTIONS=_nu_init,_nu_eval,_nu_version,_malloc,_free \
               -sEXPORTED_RUNTIME_METHODS=cwrap,ccall,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS
@@ -163,4 +167,12 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 	  $(WASM_SRCS) -o docs/cozy.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
 	@echo "built docs/cozy.js ($$(wc -c < docs/cozy.js) bytes) — commit and push to update GitHub Pages"
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm
+# wasm-ubuntu: the whole recipe for a stock Ubuntu 24 container (see
+# PLAYBOOK "The Ubuntu emscripten recipe"): distro emscripten 3.1.6 pins
+# clang-15, whose gnu2x predates four C23 spellings — the shims below map
+# them to the C11 forms; NODE_PATH finds the distro's acorn for the JS
+# minifier. A modern emsdk needs none of this: plain `make wasm`.
+wasm-ubuntu:
+	NODE_PATH=/usr/share/nodejs $(MAKE) wasm EMCC_C23='-Dnullptr=NULL -Dalignof=_Alignof -Dtypeof=__typeof__ -Dstatic_assert=_Static_assert'
+
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu

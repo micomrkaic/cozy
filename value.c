@@ -91,6 +91,7 @@ size_t elt_size(EltType e)
     case ELT_INT:     return sizeof(int64_t);
     case ELT_FLOAT:   return sizeof(double);
     case ELT_COMPLEX: return sizeof(Cplx);
+    case ELT_DUAL:    return sizeof(Dual);
     case ELT_BOOL:    return sizeof(unsigned char);
     }
     return 0;
@@ -143,15 +144,30 @@ static void obj_free(Obj *o)
     free(o);
 }
 
+/* Immediacy is a property of the KIND, not the enum position: appended kinds
+ * (VAL_DUAL) land numerically above VAL_STRING, so the old `kind >= VAL_STRING`
+ * range test dereferenced a dual's doubles as a pointer (caught by ASan the
+ * day dual arrived — the appended-kind trap, second occurrence). */
+static inline bool kind_is_heap(ValueKind k)
+{
+    switch (k) {
+    case VAL_STRING: case VAL_ARRAY: case VAL_RECORD:
+    case VAL_CLOSURE: case VAL_BUILTIN: case VAL_SPARSE:
+        return true;
+    default:
+        return false;                 /* null, bool, int, float, complex, dual */
+    }
+}
+
 Value value_retain(Value v)
 {
-    if (v.kind >= VAL_STRING && v.as.obj) v.as.obj->rc++;
+    if (kind_is_heap(v.kind) && v.as.obj) v.as.obj->rc++;
     return v;
 }
 
 void value_release(Value v)
 {
-    if (v.kind < VAL_STRING || !v.as.obj) return;
+    if (!kind_is_heap(v.kind) || !v.as.obj) return;
     Obj *o = v.as.obj;
     if (--o->rc == 0) obj_free(o);
 }
@@ -254,6 +270,7 @@ Value arr_get(const ArrObj *a, size_t k)
     case ELT_INT:     return val_int(((const int64_t *)a->data)[k]);
     case ELT_FLOAT:   return val_float(((const double *)a->data)[k]);
     case ELT_COMPLEX: { Cplx c = ((const Cplx *)a->data)[k]; return val_complex(c.re, c.im); }
+    case ELT_DUAL:    { Dual d = ((const Dual *)a->data)[k]; return val_dual(d.v, d.e); }
     case ELT_BOOL:    return val_bool(((const unsigned char *)a->data)[k] != 0);
     }
     return val_null();
@@ -282,6 +299,15 @@ void arr_set(ArrObj *a, size_t k, Value v)
         else if (v.kind == VAL_FLOAT)   c = (Cplx){ v.as.f, 0.0 };
         else                            c = v.as.z;
         ((Cplx *)a->data)[k] = c;
+        break;
+    }
+    case ELT_DUAL: {
+        Dual d;
+        if      (v.kind == VAL_INT)   d = (Dual){ (double)v.as.i, 0.0 };
+        else if (v.kind == VAL_FLOAT) d = (Dual){ v.as.f, 0.0 };
+        else if (v.kind == VAL_BOOL)  d = (Dual){ v.as.b ? 1.0 : 0.0, 0.0 };
+        else                          d = v.as.d;    /* eval.c gates complex before here */
+        ((Dual *)a->data)[k] = d;
         break;
     }
     case ELT_BOOL:
@@ -385,6 +411,18 @@ static void print_complex(FILE *out, double re, double im)
     fputc('i', out);
 }
 
+/* mirror of print_complex with the eps unit: 2+3eps, 3eps, 2-3eps, 2+0eps */
+static void print_dual(FILE *out, double v, double e)
+{
+    if (e == 0.0) e = 0.0;   /* fold -0.0, exactly as complex does */
+    if (v == 0.0) v = 0.0;
+    if (v == 0.0 && e != 0.0) { fmt_double(out, e); fputs("eps", out); return; }
+    fmt_double(out, v);
+    fputc(e < 0 ? '-' : '+', out);
+    fmt_double(out, e < 0 ? -e : e);
+    fputs("eps", out);
+}
+
 static void print_scalar(FILE *out, Value v)
 {
     switch (v.kind) {
@@ -393,6 +431,7 @@ static void print_scalar(FILE *out, Value v)
     case VAL_INT:     fprintf(out, "%lld", (long long)v.as.i); break;
     case VAL_FLOAT:   fmt_double(out, v.as.f); break;
     case VAL_COMPLEX: print_complex(out, v.as.z.re, v.as.z.im); break;
+    case VAL_DUAL:    print_dual(out, v.as.d.v, v.as.d.e); break;
     case VAL_STRING:  fprintf(out, "\"%.*s\"", (int)((StrObj *)v.as.obj)->len, ((StrObj *)v.as.obj)->data); break;
     default:          break;
     }
@@ -406,6 +445,7 @@ const char *value_type_name(Value v)
     case VAL_INT:     return "Int";
     case VAL_FLOAT:   return "Float";
     case VAL_COMPLEX: return "Complex";
+    case VAL_DUAL:    return "Dual";
     case VAL_STRING:  return "String";
     case VAL_ARRAY:   return "Array";
     case VAL_SPARSE:  return "Sparse";
@@ -437,6 +477,21 @@ static void scalar_str(char *buf, size_t cap, Value v)
             fmt_double_str(rb, sizeof rb, re);
             fmt_double_str(ib, sizeof ib, im < 0 ? -im : im);
             snprintf(buf, cap, "%s%c%si", rb, im < 0 ? '-' : '+', ib);
+        }
+        break;
+    }
+    case VAL_DUAL: {                                   /* mirror of the complex cell */
+        double dv = v.as.d.v, de = v.as.d.e;
+        if (de == 0.0) de = 0.0;
+        if (dv == 0.0) dv = 0.0;
+        char vb[32], eb[32];
+        if (dv == 0.0 && de != 0.0) {
+            fmt_double_str(eb, sizeof eb, de);
+            snprintf(buf, cap, "%seps", eb);
+        } else {
+            fmt_double_str(vb, sizeof vb, dv);
+            fmt_double_str(eb, sizeof eb, de < 0 ? -de : de);
+            snprintf(buf, cap, "%s%c%seps", vb, de < 0 ? '-' : '+', eb);
         }
         break;
     }
@@ -486,6 +541,7 @@ void value_print(FILE *out, Value v)
     if (v.kind == VAL_SPARSE) { sparse_print(out, as_sp(v)); return; }
     switch (v.kind) {
     case VAL_NULL: case VAL_BOOL: case VAL_INT: case VAL_FLOAT: case VAL_COMPLEX:
+    case VAL_DUAL:
         print_scalar(out, v);
         break;
     case VAL_SPARSE: sparse_print(out, as_sp(v)); return;

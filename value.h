@@ -13,15 +13,17 @@
 #include "ast.h"
 
 typedef struct { double re, im; } Cplx;
+typedef struct { double v, e; } Dual;   /* v + e*eps, eps^2 = 0 (design entry 4a) */
 
 typedef enum : uint8_t {
     VAL_NULL, VAL_BOOL, VAL_INT, VAL_FLOAT, VAL_COMPLEX,
     VAL_STRING, VAL_ARRAY, VAL_RECORD, VAL_CLOSURE, VAL_BUILTIN,
     VAL_SPARSE,                     /* appended: existing kind numbers stable */
+    VAL_DUAL,                       /* dual number a + b*eps — immediate scalar */
 } ValueKind;
 
 /* array element type — the numeric tower plus a logical (Bool) element */
-typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING } EltType;
+typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING, ELT_DUAL } EltType;
 
 typedef struct Obj Obj;
 
@@ -32,6 +34,7 @@ typedef struct {
         int64_t  i;
         double   f;
         Cplx     z;
+        Dual     d;
         Obj     *obj;   /* STRING, ARRAY, RECORD, CLOSURE, BUILTIN */
     } as;
 } Value;
@@ -98,6 +101,7 @@ static inline Value val_bool(bool b)      { return (Value){ .kind = VAL_BOOL,  .
 static inline Value val_int(int64_t i)    { return (Value){ .kind = VAL_INT,   .as.i = i }; }
 static inline Value val_float(double f)   { return (Value){ .kind = VAL_FLOAT, .as.f = f }; }
 static inline Value val_complex(double re, double im) { return (Value){ .kind = VAL_COMPLEX, .as.z = { re, im } }; }
+static inline Value val_dual(double v, double e)      { return (Value){ .kind = VAL_DUAL,    .as.d = { v, e } }; }
 
 /* --- heap constructors (return +1 ref) --- */
 Value val_string(const char *bytes, uint32_t len);   /* copies */

@@ -305,3 +305,79 @@ tree (git excluded) — the tree is now byte-for-byte the snapshot,
 deletions included. The general law: when a model says "X is the
 complete state," audit every mechanism that applies X for the
 operations it cannot express.
+
+### The positional immediacy test (Cozy 0.0.12)
+
+value_retain decided heap-vs-immediate with `kind >= VAL_STRING` — a
+range test that encoded the enum's ORDER as if it were a property of
+the kinds. Every appended kind before VAL_DUAL happened to be a heap
+object, so the test kept passing and looked like a law. VAL_DUAL is an
+immediate (two doubles), landed numerically above VAL_STRING, and the
+first retain of a dual dereferenced 2.0 as a pointer — segfault, found
+in the very first smoke test, with a beautiful red herring: duals whose
+value part was 0.0 worked, because 0.0 aliases NULL and the null check
+swallowed it. The class: a classification implemented as a range over
+an enum breaks the day the enum grows past the range's assumption, and
+appended-for-ABI-stability enums (ours, by design) grow at the END,
+exactly where `>=` tests live. Fix: an explicit kind_is_heap switch —
+-Werror=switch now guards the classification the way it already guards
+every other kind dispatch. Audit rule: grep for comparison operators
+applied to enum values whenever a kind, element type, or opcode is
+appended; the sparse rename found ghost files, this found ghost
+pointers.
+
+### The third backend's two findings (Cozy 0.0.16)
+
+The Accelerate acceptance run — 1046 goldens and 615 transcripts against
+a third independent LAPACK on a different architecture — came back green
+everywhere except seven BOOK lines, and the seven decomposed into
+exactly two lessons.
+
+ONE: transcripts had pinned architecture-dependent noise. The Fourier
+chapters displayed ~1e-16 coefficients — mathematically zero, computed
+by integral + trig, whose last-ulp digits differ between x86 and ARM
+libm. The book had captured x86's dust as truth. The class extends the
+time- and path-dependent golden family: PLATFORM-dependent output is a
+bomb on the day the second platform arrives. Fix in the document layer:
+a zap chop (|v| < 1e-12 -> exact 0) in the transcripts, which also
+improved the pedagogy — the spectra now display as the clean patterns
+the mathematics says, identical on every machine.
+
+TWO: the eigenvector phase convention had a tie hole. The anchor —
+"largest entry made real positive" — selected by strict comparison, so
+a vector with two equal-magnitude components (every 2-state Markov
+chain's [0.7071; -0.7071]) let last-ulp noise pick the anchor, and
+Accelerate picked differently than tier0/openblas had. Same disease as
+the 0.0.11 conjugate-pair sort, same medicine: the selection is now
+tolerance-aware (first entry within 1e-12 relative of maximal), and the
+convention is deterministic on every backend. One book transcript
+recaptured to the now-canonical sign; goldens and manual never pinned
+the tie.
+
+The meta-lesson: each new backend is an adversarial reviewer of every
+convention the language thought it had settled. Two backends agreed by
+luck; the third found both holes in one run.
+
+### The guard behind the wrong gate (Cozy 0.0.17)
+
+run_emacs.sh checked for emacs and skipped everything when absent —
+including the pure-python drift check that needed no emacs at all. The
+primary dev container has no emacs, so the editor-mode drift guard was
+dead there from the day it was written; a hand edit to cozy-mode.el at
+0.0.12 (wrong order, wrong layout, exactly what the generator exists to
+prevent) shipped through four releases of green suites and was caught
+by the owner's X1, which has emacs. Same family as the stale exec and
+the correlated sentinel: A GUARD THAT ONLY RUNS WHERE A TOOL HAPPENS TO
+BE INSTALLED CERTIFIES EVERYWHERE ELSE. The gate now covers only the
+emacs-batch test; the drift check runs unconditionally. Audit rule:
+when a check script starts with "command -v X || exit 0", every line
+after it that does not need X is a dead guard in X-less environments.
+
+Second, smaller: the fix run exposed that gen_emacs_mode and
+gen_reference parsed the same doc table with DIFFERENT regexes — the
+looser one matched a { "y", "m", ... } unit-key array and had been
+highlighting a phantom builtin named y in the editor forever (and
+reporting 172 where the reference said 171 — two truths from one
+table). Both generators now use the identical full-row pattern. The
+class: two parsers of one source of truth will disagree exactly when
+it matters; share the pattern or generate one from the other.

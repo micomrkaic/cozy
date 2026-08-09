@@ -42,6 +42,7 @@ static const char *type_name(ValueKind k)
     case VAL_STRING:  return "String";
     case VAL_ARRAY:   return "Array";
     case VAL_SPARSE:  return "Sparse";
+    case VAL_DUAL:    return "Dual";
     case VAL_RECORD:  return "Record";
     case VAL_CLOSURE: return "Closure";
     case VAL_BUILTIN: return "Builtin";
@@ -57,11 +58,13 @@ static const char *elt_name(EltType e)
     case ELT_FLOAT:   return "Float";
     case ELT_COMPLEX: return "Complex";
     case ELT_STRING:  return "String";
+    case ELT_DUAL:    return "Dual";
     }
     return "?";
 }
 
-static bool is_num(Value v)   { return v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_COMPLEX; }
+static bool is_num(Value v)   { return v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_COMPLEX
+                                    || v.kind == VAL_DUAL; }
 static bool is_array(Value v) { return v.kind == VAL_ARRAY; }
 
 /* ------------------------------------------------------------------ */
@@ -69,8 +72,13 @@ static bool is_array(Value v) { return v.kind == VAL_ARRAY; }
 /* ------------------------------------------------------------------ */
 typedef enum { AR_ADD, AR_SUB, AR_MUL, AR_DIV, AR_POW, AR_LDIV } Arith;
 
-static int    num_rank(Value v) { return v.kind == VAL_INT ? 0 : v.kind == VAL_FLOAT ? 1 : 2; }
-static double as_double(Value v){ return v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f : v.as.z.re; }
+static int    num_rank(Value v) { return v.kind == VAL_INT ? 0 : v.kind == VAL_FLOAT ? 1
+                                       : v.kind == VAL_COMPLEX ? 2 : 3; }   /* 3 = dual */
+static double as_double(Value v){ return v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f
+                                       : v.kind == VAL_DUAL ? v.as.d.v : v.as.z.re; }
+static Dual   as_dual(Value v)  { return v.kind == VAL_DUAL  ? v.as.d
+                                       : v.kind == VAL_FLOAT ? (Dual){ v.as.f, 0.0 }
+                                                             : (Dual){ (double)v.as.i, 0.0 }; }
 static Cplx   as_cplx(Value v)  { return v.kind == VAL_COMPLEX ? v.as.z
                                        : v.kind == VAL_FLOAT   ? (Cplx){ v.as.f, 0.0 }
                                                                : (Cplx){ (double)v.as.i, 0.0 }; }
@@ -156,11 +164,18 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
 
     if (kind == AR_LDIV) { Value t = a; a = b; b = t; kind = AR_DIV; }   /* a\b == b/a */
 
+    /* The dual promotion law, stated once: int and float lift into dual
+     * (eps = 0); dual and complex do not mix (recorded rejection — duals
+     * replace complex-step differentiation, nesting them has no user). */
+    if ((a.kind == VAL_DUAL && b.kind == VAL_COMPLEX) ||
+        (a.kind == VAL_COMPLEX && b.kind == VAL_DUAL))
+        runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
+
     int rank = num_rank(a) > num_rank(b) ? num_rank(a) : num_rank(b);
     if (kind == AR_DIV && rank < 1) rank = 1;                            /* int/int -> float */
     if (kind == AR_POW) {
         if (rank == 2) runtime_error(I, "complex exponentiation is not supported yet");
-        if (rank == 0 && b.as.i < 0) rank = 1;                          /* int^negint -> float */
+        if (rank == 0 && b.as.i < 0) rank = 1;                          /* (dual: rank 3 handles all) */                          /* int^negint -> float */
     }
 
     switch (rank) {
@@ -199,6 +214,30 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
         }
         break;
     }
+    case 3: {                                        /* dual: eps^2 = 0 exactly */
+        Dual x = as_dual(a), y = as_dual(b);
+        switch (kind) {
+        case AR_ADD: return val_dual(x.v + y.v, x.e + y.e);
+        case AR_SUB: return val_dual(x.v - y.v, x.e - y.e);
+        case AR_MUL: return val_dual(x.v * y.v, x.v * y.e + x.e * y.v);
+        case AR_DIV: return val_dual(x.v / y.v, (x.e * y.v - x.v * y.e) / (y.v * y.v));
+        case AR_POW: {
+            /* integer exponent carrying no eps: the exact power rule works
+             * for any base sign; otherwise a^b = exp(b log a) needs a.v > 0. */
+            if (y.e == 0.0 && y.v == floor(y.v)) {
+                double n2 = y.v;
+                return val_dual(pow(x.v, n2), n2 * pow(x.v, n2 - 1.0) * x.e);
+            }
+            if (x.v <= 0.0)
+                runtime_error(I, "dual power: base must be positive for a non-integer "
+                                 "or dual exponent (the result would be complex)");
+            double pv = pow(x.v, y.v);
+            return val_dual(pv, pv * (y.e * log(x.v) + y.v * x.e / x.v));
+        }
+        default:     break;
+        }
+        break;
+    }
     }
     runtime_error(I, "unsupported arithmetic");
 }
@@ -220,6 +259,13 @@ static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
     if (!is_num(a) || !is_num(b))
         runtime_error(I, "comparison on non-numbers (%s, %s)", type_name(a.kind), type_name(b.kind));
 
+    if ((a.kind == VAL_DUAL && b.kind == VAL_COMPLEX) ||
+        (a.kind == VAL_COMPLEX && b.kind == VAL_DUAL))
+        runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
+    /* Duals compare by VALUE PART (documented law): conditionals inside a
+     * differentiated function take the branch the values take, so the
+     * derivative of abs at a kink is one-sided. The as_double tail below
+     * reads a dual's value part. */
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) {
         if (op != TOK_EQ && op != TOK_NE)
             runtime_error(I, "ordering comparison is undefined for Complex");
@@ -251,7 +297,8 @@ static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
 /* ------------------------------------------------------------------ */
 static EltType vk_elt(ValueKind k)
 {
-    return k == VAL_BOOL ? ELT_BOOL : k == VAL_INT ? ELT_INT : k == VAL_FLOAT ? ELT_FLOAT : k == VAL_STRING ? ELT_STRING : ELT_COMPLEX;
+    return k == VAL_BOOL ? ELT_BOOL : k == VAL_INT ? ELT_INT : k == VAL_FLOAT ? ELT_FLOAT
+         : k == VAL_STRING ? ELT_STRING : k == VAL_DUAL ? ELT_DUAL : ELT_COMPLEX;
 }
 static EltType elt_max(EltType a, EltType b) { return a > b ? a : b; }   /* numeric tower only */
 
@@ -394,6 +441,9 @@ static Value sparse_empty_like(SpObj *s) { return sp_from_triplets(s->elt, s->ro
 
 static Value sparse_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL ||
+        (is_array(a) && as_arr(a)->elt == ELT_DUAL) || (is_array(b) && as_arr(b)->elt == ELT_DUAL))
+        runtime_error(I, "sparse and dual do not mix — dense(S) if intended");
     bool sa = is_sparse(a), sb = is_sparse(b);
     switch (op) {
     case TOK_PLUS: case TOK_MINUS: {
@@ -524,6 +574,9 @@ Value transpose(Interp *I, Value v, bool conj)
 static Value mldivide(Interp *I, Value A, Value B)
 {
     ArrObj *a = as_arr(A), *b = as_arr(B);
+    if (a->elt == ELT_DUAL || b->elt == ELT_DUAL)
+        runtime_error(I, "left division on dual matrices is not supported — "
+                         "autodiff flows through elementwise ops, matmul, and reductions");
     uint32_t n = a->rows, m = b->cols;
     if (a->cols != n)
         return lstsq(I, A, B);          /* non-square: overdetermined least squares (QR) */
@@ -861,6 +914,7 @@ static int elt_rank(EltType e)
 {
     switch (e) { case ELT_BOOL: return 0; case ELT_INT: return 1;
                  case ELT_FLOAT: return 2; case ELT_COMPLEX: return 3;
+                 case ELT_DUAL: return 3;  /* above float; incomparable with complex (gated) */
                  case ELT_STRING: return 4; /* never promotes with numerics */ }
     return 0;
 }
@@ -872,6 +926,7 @@ static EltType scalar_elt(Interp *I, Value v)
     case VAL_INT:     return ELT_INT;
     case VAL_FLOAT:   return ELT_FLOAT;
     case VAL_COMPLEX: return ELT_COMPLEX;
+    case VAL_DUAL:    return ELT_DUAL;
     case VAL_STRING:  return ELT_STRING;
     default: runtime_error(I, "cannot assign a value of type %s into an array", type_name(v.kind));
     }
@@ -921,6 +976,9 @@ Value do_index_set(Interp *I, Value target, Value *idx, uint32_t argc,
     if (rhs_arr && vcnt != ntarget)
         runtime_error(I, "assignment size mismatch: %zu position(s) but %zu value(s)", ntarget, vcnt);
 
+    if ((velt == ELT_DUAL) != (a->elt == ELT_DUAL) &&
+        (velt == ELT_COMPLEX || a->elt == ELT_COMPLEX))
+        runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
     /* element type of the result; promotion forces a fresh array */
     EltType relt = elt_rank(velt) > elt_rank(a->elt) ? velt : a->elt;
     bool unique  = (a->obj.rc == 2);
@@ -971,6 +1029,7 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
     for (uint32_t r = 0; r < nrows; r++) ntot += (uint32_t)rowcounts[r];
 
     bool saw_bool = false, saw_num = false, saw_str = false;
+    bool saw_cplx = false, saw_dual = false;
     EltType numelt = ELT_INT;
     for (uint32_t k = 0; k < ntot; k++) {
         Value e = ev[k];
@@ -979,8 +1038,13 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
         EltType ee = is_array(e) ? as_arr(e)->elt : vk_elt(e.kind);
         if      (ee == ELT_BOOL)   saw_bool = true;
         else if (ee == ELT_STRING) saw_str = true;
-        else { saw_num = true; numelt = elt_max(numelt, ee); }
+        else { saw_num = true; numelt = elt_max(numelt, ee);
+               if (ee == ELT_COMPLEX) saw_cplx = true;
+               if (ee == ELT_DUAL)    saw_dual = true; }
     }
+    if (saw_cplx && saw_dual)
+        runtime_error(I, "cannot mix complex and dual elements in a matrix "
+                         "— dual and complex do not mix");
     if (saw_str && (saw_num || saw_bool))
         runtime_error(I, "cannot mix strings with numbers in a matrix");
     if (saw_bool && saw_num)
@@ -1477,6 +1541,43 @@ static Value sprand_impl(Interp *I, Value *args, bool normal, const char *who)
 static Value bi_sprand(Interp *I, Value *args, uint32_t n)  { (void)n; return sprand_impl(I, args, false, "sprand"); }
 static Value bi_sprandn(Interp *I, Value *args, uint32_t n) { (void)n; return sprand_impl(I, args, true,  "sprandn"); }
 
+static Value map_binary(Interp *I, Value a, Value b, Value (*f)(Interp *, Value, Value));
+/* ---- dual numbers (design entry 4a; gradient infrastructure for entry 3) ----
+ * dual(a, b) builds a + b*eps, elementwise over arrays — dual(x, seed) with a
+ * seed vector is how grad() seeds one direction. dualval/dualeps are TOTAL on
+ * plain numbers (x and 0): d(f) must survive an f whose branch returns a
+ * constant that never touched dual arithmetic. */
+static Value sc_dual_make(Interp *I, Value a, Value b)
+{
+    if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX)
+        runtime_error(I, "dual: components must be real (dual and complex do not mix)");
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+        runtime_error(I, "dual: components are already dual — jets beyond first order "
+                         "are not supported yet");
+    if (!is_num(a) || !is_num(b))
+        runtime_error(I, "dual: expected numbers, got (%s, %s)", type_name(a.kind), type_name(b.kind));
+    return val_dual(as_double(a), as_double(b));
+}
+static Value bi_dual(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    return map_binary(I, args[0], args[1], sc_dual_make);
+}
+static Value sc_dualval(Interp *I, Value v)
+{
+    if (v.kind == VAL_DUAL) return val_float(v.as.d.v);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return v;   /* total on numbers */
+    runtime_error(I, "dualval: expected a dual or real number, got %s", type_name(v.kind));
+}
+static Value sc_dualeps(Interp *I, Value v)
+{
+    if (v.kind == VAL_DUAL) return val_float(v.as.d.e);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(0.0);   /* constants: derivative 0 */
+    runtime_error(I, "dualeps: expected a dual or real number, got %s", type_name(v.kind));
+}
+static Value bi_dualval(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_dualval); }
+static Value bi_dualeps(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_dualeps); }
+
 static Value bi_map(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -1511,12 +1612,24 @@ static Value abs_scalar(Interp *I, Value v)
     case VAL_INT:     return val_int(v.as.i < 0 ? -v.as.i : v.as.i);
     case VAL_FLOAT:   return val_float(fabs(v.as.f));
     case VAL_COMPLEX: return val_float(hypot(v.as.z.re, v.as.z.im));
+    case VAL_DUAL: {  /* d|x| = sign(x), one-sided at the kink; sign(0) = 0 */
+        double x = v.as.d.v, s = (x > 0) - (x < 0);
+        return val_dual(fabs(x), v.as.d.e * s);
+    }
     default:          runtime_error(I, "abs: expected a number, got %s", type_name(v.kind));
     }
 }
 
 static Value sqrt_scalar(Interp *I, Value v)
 {
+    if (v.kind == VAL_DUAL) {
+        double x = v.as.d.v, dx = v.as.d.e;
+        if (x < 0.0)
+            runtime_error(I, "sqrt: dual input is negative (the result would be complex, "
+                             "and dual and complex do not mix)");
+        double r = sqrt(x);
+        return val_dual(r, dx / (2.0 * r));   /* natural formula: inf at the origin */
+    }
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT) {
         double d = as_double(v);
         if (d >= 0) return val_float(sqrt(d));
@@ -1725,6 +1838,9 @@ static const BuiltinDoc builtin_docs[] = {
     { "kron",  "kron(A, B)",         "Kronecker product: (m x n) kron (p x q) -> (mp x nq)", "linalg" , "kron(eye(2), [0, 1; 1, 0])        % block-diagonal swap matrices" },
     { "lgamma","lgamma(x)",          "log of |gamma(x)| (real, elementwise)", "math" , "format(6); lgamma(10)             %= 12.8018" },
     /* trig ------------------------------------------------------------ */
+    { "dual",  "dual(a, b)", "the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction)", "autodiff" , "dual(3, 1) * dual(3, 1)           %= 9+6eps" },
+    { "dualval", "dualval(x)", "the value part of a dual; a plain number passes through (total, so constant branches differentiate)", "autodiff" , "dualval(dual(2, 5))               %= 2\ndualval(7)                        %= 7" },
+    { "dualeps", "dualeps(x)", "the eps (derivative) part of a dual; 0 for a plain number", "autodiff" , "dualeps(dual(2, 5))               %= 5\ndualeps(7)                        %= 0" },
     { "sin",   "sin(x)",  "sine (complex-aware, elementwise)", "trig" , "format(6); sin(1)                 %= 0.841471" },
     { "cos",   "cos(x)",  "cosine (complex-aware, elementwise)", "trig" , "cos(0)                            %= 1" },
     { "tan",   "tan(x)",  "tangent (complex-aware, elementwise)", "trig" , "format(6); tan(1)                 %= 1.55741" },
@@ -1905,6 +2021,10 @@ static void save_value(Interp *I, FILE *f, Value v, const char *name)
     case VAL_COMPLEX:
         fputc('(', f); save_double(f, v.as.z.re);
         fputs(" + ", f); save_double(f, v.as.z.im); fputs(" * 1i)", f);
+        return;
+    case VAL_DUAL:
+        fputs("dual(", f); save_double(f, v.as.d.v);
+        fputs(", ", f); save_double(f, v.as.d.e); fputc(')', f);
         return;
     case VAL_STRING: {
         StrObj *s = as_str(v);
@@ -3379,6 +3499,7 @@ static void who_describe(FILE *out, Value v)        /* compact type + shape/valu
     case VAL_INT:     fprintf(out, "int        = %lld", (long long)v.as.i); break;
     case VAL_FLOAT:   fprintf(out, "float      = %g", v.as.f); break;
     case VAL_COMPLEX: fprintf(out, "complex    = %g%+gi", v.as.z.re, v.as.z.im); break;
+    case VAL_DUAL:    fprintf(out, "dual       = %g%+geps", v.as.d.v, v.as.d.e); break;
     case VAL_STRING:  fprintf(out, "string     (%u chars)", as_str(v)->len); break;
     case VAL_ARRAY: {
         ArrObj *a = as_arr(v);
@@ -4064,7 +4185,7 @@ static size_t value_bytes(Value v)
     switch (v.kind) {
     case VAL_ARRAY: {
         ArrObj *a = as_arr(v);
-        size_t elt = a->elt == ELT_COMPLEX ? 16 : a->elt == ELT_BOOL ? 1 : 8;
+        size_t elt = a->elt == ELT_COMPLEX || a->elt == ELT_DUAL ? 16 : a->elt == ELT_BOOL ? 1 : 8;
         return sizeof *a + (size_t)a->rows * a->cols * elt;
     }
     case VAL_STRING: return sizeof(StrObj) + as_str(v)->len;
@@ -4175,6 +4296,7 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
         { "trig",    "trigonometry" },{ "complex", "complex" },      { "linalg",  "linear algebra" },
         { "solve",   "solvers" },     { "io",      "data files" },   { "plot",    "plotting" },
         { "random",  "random" },      { "test",    "predicates" },   { "hof",     "higher-order" },
+        { "autodiff","autodiff" },
         { "repl",    "repl commands" },
     };
     fputs("Neutrino builtins  —  help(name) for detail, e.g. help(svd)\n\n", vout());
@@ -4223,6 +4345,9 @@ static Cplx *to_cplx(Interp *I, Value v, uint32_t *rows, uint32_t *cols, const c
                       who, who);
     if (!is_array(v)) runtime_error(I, "%s: expected a matrix, got %s", who, type_name(v.kind));
     ArrObj *a = as_arr(v);
+    if (a->elt == ELT_DUAL)
+        runtime_error(I, "%s on dual matrices is not supported — autodiff flows through "
+                         "elementwise ops, matmul, and reductions; dualval(A) for the value part", who);
     *rows = a->rows; *cols = a->cols;
     size_t nn = (size_t)a->rows * a->cols;
     Cplx *d = malloc((nn ? nn : 1) * sizeof *d);
@@ -4313,6 +4438,8 @@ static Value bi_det(Interp *I, Value *args, uint32_t n)
     ArrObj *a = as_arr(args[0]);
     uint32_t N = a->rows;
     if (a->cols != N) runtime_error(I, "det: matrix must be square (got %ux%u)", a->rows, a->cols);
+    if (a->elt == ELT_DUAL)
+        runtime_error(I, "det on dual matrices is not supported — dualval(A) for the value part");
     bool real_in = a->elt != ELT_COMPLEX;
     if (N == 0) return val_int(1);
     Cplx *M = malloc((size_t)N * N * sizeof *M);
@@ -4355,6 +4482,9 @@ static Value bi_norm(Interp *I, Value *args, uint32_t n)
     if ((is_array(args[0]) && as_arr(args[0])->elt == ELT_STRING) || args[0].kind == VAL_STRING)
         runtime_error(I, "norm: undefined for strings");
     Value v = args[0];
+    if (v.kind == VAL_DUAL || (is_array(v) && as_arr(v)->elt == ELT_DUAL))
+        runtime_error(I, "norm on dual is not supported (it would drop the derivative) — "
+                         "sqrt(sum(x .* x)) differentiates exactly");
     if (is_num(v)) return val_float(vmag(v));
     if (!is_array(v)) runtime_error(I, "norm: expected a number or array");
     ArrObj *a = as_arr(v);
@@ -4690,8 +4820,17 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
         uint32_t src = ord[jj];
         Cplx lam = w[src];
         if (fabs(lam.im) > 1e-12 * (1.0 + c_abs(lam))) eig_real = false;
-        uint32_t pmax = 0; double bmax = 0;                /* normalize phase: largest entry real>0 */
-        for (uint32_t i = 0; i < N; i++) { double a = c_abs(V[(size_t)i*N+src]); if (a > bmax) { bmax = a; pmax = i; } }
+        /* normalize phase: FIRST near-maximal entry real > 0. The anchor
+         * selection is tolerance-aware (the 1e-12 relative rule): with two
+         * components of equal magnitude (a 2-state Markov chain's
+         * [0.7071; -0.7071]), a strict > let last-ulp noise pick the
+         * anchor differently per backend — found by the Accelerate
+         * acceptance run, same class as the 0.0.11 conjugate-pair sort. */
+        uint32_t pmax = 0; double bmax = 0;
+        for (uint32_t i = 0; i < N; i++) {
+            double a = c_abs(V[(size_t)i*N+src]);
+            if (a > bmax * (1.0 + 1e-12)) { bmax = a; pmax = i; }
+        }
         Cplx ph = { 1, 0 };
         if (bmax > 0) { ph = c_scale(1.0/c_abs(V[(size_t)pmax*N+src]), V[(size_t)pmax*N+src]); ph = c_conj(ph); }
         for (uint32_t i = 0; i < N; i++) Vc[(size_t)i*N+jj] = c_mul(V[(size_t)i*N+src], ph);
@@ -4762,41 +4901,55 @@ static Cplx c_acoshz(Cplx z) { return c_logz(c_add(z, c_sqrtz(c_sub(c_mul(z,z), 
 static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0}, z), c_sub((Cplx){1,0}, z)))); }
 
 /* entire on the reals: real -> real, complex -> complex */
-#define ENTIRE_UNARY(name, rfn, cfn)                                                  \
+/* Each kernel's dual case applies the chain rule: f(x + dx eps) =
+ * f(x) + dx f'(x) eps, with the derivative expression dexpr in x. */
+#define ENTIRE_UNARY(name, rfn, cfn, dexpr)                                           \
     static Value sc_##name(Interp *I, Value v) { (void)I;                             \
         if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
+        if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
+            return val_dual(rfn(x), dx * (dexpr)); }                                  \
         return val_float(rfn(as_double(v))); }                                        \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-ENTIRE_UNARY(exp,   exp,   c_expz)
-ENTIRE_UNARY(sin,   sin,   c_sinz)
-ENTIRE_UNARY(cos,   cos,   c_cosz)
-ENTIRE_UNARY(tan,   tan,   c_tanz)
-ENTIRE_UNARY(sinh,  sinh,  c_sinhz)
-ENTIRE_UNARY(cosh,  cosh,  c_coshz)
-ENTIRE_UNARY(tanh,  tanh,  c_tanhz)
-ENTIRE_UNARY(atan,  atan,  c_atanz)
-ENTIRE_UNARY(asinh, asinh, c_asinhz)
+ENTIRE_UNARY(exp,   exp,   c_expz,   exp(x))
+ENTIRE_UNARY(sin,   sin,   c_sinz,   cos(x))
+ENTIRE_UNARY(cos,   cos,   c_cosz,   -sin(x))
+ENTIRE_UNARY(tan,   tan,   c_tanz,   1.0 / (cos(x) * cos(x)))
+ENTIRE_UNARY(sinh,  sinh,  c_sinhz,  cosh(x))
+ENTIRE_UNARY(cosh,  cosh,  c_coshz,  sinh(x))
+ENTIRE_UNARY(tanh,  tanh,  c_tanhz,  1.0 - tanh(x) * tanh(x))
+ENTIRE_UNARY(atan,  atan,  c_atanz,  1.0 / (1.0 + x * x))
+ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0))
 #undef ENTIRE_UNARY
 
 /* tower: real in domain -> real; real out of domain or complex -> complex */
-#define TOWER_UNARY(name, rfn, cfn, indomain)                                         \
-    static Value sc_##name(Interp *I, Value v) { (void)I;                             \
+#define TOWER_UNARY(name, rfn, cfn, indomain, dexpr)                                  \
+    static Value sc_##name(Interp *I, Value v) {                                      \
         if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
+        if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
+            if (!(indomain))                                                          \
+                runtime_error(I, #name ": dual input outside the real domain "        \
+                                 "(the result would be complex, and dual and "        \
+                                 "complex do not mix)");                              \
+            return val_dual(rfn(x), dx * (dexpr)); }                                  \
         double x = as_double(v);                                                      \
         if (indomain) return val_float(rfn(x));                                       \
         Cplx r = cfn((Cplx){ x, 0.0 }); return val_complex(r.re, r.im); }             \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-TOWER_UNARY(log,   log,   c_logz,   x >= 0.0)
-TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0)
-TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0)
-TOWER_UNARY(acosh, acosh, c_acoshz, x >= 1.0)
-TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0)
+TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x)
+TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0, 1.0 / sqrt(1.0 - x * x))
+TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0, -1.0 / sqrt(1.0 - x * x))
+TOWER_UNARY(acosh, acosh, c_acoshz, x >= 1.0,              1.0 / sqrt(x * x - 1.0))
+TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x))
 #undef TOWER_UNARY
 
 /* log base b via the tower-aware natural log */
 #define LOGB_UNARY(name, base)                                                        \
     static Value sc_##name(Interp *I, Value v) { (void)I; double l = log((double)base);\
         if (v.kind == VAL_COMPLEX) { Cplx r = c_logz(v.as.z); return val_complex(r.re/l, r.im/l); } \
+        if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
+            if (x < 0.0) runtime_error(I, #name ": dual input outside the real domain "\
+                                          "(dual and complex do not mix)");           \
+            return val_dual(log(x)/l, dx / (x * l)); }                                \
         double x = as_double(v);                                                      \
         if (x >= 0.0) return val_float(log(x)/l);                                      \
         Cplx r = c_logz((Cplx){ x, 0.0 }); return val_complex(r.re/l, r.im/l); }       \
@@ -4809,6 +4962,7 @@ LOGB_UNARY(log2,   2.0)
 #define ROUND_UNARY(name, rfn)                                                        \
     static Value sc_##name(Interp *I, Value v) { (void)I;                             \
         if (v.kind == VAL_COMPLEX) return val_complex(rfn(v.as.z.re), rfn(v.as.z.im)); \
+        if (v.kind == VAL_DUAL) return val_dual(rfn(v.as.d.v), 0.0);   /* locally constant */ \
         if (v.kind == VAL_INT) return v;                                              \
         return val_float(rfn(as_double(v))); }                                        \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
@@ -4819,16 +4973,20 @@ ROUND_UNARY(trunc, trunc)
 #undef ROUND_UNARY
 
 /* real-domain only (error on complex) */
-#define REAL_ONLY(name, rfn)                                                          \
+static double digamma_d(Interp *I, double x);          /* defined with the special functions */
+static const double AD_2_SQRTPI = 1.1283791670955126;  /* 2/sqrt(pi): d/dx erf */
+#define REAL_ONLY(name, rfn, dexpr)                                                   \
     static Value sc_##name(Interp *I, Value v) {                                      \
+        if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
+            return val_dual(rfn(x), dx * (dexpr)); }                                  \
         if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(rfn(as_double(v))); \
         runtime_error(I, #name ": expected a real number, got %s", type_name(v.kind)); } \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-REAL_ONLY(cbrt,   cbrt)
-REAL_ONLY(gamma,  tgamma)
-REAL_ONLY(lgamma, lgamma)
-REAL_ONLY(erf,    erf)
-REAL_ONLY(erfc,   erfc)
+REAL_ONLY(cbrt,   cbrt,   1.0 / (3.0 * cbrt(x) * cbrt(x)))
+REAL_ONLY(gamma,  tgamma, tgamma(x) * digamma_d(I, x))
+REAL_ONLY(lgamma, lgamma, digamma_d(I, x))
+REAL_ONLY(erf,    erf,    AD_2_SQRTPI * exp(-x * x))
+REAL_ONLY(erfc,   erfc,   -AD_2_SQRTPI * exp(-x * x))
 #undef REAL_ONLY
 
 /* ---- special functions (real domain, elementwise via map_unary/map_binary) ---- */
@@ -5061,6 +5219,8 @@ static Value sc_sign(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_FLOAT) { double x = v.as.f; return val_float((double)((x > 0) - (x < 0))); }
     if (v.kind == VAL_COMPLEX) { double m = hypot(v.as.z.re, v.as.z.im);
         return m == 0.0 ? val_complex(0, 0) : val_complex(v.as.z.re/m, v.as.z.im/m); }
+    if (v.kind == VAL_DUAL) { double x = v.as.d.v;
+        return val_dual((double)((x > 0) - (x < 0)), 0.0); }   /* locally constant */
     runtime_error(I, "sign: expected a number, got %s", type_name(v.kind)); }
 static Value bi_sign(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_sign); }
 
@@ -5068,14 +5228,17 @@ static Value bi_sign(Interp *I, Value *a, uint32_t n) { (void)n; return map_unar
 static Value sc_real(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.re);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
+    if (v.kind == VAL_DUAL)                          return v;   /* duals are real-valued */
     runtime_error(I, "real: expected a number, got %s", type_name(v.kind)); }
 static Value sc_imag(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.im);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return val_float(0.0);
+    if (v.kind == VAL_DUAL)                          return val_float(0.0);
     runtime_error(I, "imag: expected a number, got %s", type_name(v.kind)); }
 static Value sc_conj(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_complex(v.as.z.re, -v.as.z.im);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
+    if (v.kind == VAL_DUAL)                          return v;   /* conj is identity on reals */
     runtime_error(I, "conj: expected a number, got %s", type_name(v.kind)); }
 static Value sc_angle(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(atan2(v.as.z.im, v.as.z.re));
@@ -5113,18 +5276,26 @@ static Value map_binary(Interp *I, Value a, Value b, Value (*f)(Interp *, Value,
 }
 static Value sc_atan2(Interp *I, Value y, Value x) {
     if (y.kind == VAL_COMPLEX || x.kind == VAL_COMPLEX) runtime_error(I, "atan2: expected real numbers");
+    if (y.kind == VAL_DUAL || x.kind == VAL_DUAL)
+        runtime_error(I, "atan2 on dual is not supported (it would drop the derivative)");
     return val_float(atan2(as_double(y), as_double(x))); }
 static Value sc_hypot(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "hypot: expected real numbers");
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+        runtime_error(I, "hypot on dual is not supported (it would drop the derivative)");
     return val_float(hypot(as_double(a), as_double(b))); }
 static Value sc_mod(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "mod: expected real numbers");
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+        runtime_error(I, "mod on dual is not supported (it would drop the derivative)");
     double x = as_double(a), y = as_double(b);
     double r = (y == 0.0) ? x : x - y * floor(x / y);
     if (a.kind == VAL_INT && b.kind == VAL_INT) return val_int((int64_t)llround(r));
     return val_float(r); }
 static Value sc_rem(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "rem: expected real numbers");
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+        runtime_error(I, "rem on dual is not supported (it would drop the derivative)");
     double x = as_double(a), y = as_double(b);
     double r = (y == 0.0) ? nan("") : fmod(x, y);
     if (a.kind == VAL_INT && b.kind == VAL_INT && y != 0.0) return val_int((int64_t)r);
@@ -5614,6 +5785,7 @@ static bool elt_nonzero(Value e)
     case VAL_INT:     return e.as.i != 0;
     case VAL_FLOAT:   return e.as.f != 0.0;
     case VAL_COMPLEX: return e.as.z.re != 0.0 || e.as.z.im != 0.0;
+    case VAL_DUAL:    return e.as.d.v != 0.0;            /* value part, like < */
     default:          return false;
     }
 }
@@ -5921,6 +6093,7 @@ static Value sc_isnan(Interp *I, Value v)
     switch (v.kind) {
     case VAL_FLOAT:   return val_bool(isnan(v.as.f));
     case VAL_COMPLEX: return val_bool(isnan(v.as.z.re) || isnan(v.as.z.im));
+    case VAL_DUAL:    return val_bool(isnan(v.as.d.v) || isnan(v.as.d.e));
     default:          return val_bool(false);            /* int, bool: never NaN */
     }
 }
@@ -5930,6 +6103,7 @@ static Value sc_isinf(Interp *I, Value v)
     switch (v.kind) {
     case VAL_FLOAT:   return val_bool(isinf(v.as.f));
     case VAL_COMPLEX: return val_bool(isinf(v.as.z.re) || isinf(v.as.z.im));
+    case VAL_DUAL:    return val_bool(isinf(v.as.d.v) || isinf(v.as.d.e));
     default:          return val_bool(false);
     }
 }
@@ -5939,6 +6113,7 @@ static Value sc_isfinite(Interp *I, Value v)
     switch (v.kind) {
     case VAL_FLOAT:   return val_bool(isfinite(v.as.f));
     case VAL_COMPLEX: return val_bool(isfinite(v.as.z.re) && isfinite(v.as.z.im));
+    case VAL_DUAL:    return val_bool(isfinite(v.as.d.v) && isfinite(v.as.d.e));
     default:          return val_bool(true);             /* int, bool: always finite */
     }
 }
@@ -5952,6 +6127,7 @@ static double cmp_key(Interp *I, Value v)
     case VAL_INT:   return (double)v.as.i;
     case VAL_FLOAT: return v.as.f;
     case VAL_BOOL:  return v.as.b ? 1.0 : 0.0;
+    case VAL_DUAL:  return v.as.d.v;               /* value-part ordering, like < */
     default:        runtime_error(I, "min/max: undefined for %s", type_name(v.kind));
     }
 }
@@ -6001,6 +6177,9 @@ EnvObj *globals_new(void)
     def_builtin(e, "svd",     bi_svd,     1, 1);
     def_builtin(e, "exp",     bi_exp,     1, 1);
     def_builtin(e, "log",     bi_log,     1, 1);
+    def_builtin(e, "dual",    bi_dual,    2, 2);
+    def_builtin(e, "dualval", bi_dualval, 1, 1);
+    def_builtin(e, "dualeps", bi_dualeps, 1, 1);
     def_builtin(e, "sin",     bi_sin,     1, 1);
     def_builtin(e, "cos",     bi_cos,     1, 1);
     def_builtin(e, "tan",     bi_tan,     1, 1);
