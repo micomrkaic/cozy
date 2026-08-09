@@ -136,6 +136,15 @@ manual:
 	pandoc MANUAL.md -o MANUAL.pdf --pdf-engine=xelatex --toc --toc-depth=2 \
 	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
 
+# All three books. The verdict is the exit code: never pipe these through
+# a filter or silence them — 0.0.18 shipped four releases of stale PDFs
+# behind a > /dev/null (LESSONS: the pandoc that failed in silence).
+pdfs: manual
+	pandoc BOOK.md -o BOOK.pdf --pdf-engine=xelatex --resource-path=.:docs \
+	  --toc --toc-depth=1 -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
+	pandoc PACKAGES.md -o PACKAGES.pdf --pdf-engine=xelatex --toc --toc-depth=1 \
+	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
+
 run:    $(BIN); ./$(BIN)
 repl:   $(BIN); ./$(BIN)
 sample: $(BIN); ./$(BIN) --sample
@@ -175,4 +184,4 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 wasm-ubuntu:
 	NODE_PATH=/usr/share/nodejs $(MAKE) wasm EMCC_C23='-Dnullptr=NULL -Dalignof=_Alignof -Dtypeof=__typeof__ -Dstatic_assert=_Static_assert'
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu manual pdfs

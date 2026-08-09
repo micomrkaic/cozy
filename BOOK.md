@@ -3,7 +3,7 @@
 *A book of worked problems — practical computing with a small array
 language.*
 
-![](og-card.png)
+![Cozy by Example](vignettes/title_page.png)
 
 
 This book is written in the tradition of the calculator applications
@@ -46,7 +46,7 @@ Appendix F. Index of builtins
 
 ## 1. Basic calculations
 
-![](vignettes/vin1.png)
+![Basic calculations](vignettes/cozy_01_basic_calculations.png)
 
 The prompt is a calculator first. Three habits from the start: `ans` carries
 the last value you saw into the next expression; `format(n)` sets displayed
@@ -120,7 +120,7 @@ every element. Write the function once; the array case is free.
 
 ## 2. Values and types
 
-![](vignettes/vin2.png)
+![Values and types](vignettes/cozy_02_values_and_types.png)
 
 Everything is a value: numbers, strings, arrays, records, functions —
 anything can sit in a variable, ride a pipe, or live in a record field.
@@ -202,7 +202,7 @@ built in so these facts are one keystroke from checkable.
 
 ## 3. Strings
 
-![](vignettes/vin3.png)
+![Strings](vignettes/cozy_03_strings.png)
 
 A dozen builtins cover practical text: `upper lower trim`, the predicates
 `contains startswith endswith`, `strrep` for replacement, `strsplit` and
@@ -303,7 +303,7 @@ in KNOWN_LIMITATIONS for the successor.
 
 ## 4. Complex numbers
 
-![](vignettes/vin4.png)
+![Complex numbers](vignettes/cozy_04_complex_numbers.png)
 
 Complex values are ordinary numbers here: `3 + 4i` is a literal, and
 `abs`, `angle`, `conj`, `real`, `imag` do what mathematics says.
@@ -381,7 +381,7 @@ as `abs` confirms.
 
 ## 5. Matrices
 
-![](vignettes/vin5.png)
+![Matrices](vignettes/cozy_05_matrices.png)
 
 Arrays with two dimensions in play — the native material of the language.
 This chapter is the mechanics: building, indexing, computing, and
@@ -498,7 +498,7 @@ glance.
 
 ## 6. Reading and writing data
 
-![](vignettes/vin6.png)
+![Reading and writing data](vignettes/cozy_06_reading_and_writing_data.png)
 
 Numbers rarely start life at the prompt. `writecsv`/`readcsv` move plain
 numeric matrices; `readtable` reads a headered CSV into a record of named
@@ -574,7 +574,7 @@ variables back. The standard library never travels; only your names do.
 
 ## 7. Writing your own functions
 
-![](vignettes/vin7.png)
+![Writing your own functions](vignettes/cozy_07_writing_your_own_functions.png)
 
 `fn` makes a function; `let` names it; recursion works; `body` shows the
 source of what you defined.
@@ -632,7 +632,7 @@ from now, you can ask your session what exactly this `bmi` computes.
 
 ## 8. Anonymous functions and pipes
 
-![](vignettes/vin8.png)
+![Anonymous functions and pipes](vignettes/cozy_08_anonymous_functions_and_pipes.png)
 
 The pipe family is the language's syntax for *thought order*: data first,
 then what happens to it. `|>` feeds a value to a function; `~>` maps over
@@ -678,7 +678,7 @@ per employee; `|> sum` closes the week: 4,592.75. One line per idea.
 
 ## 9. Records
 
-![](vignettes/vin9.png)
+![Records](vignettes/cozy_09_records.png)
 
 Records collect named values: `{sku = "M8x40", price = 0.42}`. Fields come
 out with a dot; `fields` lists them; functions return them when one answer
@@ -722,7 +722,7 @@ the fan-out doesn't care who wrote its entries.
 
 ## 10. Calculus
 
-![](vignettes/vin10.png)
+![Calculus](vignettes/cozy_10_calculus.png)
 
 `integral` (adaptive Simpson), `fzero` (Brent root-finding), `fminbnd`
 (bounded minimization), and poly.cz's exact polynomial calculus.
@@ -1050,7 +1050,7 @@ centuries of analysis.
 
 ## 11. Linear algebra
 
-![](vignettes/vin11.png)
+![Linear algebra](vignettes/cozy_11_linear_algebra.png)
 
 Matrices are the native tongue: `\` solves systems, `eig`, `lu`, `qr`,
 `svd`, `chol` decompose, and poly.cz's `polyfit` does least squares.
@@ -1141,7 +1141,7 @@ algebra is in the core.
 
 ## 12. Probability, statistics, and data
 
-![](vignettes/vin12.png)
+![Probability and statistics](vignettes/cozy_12_prob_stat.png)
 
 dist.cz supplies the distributions; `writecsv`/`readcsv` move data in and
 out; seeded `rng` makes every simulation a repeatable experiment.
@@ -1226,7 +1226,7 @@ live, on the poor man's Gaussian no less.
 
 ## 13. Plotting
 
-![](vignettes/vin13.png)
+![Plotting](vignettes/cozy_13_plotting.png)
 
 Cozy plots through three backends, chosen by environment: in the
 **browser** the default is SVG — dark-themed, rendered into the Plots pane
@@ -1333,7 +1333,7 @@ working.
 
 ## 14. The Cozy idiom
 
-![](vignettes/vin14.png)
+![The Cozy idiom](vignettes/cozy_14_idiom.png)
 
 The unique syntax — lambdas, `where`, index-bound reductions, and the
 pipe family — was designed to *combine*. This chapter is about the
@@ -1610,7 +1610,7 @@ estimation zoo.
 
 ## Appendix A. Finance (finance.cz)
 
-![](vignettes/vinA.png)
+![Finance](vignettes/cozy_A_finance.png)
 
 **Problem A.1 — The mortgage, end to end.** A 425,000 house, 20% down,
 30 years at 5.75% — payment, lifetime interest, and the effect of 300
@@ -1684,7 +1684,7 @@ begin to trust it on the contracts that have no formula.
 
 ## Appendix B. Astronomy (astro.cz)
 
-![](vignettes/vinB.png)
+![Astronomy](vignettes/cozy_B_astro.png)
 
 **Problem B.1 — A July Saturday in Ljubljana.** Sunrise, sunset, and day
 length at 46.05°N, 14.51°E, UTC+2.
@@ -1721,7 +1721,7 @@ twenty days.
 
 ## Appendix C. Physics (phys.cz)
 
-![](vignettes/vinC.png)
+![Physics](vignettes/cozy_C_physics.png)
 
 **Problem C.1 — Orbital and escape velocity.** Speed for a 400 km circular
 orbit; escape speed from the surface.
@@ -1758,7 +1758,7 @@ found by a microwave antenna.
 
 ## Appendix D. Random matrices (rmt.cz)
 
-![](vignettes/vinD.png)
+![Random matrices](vignettes/cozy_D_random_matrices.png)
 
 **Problem D.1 — Wigner's semicircle, witnessed.** The eigenvalues of a
 400 × 400 GOE matrix.
@@ -1782,7 +1782,7 @@ hardware.
 
 ## Appendix E. Symbolic differentiation (symb.cz)
 
-![](vignettes/vinE.png)
+![Symbolic differentiation](vignettes/cozy_E_symbolic_differentiation.png)
 
 **Problem E.1 — The derivative, symbolically, checked numerically.**
 
@@ -1889,7 +1889,7 @@ integrator — the package and the core, one calculus.
 
 ## Appendix F. Index of builtins
 
-![](vignettes/vinF.png)
+![Index of builtins](vignettes/cozy_F_index.png)
 
 Every builtin and constant, alphabetically — machine-generated from the
 interpreter's own documentation table, so this index cannot drift from the

@@ -1,5 +1,29 @@
 # Cozy changelog
 
+## 0.0.22 — the owner's vignettes
+
+### Changed
+- **BOOK.md carries the owner's new vignette set**: a title-page plate
+  and twenty chapter/appendix illustrations (chapters 1-14, appendices
+  A-F), replacing the vin*.png placeholders; references carry alt text;
+  the 14th file's "ifiom" typo corrected to "idiom" on import; PNGs
+  losslessly optimized (34.3 -> 28.7 MB). Chapter 15 and Appendix G
+  have no plates yet — flagged for the owner. Tarball and BOOK.pdf grow
+  accordingly (~30 MB each; the art is the payload).
+- **BOOK.pdf now genuinely embeds the art** (--resource-path resolves
+  vignettes/ under docs/), verified by pdfimages: 21 images.
+- **make pdfs**: all three books from one target, exit codes bare.
+
+### Fixed, and owned
+- **The 0.0.18 "PDFs rebuilt" claim was false**: lmodern.sty had been
+  removed as collateral of the emscripten apt work, pandoc failed on
+  every run — silently, behind > /dev/null — and releases 0.0.18-0.0.21
+  shipped the Aug-8 Neutrino-era PDFs under a changelog saying
+  otherwise. Caught at 0.0.22 by mtime; lmodern restored; all three
+  PDFs truly rebuilt and image-verified. Ledgered in LESSONS.md as a
+  second, self-inflicted occurrence of the grep-that-hid-the-verdict
+  class, with the audit habit recorded: after "regenerated X", stat X.
+
 ## 0.0.21 — one word, warmly: the nancyj splash
 
 ### Changed
