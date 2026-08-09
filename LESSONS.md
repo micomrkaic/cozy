@@ -286,3 +286,22 @@ must be audited against the tree, not assumed from the book. Fix:
 --check added, wired into the test target, and proven to fire (corrupt
 a cell, watch it go red) before being trusted — a guard that has never
 fired certifies nothing.
+
+### The overlay that could not delete (Cozy 0.0.10)
+
+deploy.sh untarred the release over the repo working tree — "adds and
+overwrites; never deletes," a comment that read as a safety feature and
+was in fact a contradiction of the snapshot law it served. The model
+says the tarball is the COMPLETE intended state; an overlay enforces
+only half of that, and the unenforced half stayed invisible until the
+first release that renamed files: the .cz rename deployed onto a repo
+still holding every .nu ghost, ls("packages") saw twenty files where
+the manual verified ten, and the suite halted the deploy at the gate
+(correctly — the rite's test-before-push earned its keep). The class:
+a sync mechanism that cannot express deletion silently diverges from
+any source of truth that can; the first rename or removal is the
+detonator. Fix: extract to a temp dir and rsync -a --delete into the
+tree (git excluded) — the tree is now byte-for-byte the snapshot,
+deletions included. The general law: when a model says "X is the
+complete state," audit every mechanism that applies X for the
+operations it cannot express.

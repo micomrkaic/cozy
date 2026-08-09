@@ -1,5 +1,35 @@
 # Cozy changelog
 
+## 0.0.11 — tier-1: the seam pays off
+
+### Added
+- **linalg_openblas.c** — the LinalgKernels table answered by LAPACK
+  (OpenBLAS): solve->zgesv, det->zgetrf, eig_herm->zheev,
+  eig_gen->zgeev, svd->zgesvd, chol->zpotrf. `make BACKEND=openblas`;
+  eval.c unchanged, exactly as the 0.0.5 seam promised. Row/column-
+  major marshalling lives in the backend; det exploits det(A)=det(A^T)
+  to skip its transpose entirely.
+- **Measured** (benchmarks beat adjectives): inv(rand(400)) 0.142s ->
+  0.028s (5x); eig(rand(300)) 20.6s -> 0.131s (158x).
+
+### Changed
+- **Backend-invariance conventions in eval.c** (the screen is the spec;
+  ordering and display are language law, not backend accident): (1)
+  eigenvalue components within 1e-12 relative of zero snap to exact
+  zero before the pair sort — zgeev's 2.8e-17 noise neither prints nor
+  reorders; (2) singular values below 1e-12 of s[0] snap to zero; (3)
+  the eigenpair sort treats real parts equal within tolerance as equal
+  (a conjugate pair's 2±1e-16 no longer flips order with the backend's
+  rounding). All three use the 1e-12 relative rule that already decided
+  eigenvalue realness. tier0 output is bit-identical before and after.
+
+### Verified
+- The conformance suite as backend-equivalence harness, for real: all
+  990 goldens AND all 606 verified transcripts pass byte-identically
+  under BOTH backends. Four goldens initially failed under openblas —
+  every one traced to the noise/ordering class above and fixed in the
+  language layer, never by weakening a golden.
+
 ## 0.0.10 — packages speak .cz
 
 ### Changed

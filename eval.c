@@ -4644,12 +4644,45 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
     Cplx *w = malloc((N ? N : 1) * sizeof *w);
     cozy_linalg()->eig_gen(A, N, w, V);
 
+    /* Snap epsilon-noise components to exact zero before sorting: backends
+     * differ in whether a mathematically-zero part comes back as 0.0 or
+     * ~1e-17, and both the (re, im) pair order and the printed value are
+     * observable language behavior — the same 1e-12 relative rule that
+     * already decides realness. Backend-invariance by construction. */
+    for (uint32_t i = 0; i < N; i++) {
+        double mag = 1.0 + c_abs(w[i]);
+        if (fabs(w[i].re) <= 1e-12 * mag) w[i].re = 0.0;
+        if (fabs(w[i].im) <= 1e-12 * mag) w[i].im = 0.0;
+    }
+
     for (uint32_t i = 0; i < N; i++) ord[i] = i;
     for (uint32_t i = 1; i < N; i++) {                     /* sort pairs by (re, im) for determinism */
         uint32_t oi = ord[i]; Cplx e = w[oi]; uint32_t j = i;
         while (j > 0 && (w[ord[j-1]].re > e.re ||
                          (w[ord[j-1]].re == e.re && w[ord[j-1]].im > e.im))) { ord[j] = ord[j-1]; j--; }
         ord[j] = oi;
+    }
+    /* Second application of the invariance rule: real parts equal up to the
+     * tolerance (a conjugate pair's 2±1e-16) sort as equal, ordered by im —
+     * otherwise the pair order flips with the backend's rounding. */
+    {
+        uint32_t g0 = 0;
+        for (uint32_t i2 = 1; i2 <= N; i2++) {
+            bool split = i2 == N;
+            if (!split) {
+                double a1 = w[ord[i2-1]].re, b1 = w[ord[i2]].re;
+                double sc = fabs(a1) > fabs(b1) ? fabs(a1) : fabs(b1);
+                split = fabs(b1 - a1) > 1e-12 * (1.0 + sc);
+            }
+            if (split) {
+                for (uint32_t x = g0 + 1; x < i2; x++) {
+                    uint32_t o = ord[x]; double vi = w[o].im; uint32_t y = x;
+                    while (y > g0 && w[ord[y-1]].im > vi) { ord[y] = ord[y-1]; y--; }
+                    ord[y] = o;
+                }
+                g0 = i2;
+            }
+        }
     }
 
     bool eig_real = real_in;
@@ -4686,6 +4719,9 @@ static Value bi_svd(Interp *I, Value *args, uint32_t n)
     double *s = malloc((k ? k : 1) * sizeof *s);
     cozy_linalg()->svd(Araw, m, nc, U, s, V);
     free(Araw);
+    for (uint32_t i = 1; i < k; i++)              /* same snap rule: s below */
+        if (s[i] <= 1e-12 * s[0]) s[i] = 0.0;     /* noise scale is exact 0  */
+
     Value Uval = from_cplx(U, m,  k, ro);
     Value Vval = from_cplx(V, nc, k, ro);
     Value Sval = val_array(ELT_FLOAT, k, 1);

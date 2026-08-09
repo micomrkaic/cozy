@@ -26,9 +26,16 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
     exit 1
 fi
 
-# 1. Untar over the working tree (adds and overwrites; never deletes).
-tar xzf "$TARBALL" --strip-components=1
-echo "deploy: extracted over $(pwd)"
+# 1. Make the working tree EXACTLY the snapshot. The tarball is the complete
+# intended state (PLAYBOOK law), so files present here but absent from it are
+# deleted — a plain overlay never deletes, which left .nu ghosts beside their
+# renamed .cz files at v0.0.10 and failed the suite (LESSONS: the overlay
+# that could not delete). .git is preserved.
+TMPD=$(mktemp -d)
+tar xzf "$TARBALL" --strip-components=1 -C "$TMPD"
+rsync -a --delete --exclude='.git' "$TMPD"/ .
+rm -rf "$TMPD"
+echo "deploy: tree synced to snapshot in $(pwd)"
 
 # 2. Build and verify before anything touches the remote.
 if [[ $RUN_TESTS == 1 ]]; then

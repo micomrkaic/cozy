@@ -956,7 +956,11 @@ choice — `make BACKEND=...` — never a language-visible one), `version`
 matches `version()`, and `built` embeds the compile date and time. A
 production tool whose user cannot tell an accelerated backend from the
 fallback kernels is not verifiable; this is the introspection that makes
-the difference visible. (The transcript below shows only the record's
+the difference visible. Build with `make BACKEND=openblas` for LAPACK-backed kernels
+(`eig(rand(300))` measured ~158x faster than the hand-rolled tier0);
+`make` alone keeps the zero-dependency tier0. Either way the language is
+identical — the conformance suite passes byte-for-byte under both.
+(The transcript below shows only the record's
 shape: the backend name varies by build and the timestamp by the minute,
 so this page never goes stale.)
 
