@@ -60,7 +60,7 @@ if ! git push origin main 2>/dev/null; then
   git merge -s ours origin/main -m "merge remote history (superseded by $VERSION snapshot)"
   git push origin main
 fi
-git tag -a "$TAG" -m "Neutrino $VERSION"
+git tag -a "$TAG" -m "Cozy $VERSION"
 git push origin "$TAG"
 
 echo "deploy: done — $TAG is live (GitHub Pages redeploys docs/ automatically)"

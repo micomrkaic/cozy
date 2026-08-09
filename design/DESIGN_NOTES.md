@@ -3,7 +3,16 @@
 *Parked designs in the Neutrino tradition: each waits with a written
 trigger; each ends SHIPPED or rejected, never silently dropped.*
 
-## 1. Sparse matrices — DECIDED 2026-08-08 (design ratified; waiting on trigger)
+## 1. Sparse matrices — CORE SHIPPED 0.0.8 (owner override, 2026-08-08)
+
+**Override recorded.** The trigger ("a workload a dense matrix cannot
+hold") had not fired; the owner pulled it consciously the same day the
+design was ratified, adding sprand/sprandn to the founding set. Recorded
+per the parked-design law: overrides are overrides, not silent drops.
+
+**v1 residue.** Indexing reads are scalar-only (S[i, j]); slice reads
+returning sparse remain designed-but-unshipped. Trigger: the first
+session that wants a submatrix.
 
 **Representation.** A separate value kind (SparseObj), never a flag on
 ArrObj: a distinct kind inverts the default so every builtin that does

@@ -126,6 +126,11 @@ static void obj_free(Obj *o)
         free(r->keys); free(r->keylens); free(r->vals);
         break;
     }
+    case VAL_SPARSE: {
+        SpObj *s = (SpObj *)o;
+        free(s->rowptr); free(s->colind); free(s->vals);
+        break;
+    }
     case VAL_CLOSURE: {
         CloObj *cl = (CloObj *)o;
         for (uint32_t i = 0; i < cl->nupvalues; i++) value_release(cl->upvalues[i]);
@@ -189,6 +194,17 @@ Value val_array(EltType elt, uint32_t rows, uint32_t cols)
     a->data = n ? calloc(n, elt_size(elt)) : nullptr;
     if (n && !a->data) abort();
     return (Value){ .kind = VAL_ARRAY, .as.obj = &a->obj };
+}
+
+Value val_sparse(EltType elt, uint32_t rows, uint32_t cols, uint32_t nnz)
+{
+    SpObj *s = malloc(sizeof *s);
+    s->obj = (Obj){ .kind = VAL_SPARSE, .rc = 1 };
+    s->elt = elt; s->rows = rows; s->cols = cols; s->nnz = nnz;
+    s->rowptr = calloc((size_t)rows + 1, sizeof *s->rowptr);
+    s->colind = malloc((size_t)(nnz ? nnz : 1) * sizeof *s->colind);
+    s->vals   = malloc((size_t)(nnz ? nnz : 1) * (elt == ELT_COMPLEX ? sizeof(Cplx) : sizeof(double)));
+    return (Value){ .kind = VAL_SPARSE, .as.obj = &s->obj };
 }
 
 Value val_record(uint32_t count)
@@ -392,6 +408,7 @@ const char *value_type_name(Value v)
     case VAL_COMPLEX: return "Complex";
     case VAL_STRING:  return "String";
     case VAL_ARRAY:   return "Array";
+    case VAL_SPARSE:  return "Sparse";
     case VAL_RECORD:  return "Record";
     case VAL_CLOSURE: return "Closure";
     case VAL_BUILTIN: return "Builtin";
@@ -451,12 +468,27 @@ static void print_matrix_aligned(FILE *out, ArrObj *a)
     free(buf);
 }
 
+static void sparse_print(FILE *out, SpObj *s)
+{
+    fprintf(out, "sparse %ux%u, nnz = %u", s->rows, s->cols, s->nnz);
+    uint32_t shown = 0, cap = 12;
+    for (uint32_t i = 0; i < s->rows && shown < cap; i++)
+        for (uint32_t k = s->rowptr[i]; k < s->rowptr[i+1] && shown < cap; k++, shown++) {
+            fprintf(out, "\n  (%u,%u)  ", i + 1, s->colind[k] + 1);
+            if (s->elt == ELT_COMPLEX) { Cplx z = ((Cplx *)s->vals)[k]; print_complex(out, z.re, z.im); }
+            else print_scalar(out, (Value){ .kind = VAL_FLOAT, .as.f = ((double *)s->vals)[k] });
+        }
+    if (s->nnz > cap) fprintf(out, "\n  ... (%u more)", s->nnz - cap);
+}
+
 void value_print(FILE *out, Value v)
 {
+    if (v.kind == VAL_SPARSE) { sparse_print(out, as_sp(v)); return; }
     switch (v.kind) {
     case VAL_NULL: case VAL_BOOL: case VAL_INT: case VAL_FLOAT: case VAL_COMPLEX:
         print_scalar(out, v);
         break;
+    case VAL_SPARSE: sparse_print(out, as_sp(v)); return;
     case VAL_STRING:
         fprintf(out, "\"%.*s\"", (int)as_str(v)->len, as_str(v)->data);
         break;

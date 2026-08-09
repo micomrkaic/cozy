@@ -17,6 +17,7 @@ typedef struct { double re, im; } Cplx;
 typedef enum : uint8_t {
     VAL_NULL, VAL_BOOL, VAL_INT, VAL_FLOAT, VAL_COMPLEX,
     VAL_STRING, VAL_ARRAY, VAL_RECORD, VAL_CLOSURE, VAL_BUILTIN,
+    VAL_SPARSE,                     /* appended: existing kind numbers stable */
 } ValueKind;
 
 /* array element type — the numeric tower plus a logical (Bool) element */
@@ -39,6 +40,14 @@ struct Obj { ValueKind kind; uint32_t rc; };
 
 typedef struct { Obj obj; char *data; uint32_t len; } StrObj;
 typedef struct { Obj obj; EltType elt; uint32_t rows, cols; void *data; } ArrObj;
+
+/* Sparse matrix, CSR (design entry 1): a separate kind, never a flag on
+ * ArrObj, so every builtin that does not know sparse rejects it by type.
+ * elt is ELT_FLOAT or ELT_COMPLEX only; vals holds nnz doubles or Cplx.
+ * Invariants: rowptr has rows+1 entries, rowptr[rows] == nnz, colind
+ * ascending within each row, no explicit zeros stored. */
+typedef struct { Obj obj; EltType elt; uint32_t rows, cols, nnz;
+                 uint32_t *rowptr; uint32_t *colind; void *vals; } SpObj;
 
 typedef struct {
     Obj obj;
@@ -135,5 +144,9 @@ void  value_set_out(FILE *f);    /* nullptr restores stdout */
 /* multi-line aligned matrix display (off by default; the REPL enables it) */
 void value_set_multiline(bool on);
 bool value_multiline(void);
+
+static inline bool   is_sparse(Value v) { return v.kind == VAL_SPARSE; }
+static inline SpObj *as_sp(Value v)      { return (SpObj *)v.as.obj; }
+Value val_sparse(EltType elt, uint32_t rows, uint32_t cols, uint32_t nnz);
 
 #endif

@@ -16,8 +16,8 @@ STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
 LDFLAGS ?=
-SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c linalg_tier0.c
-HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h
+SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c
+HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h
 BIN      = cozy
 LIBS     = -lm
 
@@ -68,7 +68,7 @@ ifeq ($(BACKEND),tier0)
 else
   $(error unknown BACKEND '$(BACKEND)' — available: tier0)
 endif
-CORE     = lexer arena ast parser value eval chunk compile vm $(LINALG)
+CORE     = lexer arena ast parser value eval chunk compile vm sparse $(LINALG)
 CORE_O   = $(CORE:%=$(OBJDIR)/%.o)
 ASAN_O   = $(CORE:%=$(ASANDIR)/%.o) $(ASANDIR)/vmtest.o
 ASANFLAGS = -std=$(STD) -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -147,7 +147,7 @@ clean:; rm -rf $(BIN) vmtest vmtest-asan build
 # build with:  make wasm EMCC_C23="-Dnullptr=NULL '-Dalignof(x)=_Alignof(x)' -Dstatic_assert=_Static_assert"
 EMCC       ?= emcc
 EMCC_C23   ?=
-WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c linalg_tier0.c
+WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c linalg_tier0.c
 WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Neutrino -sALLOW_MEMORY_GROWTH=1 \
               -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web -sSINGLE_FILE=1 -sASYNCIFY=1 \
               -sEXPORTED_FUNCTIONS=_nu_init,_nu_eval,_nu_version,_malloc,_free \

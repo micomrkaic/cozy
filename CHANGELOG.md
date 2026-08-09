@@ -1,5 +1,36 @@
 # Cozy changelog
 
+## 0.0.8 — sparse lands (entry 1 core, owner-triggered)
+
+### Added
+- **The sparse value kind**: SpObj (CSR; float/complex), a separate kind
+  so every builtin that does not know sparse rejects it by type — the
+  strings-retrofit mechanism applied at the foundation. Print form and
+  who legibility per the ratified design (`sparse RxC, nnz = N` +
+  triplet lines, capped).
+- **The promotion law, live**: S+S, S-S, S.*S, k*S, S/k, -S, S' stay
+  sparse (exact cancellation drops entries; k=0 empties); S+scalar,
+  mixed dense, S==S, S\b, S*S gate with teaching errors naming
+  dense(S) or the iterative path. All in one sparse_binop above the
+  math, mirroring the linalg seam split (sparse.c owns CSR, eval.c
+  owns dims, messages, and the law).
+- **The founding kernel**: sparse-matvec (S * dense column), complex-
+  aware. CG-class solvers are now writable as packages.
+- **Constructors**: sparse(A), sparse(i, j, v, m, n) (1-based,
+  duplicates summed, zeros dropped), dense(S), nnz (sparse and dense),
+  speye(n), and — the owner's additions — sprand/sprandn(m, n, d),
+  drawing distinct positions from the reproducible session RNG.
+  Their goldens assert nnz/dims/bounds, never values: the sampling
+  stream is an implementation detail, not a contract.
+- Scalar reads S[i, j] (in-bounds, strict); slice reads are recorded
+  docket residue with their own trigger.
+- Suite: 976 goldens (947 + 29); the new kind is invisible to all 947
+  inherited ones by construction.
+
+### Process
+- Entry 1's trigger was overridden by the owner; the override is
+  recorded in the docket per the parked-design law.
+
 ## 0.0.7 — the rename (neutrino baggage, once and for all)
 
 ### Changed

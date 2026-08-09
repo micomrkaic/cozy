@@ -17,6 +17,7 @@
 #include "nrt.h"
 #include "chunk.h"
 #include "linalg.h"
+#include "sparse.h"
 
 /* ------------------------------------------------------------------ */
 /* errors                                                              */
@@ -40,6 +41,7 @@ static const char *type_name(ValueKind k)
     case VAL_COMPLEX: return "Complex";
     case VAL_STRING:  return "String";
     case VAL_ARRAY:   return "Array";
+    case VAL_SPARSE:  return "Sparse";
     case VAL_RECORD:  return "Record";
     case VAL_CLOSURE: return "Closure";
     case VAL_BUILTIN: return "Builtin";
@@ -384,8 +386,88 @@ static Value mrdivide(Interp *I, Value num, Value den);
 static Value mpow(Interp *I, Value base, Value e);
 static Value lstsq(Interp *I, Value A, Value B);   /* non-square \ : least squares via QR */
 
+/* The sparse promotion law (design entry 1), stated once. Zero-preserving
+ * ops stay sparse; zero-breaking ops gate with a teaching error naming the
+ * way through; the founding kernel is matvec. Dims and messages live here,
+ * above sparse.c, exactly as the linalg seam does it. */
+static Value sparse_empty_like(SpObj *s) { return sp_from_triplets(s->elt, s->rows, s->cols, 0, NULL, NULL, NULL); }
+
+static Value sparse_binop(Interp *I, enum TokenKind op, Value a, Value b)
+{
+    bool sa = is_sparse(a), sb = is_sparse(b);
+    switch (op) {
+    case TOK_PLUS: case TOK_MINUS: {
+        double sign = op == TOK_PLUS ? 1.0 : -1.0;
+        if (sa && sb) {
+            SpObj *x = as_sp(a), *y = as_sp(b);
+            if (x->rows != y->rows || x->cols != y->cols)
+                runtime_error(I, "sparse %s: dimensions disagree (%ux%u vs %ux%u)",
+                              op == TOK_PLUS ? "+" : "-", x->rows, x->cols, y->rows, y->cols);
+            return sp_add(x, y, sign);
+        }
+        if (is_num(sa ? b : a))
+            runtime_error(I, "sparse %s scalar would densify — wrap in dense(S) if intended",
+                          op == TOK_PLUS ? "+" : "-");
+        runtime_error(I, "mixed sparse and dense %s would densify — wrap in dense(S) if intended",
+                      op == TOK_PLUS ? "+" : "-");
+    }
+    case TOK_STAR: case TOK_DOT_STAR: {
+        if (sa && is_num(b) && !(op == TOK_STAR && false)) {
+            Cplx k = as_cplx(b);
+            if (k.re == 0.0 && k.im == 0.0) return sparse_empty_like(as_sp(a));
+            return sp_scale(as_sp(a), k, b.kind != VAL_COMPLEX);
+        }
+        if (sb && is_num(a)) {
+            Cplx k = as_cplx(a);
+            if (k.re == 0.0 && k.im == 0.0) return sparse_empty_like(as_sp(b));
+            return sp_scale(as_sp(b), k, a.kind != VAL_COMPLEX);
+        }
+        if (op == TOK_DOT_STAR && sa && sb) {
+            SpObj *x = as_sp(a), *y = as_sp(b);
+            if (x->rows != y->rows || x->cols != y->cols)
+                runtime_error(I, "sparse .*: dimensions disagree (%ux%u vs %ux%u)",
+                              x->rows, x->cols, y->rows, y->cols);
+            return sp_hadamard(x, y);
+        }
+        if (op == TOK_STAR && sa && sb)
+            runtime_error(I, "sparse * sparse is not in the founding kernel set — dense(A) * dense(B) if intended");
+        if (op == TOK_STAR && sa && is_array(b)) {
+            SpObj *x = as_sp(a); ArrObj *v = as_arr(b);
+            if (v->elt == ELT_BOOL || v->elt == ELT_STRING)
+                runtime_error(I, "sparse * %s array is not supported", elt_name(v->elt));
+            if (v->cols != 1)
+                runtime_error(I, "sparse * dense: the founding kernel is matrix * column vector "
+                                 "(got %ux%u on the right) — dense(S) if intended", v->rows, v->cols);
+            if (v->rows != x->cols)
+                runtime_error(I, "sparse * vector: inner dimensions disagree (%ux%u * %ux1)",
+                              x->rows, x->cols, v->rows);
+            return sp_matvec(x, v);
+        }
+        runtime_error(I, "this sparse %s form is not supported — dense(S) if intended",
+                      op == TOK_STAR ? "*" : ".*");
+    }
+    case TOK_SLASH: {
+        if (sa && is_num(b)) {
+            Cplx k = as_cplx(b);
+            if (k.re == 0.0 && k.im == 0.0)
+                runtime_error(I, "sparse / 0 would densify (NaN everywhere) — dense(S) / 0 if intended");
+            double d2 = k.re * k.re + k.im * k.im;
+            Cplx inv = { k.re / d2, -k.im / d2 };
+            return sp_scale(as_sp(a), inv, b.kind != VAL_COMPLEX);
+        }
+        runtime_error(I, "this sparse / form is not supported — dense(S) if intended");
+    }
+    case TOK_BACKSLASH:
+        runtime_error(I, "sparse \\ is not in the founding kernel set — "
+                         "dense(A) \\ b, or an iterative solver built on S * v");
+    default:
+        runtime_error(I, "this operation on sparse is not supported — dense(S) if intended");
+    }
+}
+
 static Value array_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
+    if (is_sparse(a) || is_sparse(b)) return sparse_binop(I, op, a, b);
     switch (op) {
     case TOK_STAR:
         if (is_array(a) && is_array(b)) return matmul(I, a, b);
@@ -422,6 +504,7 @@ static Value array_binop(Interp *I, enum TokenKind op, Value a, Value b)
 Value transpose(Interp *I, Value v, bool conj)
 {
     (void)I;
+    if (is_sparse(v)) return sp_transpose(as_sp(v), conj);
     if (!is_array(v)) return value_retain(v);   /* transpose of a scalar is itself */
     ArrObj *a = as_arr(v);
     Value out = val_array(a->elt, a->cols, a->rows);
@@ -686,8 +769,22 @@ static int64_t scalar_ix(Interp *I, Value v, int64_t dim, const char *what)
     return i - 1;
 }
 
+static int64_t as_count(Interp *I, Value v, const char *who);
+
 Value do_index(Interp *I, Value target, Value *idx, uint32_t argc, uint8_t colonmask)
 {
+    if (is_sparse(target)) {
+        SpObj *s = as_sp(target);
+        if (argc != 2 || colonmask)
+            runtime_error(I, "sparse indexing is scalar-only for now: S[i, j] — dense(S) for slices");
+        int64_t i = as_count(I, idx[0], "sparse index");
+        int64_t j = as_count(I, idx[1], "sparse index");
+        if (i < 1 || i > (int64_t)s->rows || j < 1 || j > (int64_t)s->cols)
+            runtime_error(I, "sparse index (%lld, %lld) out of bounds for %ux%u",
+                          (long long)i, (long long)j, s->rows, s->cols);
+        Cplx z = sp_get(s, (uint32_t)(i - 1), (uint32_t)(j - 1));
+        return s->elt == ELT_COMPLEX ? val_complex(z.re, z.im) : val_float(z.re);
+    }
     if (target.kind == VAL_STRING) {                       /* byte indexing, array semantics */
         StrObj *sv = as_str(target);
         if (argc != 1)
@@ -981,6 +1078,7 @@ Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; r
 
 Value apply_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
+    if (is_sparse(a) || is_sparse(b)) return sparse_binop(I, op, a, b);
     if (is_array(a) || is_array(b)) return array_binop(I, op, a, b);
     switch (op) {
     case TOK_EQ: case TOK_NE: case TOK_LT: case TOK_LE: case TOK_GT: case TOK_GE:
@@ -1000,7 +1098,9 @@ Value apply_unary(Interp *I, enum TokenKind op, Value v)   /* non-consuming; res
     case TOK_PLUS:
         if (!is_num(v) && !is_array(v)) runtime_error(I, "unary '+' on %s", type_name(v.kind));
         return value_retain(v);   /* already owned by caller; hand back a fresh ref */
-    case TOK_MINUS: {
+    case TOK_MINUS:
+        if (is_sparse(v)) return sp_neg(as_sp(v));
+        {
         Value z = val_int(0);
         if (is_array(v)) return elementwise(I, AR_SUB, z, v);
         if (is_num(v))   return scalar_arith_k(I, AR_SUB, z, v);
@@ -1244,11 +1344,138 @@ static Value bi_size(Interp *I, Value *args, uint32_t n)
     (void)I; (void)n;
     uint32_t rows = 1, cols = 1;
     if (is_array(args[0])) { rows = as_arr(args[0])->rows; cols = as_arr(args[0])->cols; }
+    else if (is_sparse(args[0])) { rows = as_sp(args[0])->rows; cols = as_sp(args[0])->cols; }
     Value out = val_array(ELT_INT, 1, 2);
     ((int64_t *)as_arr(out)->data)[0] = rows;
     ((int64_t *)as_arr(out)->data)[1] = cols;
     return out;
 }
+
+/* ---- sparse (design entry 1; owner-triggered) --------------------------- */
+
+static SpObj *want_sparse(Interp *I, Value v, const char *who)
+{
+    if (!is_sparse(v)) runtime_error(I, "%s: expected a sparse matrix, got %s", who, type_name(v.kind));
+    return as_sp(v);
+}
+
+/* sparse(A) from dense; sparse(i, j, v, m, n) from 1-based triplets
+ * (duplicates summed, zeros dropped — Octave semantics). */
+static Value bi_sparse(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 1) {
+        if (is_sparse(args[0])) return value_retain(args[0]);
+        if (!is_array(args[0]))
+            runtime_error(I, "sparse: expected a matrix or triplets (i, j, v, m, n)");
+        ArrObj *a = as_arr(args[0]);
+        if (a->elt == ELT_BOOL || a->elt == ELT_STRING)
+            runtime_error(I, "sparse: %s arrays are not supported (float and complex only)", elt_name(a->elt));
+        return sp_from_dense(a);
+    }
+    if (n != 5) runtime_error(I, "sparse: expected sparse(A) or sparse(i, j, v, m, n)");
+    if (!is_array(args[0]) || !is_array(args[1]) || !is_array(args[2]))
+        runtime_error(I, "sparse: triplet form is sparse(i, j, v, m, n) with array i, j, v");
+    ArrObj *ia = as_arr(args[0]), *ja = as_arr(args[1]), *va = as_arr(args[2]);
+    size_t cnt = (size_t)ia->rows * ia->cols;
+    if ((size_t)ja->rows * ja->cols != cnt || (size_t)va->rows * va->cols != cnt)
+        runtime_error(I, "sparse: i, j, v must have the same length");
+    if (va->elt == ELT_BOOL || va->elt == ELT_STRING)
+        runtime_error(I, "sparse: %s values are not supported (float and complex only)", elt_name(va->elt));
+    int64_t m = as_count(I, args[3], "sparse"), nn = as_count(I, args[4], "sparse");
+    if (m < 0 || nn < 0 || m > UINT32_MAX || nn > UINT32_MAX)
+        runtime_error(I, "sparse: bad dimensions");
+    uint32_t *ri = malloc((cnt ? cnt : 1) * sizeof *ri);
+    uint32_t *ci = malloc((cnt ? cnt : 1) * sizeof *ci);
+    bool cx = va->elt == ELT_COMPLEX;
+    void *vv = malloc((cnt ? cnt : 1) * (cx ? sizeof(Cplx) : sizeof(double)));
+    for (size_t k = 0; k < cnt; k++) {
+        int64_t r = as_count(I, arr_get(ia, k), "sparse");
+        int64_t c = as_count(I, arr_get(ja, k), "sparse");
+        if (r < 1 || r > m || c < 1 || c > nn) {
+            free(ri); free(ci); free(vv);
+            runtime_error(I, "sparse: triplet (%lld, %lld) out of bounds for %lldx%lld",
+                          (long long)r, (long long)c, (long long)m, (long long)nn);
+        }
+        ri[k] = (uint32_t)(r - 1); ci[k] = (uint32_t)(c - 1);
+        Cplx z = as_cplx(arr_get(va, k));
+        if (cx) ((Cplx *)vv)[k] = z; else ((double *)vv)[k] = z.re;
+    }
+    Value out = sp_from_triplets(cx ? ELT_COMPLEX : ELT_FLOAT,
+                                 (uint32_t)m, (uint32_t)nn, (uint32_t)cnt, ri, ci, vv);
+    free(ri); free(ci); free(vv);
+    return out;
+}
+
+static Value bi_dense(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (is_array(args[0]) || is_num(args[0])) return value_retain(args[0]);
+    return sp_to_dense(want_sparse(I, args[0], "dense"));
+}
+
+static Value bi_nnz(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (is_sparse(args[0])) return val_int(as_sp(args[0])->nnz);
+    if (is_array(args[0])) {
+        ArrObj *a = as_arr(args[0]);
+        if (a->elt == ELT_STRING) runtime_error(I, "nnz: string arrays are not supported");
+        size_t cnt = 0, total = (size_t)a->rows * a->cols;
+        for (size_t k = 0; k < total; k++) {
+            Value e = arr_get(a, k);
+            Cplx z = e.kind == VAL_BOOL ? (Cplx){ e.as.b ? 1.0 : 0.0, 0.0 } : as_cplx(e);
+            if (z.re != 0.0 || z.im != 0.0) cnt++;
+        }
+        return val_int((int64_t)cnt);
+    }
+    runtime_error(I, "nnz: expected a matrix (sparse or dense), got %s", type_name(args[0].kind));
+}
+
+static Value bi_speye(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    int64_t N = as_count(I, args[0], "speye");
+    if (N < 0 || N > UINT32_MAX) runtime_error(I, "speye: bad dimension");
+    return sp_eye((uint32_t)N);
+}
+
+/* sprand/sprandn(m, n, d): ~d*m*n distinct positions from the session RNG
+ * (reproducible by default, like rand); uniform / standard-normal values. */
+static Value sprand_impl(Interp *I, Value *args, bool normal, const char *who)
+{
+    int64_t m = as_count(I, args[0], who), nn = as_count(I, args[1], who);
+    double d = args[2].kind == VAL_FLOAT ? args[2].as.f
+             : args[2].kind == VAL_INT ? (double)args[2].as.i : -1.0;
+    if (m < 0 || nn < 0 || m > UINT32_MAX || nn > UINT32_MAX) runtime_error(I, "%s: bad dimensions", who);
+    if (d < 0.0 || d > 1.0) runtime_error(I, "%s: density must be in [0, 1]", who);
+    size_t total = (size_t)m * (size_t)nn;
+    size_t want = (size_t)(d * (double)total + 0.5);
+    if (want > total) want = total;
+    uint8_t  *seen = calloc(total / 8 + 1, 1);
+    uint32_t *ri = malloc((want ? want : 1) * sizeof *ri);
+    uint32_t *ci = malloc((want ? want : 1) * sizeof *ci);
+    double   *vv = malloc((want ? want : 1) * sizeof *vv);
+    size_t got = 0;
+    while (got < want) {                              /* rejection on a bitset */
+        size_t pos = (size_t)(rng_uniform(I) * (double)total);
+        if (pos >= total) continue;
+        if (seen[pos >> 3] & (1u << (pos & 7))) continue;
+        seen[pos >> 3] |= (uint8_t)(1u << (pos & 7));
+        ri[got] = (uint32_t)(pos / (size_t)nn);
+        ci[got] = (uint32_t)(pos % (size_t)nn);
+        got++;
+    }
+    for (size_t k = 0; k < want; k++) {
+        if (normal) { double z0, z1; rng_normal_pair(I, &z0, &z1); vv[k] = z0; }
+        else vv[k] = rng_uniform(I);
+    }
+    Value out = sp_from_triplets(ELT_FLOAT, (uint32_t)m, (uint32_t)nn,
+                                 (uint32_t)want, ri, ci, vv);
+    free(seen); free(ri); free(ci); free(vv);
+    return out;
+}
+static Value bi_sprand(Interp *I, Value *args, uint32_t n)  { (void)n; return sprand_impl(I, args, false, "sprand"); }
+static Value bi_sprandn(Interp *I, Value *args, uint32_t n) { (void)n; return sprand_impl(I, args, true,  "sprandn"); }
 
 static Value bi_map(Interp *I, Value *args, uint32_t n)
 {
@@ -1405,6 +1632,12 @@ static const BuiltinDoc builtin_docs[] = {
     { "hist",  "hist(y[, nbins][, opts])", "histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend)", "plot" , "hist(randn(1, 10000), 30)\nhist(u, 20, {yrange = [0, 6000]})   % anchor the axis" },
         { "format","format / format(n) / format(mode, digits)", "number display: format(n) sets SIGNIFICANT digits; format(\"fixed\", d) / format(\"sci\", d) / format(\"auto\", d) set the mode and digits explicitly; format() shows the current setting", "core" , "format(\"fixed\", 2); 87.40 * 1.15    %= 100.51\nformat(\"default\")                 % back to the terse startup style" },
     { "size",  "size(x)",           "[rows, cols] of x (a scalar is 1x1)", "core" , "size([1, 2, 3; 4, 5, 6])          %= [2, 3]" },
+    { "sparse", "sparse(A) / sparse(i, j, v, m, n)", "a sparse (CSR) matrix from a dense one, or from 1-based triplets (duplicates summed)", "sparse" , "nnz(sparse([0, 5; 0, 0]))         %= 1" },
+    { "dense", "dense(S)",         "the dense matrix a sparse one represents (the explicit gate in the promotion law)", "sparse" , "dense(speye(2))                   %= [1, 0; 0, 1]" },
+    { "nnz", "nnz(A)",             "the number of stored nonzeros (sparse) or nonzero entries (dense)", "sparse" , "nnz(speye(3))                     %= 3" },
+    { "speye", "speye(n)",         "the n-by-n sparse identity", "sparse" , "nnz(speye(4))                     %= 4" },
+    { "sprand", "sprand(m, n, d)", "a sparse m-by-n matrix with ~d*m*n uniform(0,1) entries at distinct random positions", "sparse" , "size(sprand(9, 5, 0.2))           %= [9, 5]" },
+    { "sprandn", "sprandn(m, n, d)", "like sprand with standard-normal values", "sparse" , "size(sprandn(4, 4, 0.5))          %= [4, 4]" },
     { "length","length(x)",         "longest dimension of x (0 if empty)", "core" , "length([4, 5, 6])                 %= 3" },
     { "numel", "numel(x)",          "number of elements (rows*cols)", "core" , "numel([1, 2; 3, 4])               %= 4" },
     /* constructors ---------------------------------------------------- */
@@ -3152,6 +3385,9 @@ static void who_describe(FILE *out, Value v)        /* compact type + shape/valu
         fprintf(out, "array      %ux%u %s", a->rows, a->cols, elt_name(a->elt));
         break;
     }
+    case VAL_SPARSE:
+        fprintf(out, "sparse     %ux%u, nnz = %u", as_sp(v)->rows, as_sp(v)->cols, as_sp(v)->nnz);
+        break;
     case VAL_RECORD:  fprintf(out, "record     (%u field%s)", as_rec(v)->count, as_rec(v)->count == 1 ? "" : "s"); break;
     case VAL_CLOSURE: fprintf(out, "function   (%u param%s)", as_clo(v)->chunk->nparams, as_clo(v)->chunk->nparams == 1 ? "" : "s"); break;
     case VAL_BUILTIN: fprintf(out, "builtin"); break;
@@ -3923,6 +4159,9 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
         } else if (v.kind == VAL_ARRAY) {
             ArrObj *a = as_arr(v);
             fprintf(vout(), "  a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));
+        } else if (v.kind == VAL_SPARSE) {
+            SpObj *s = as_sp(v);
+            fprintf(vout(), "  sparse %ux%u, nnz = %u\n", s->rows, s->cols, s->nnz);
         } else {
             fprintf(vout(), "  a %s value\n", type_name(v.kind));
         }
@@ -5687,6 +5926,12 @@ EnvObj *globals_new(void)
     def_builtin(e, "print", bi_print, 0, UINT32_MAX);
     def_builtin(e, "sum",   bi_sum,   1, 2);
     def_builtin(e, "size",  bi_size,  1, 1);
+    def_builtin(e, "sparse", bi_sparse, 1, 5);
+    def_builtin(e, "dense", bi_dense, 1, 1);
+    def_builtin(e, "nnz", bi_nnz, 1, 1);
+    def_builtin(e, "speye", bi_speye, 1, 1);
+    def_builtin(e, "sprand", bi_sprand, 3, 3);
+    def_builtin(e, "sprandn", bi_sprandn, 3, 3);
     def_builtin(e, "map",   bi_map,   2, 2);
     def_builtin(e, "abs",   bi_abs,   1, 1);
     def_builtin(e, "sqrt",  bi_sqrt,  1, 1);

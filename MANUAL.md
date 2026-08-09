@@ -968,6 +968,34 @@ cozy> b.version == version()
 true
 ```
 
+### Sparse matrices
+
+A sparse matrix is its own kind of value — CSR storage, float or complex —
+built by `sparse(A)` from a dense matrix or `sparse(i, j, v, m, n)` from
+1-based triplets (duplicates summed, zeros never stored), plus `speye(n)`,
+`sprand(m, n, d)`, and `sprandn(m, n, d)` (both drawing from the session's
+reproducible RNG). `dense(S)` crosses back; `nnz` counts stored entries;
+`who` shows `sparse RxC, nnz = N`. The promotion law is stated once:
+zero-preserving operations stay sparse (`S + S`, `S .* S`, `k * S`, `-S`,
+`S'`), the founding kernel is sparse-matrix × dense-column (`S * v`), and
+anything that would silently densify — `S + 1`, `S == S`, `S \ b` — is an
+error that names the way through (`dense(S)` if you meant it). Iterative
+solvers built on `S * v` are the intended path for large systems. Indexing
+reads are scalar for now: `S[i, j]`.
+
+```
+cozy> let S = sparse([0, 5; 3, 0]); S
+sparse 2x2, nnz = 2
+  (1,2)  5
+  (2,1)  3
+cozy> S * [10; 100]
+[500; 30]
+cozy> let T = sparse([1; 2; 2], [1; 1; 2], [4; 7; 9], 3, 3); nnz(T)
+3
+cozy> nnz(sprand(100, 100, 0.05))
+500
+```
+
 ## 16. Scripts and tools
 
 `neutrino file.nu` runs a script (top level is a statement sequence; `#`/`%`
@@ -1144,6 +1172,17 @@ cozy> clear("scatter"); who
 |---|---|
 | `plot(y) \| plot(x, y) \| plot(x, Y, opts)` | line plot via gnuplot; Y columns are series; opts: style string or {title, xlabel, ylabel, style, logx, logy, grid, xrange, yrange, label, label1..labelN} |
 | `hist(y[, nbins][, opts])` | histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend) |
+
+### sparse
+
+| Signature | Description |
+|---|---|
+| `sparse(A) / sparse(i, j, v, m, n)` | a sparse (CSR) matrix from a dense one, or from 1-based triplets (duplicates summed) |
+| `dense(S)` | the dense matrix a sparse one represents (the explicit gate in the promotion law) |
+| `nnz(A)` | the number of stored nonzeros (sparse) or nonzero entries (dense) |
+| `speye(n)` | the n-by-n sparse identity |
+| `sprand(m, n, d)` | a sparse m-by-n matrix with ~d*m*n uniform(0,1) entries at distinct random positions |
+| `sprandn(m, n, d)` | like sprand with standard-normal values |
 
 ### Array construction
 

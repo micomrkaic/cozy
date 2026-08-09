@@ -1791,6 +1791,7 @@ language.
 | `cov` | `cov(X[, w]) \| cov(x, y[, w])` | covariance matrix of X's columns (rows = observations), or scalar cov of two vectors; w as in var | reductions |
 | `cumprod` | `cumprod(A)` | cumulative product along a vector, or down each column | arrays |
 | `cumsum` | `cumsum(A)` | cumulative sum along a vector, or down each column | arrays |
+| `dense` | `dense(S)` | the dense matrix a sparse one represents (the explicit gate in the promotion law) | sparse |
 | `det` | `det(A)` | determinant via LU | linear algebra |
 | `diag` | `diag(x)` | vector -> diagonal matrix; matrix -> its diagonal as a column | arrays |
 | `diff` | `diff(A)` | consecutive differences along a vector, or down each column | arrays |
@@ -1857,6 +1858,7 @@ language.
 | `more` | `more on\|off` | page long output through $PAGER | repl |
 | `names` | `names() \| names("vars"\|"funcs")` | your workspace names as a sorted string column (the programmatic who) | core |
 | `nan` | `nan` | not-a-number (Float); nan never equals anything, itself included | constant |
+| `nnz` | `nnz(A)` | the number of stored nonzeros (sparse) or nonzero entries (dense) | sparse |
 | `norm` | `norm(x) \| norm(x, p)` | vector p-norm (p = 1 or 2, default 2); matrix Frobenius norm | linear algebra |
 | `norminv` | `norminv(p)` | standard normal quantile (inverse CDF) | math |
 | `now` | `now` | current local date and time: {y, m, d, h, mi, s} | core |
@@ -1892,6 +1894,10 @@ language.
 | `sinh` | `sinh(x)` | hyperbolic sine (complex-aware) | trig |
 | `size` | `size(x)` | [rows, cols] of x (a scalar is 1x1) | core |
 | `sort` | `sort(A)` | ascending sort: a vector as a whole, a matrix by column | arrays |
+| `sparse` | `sparse(A) / sparse(i, j, v, m, n)` | a sparse (CSR) matrix from a dense one, or from 1-based triplets (duplicates summed) | sparse |
+| `speye` | `speye(n)` | the n-by-n sparse identity | sparse |
+| `sprand` | `sprand(m, n, d)` | a sparse m-by-n matrix with ~d*m*n uniform(0,1) entries at distinct random positions | sparse |
+| `sprandn` | `sprandn(m, n, d)` | like sprand with standard-normal values | sparse |
 | `sqrt` | `sqrt(x)` | square root (complex result for negative reals) | math |
 | `startswith` | `startswith(s, p)` | true if s begins with p | strings |
 | `std` | `std(A) \| std(A, w) \| std(A, w, dim)` | standard deviation (sqrt of var, same normalization) | reductions |
@@ -1922,7 +1928,7 @@ language.
 | `writecsv` | `writecsv(file, A[, opts])` | matrix -> CSV, full precision (round-trips); opts: {delim} | files |
 | `zeros` | `zeros(r, c)` | r-by-c matrix of zeros | arrays |
 
-*162 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
+*168 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
 <!-- INDEX:END -->
 
 ---
