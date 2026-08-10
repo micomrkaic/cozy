@@ -14,16 +14,20 @@
 
 typedef struct { double re, im; } Cplx;
 typedef struct { double v, e; } Dual;   /* v + e*eps, eps^2 = 0 (design entry 4a) */
+typedef struct { double v, e1, e2, e12; } HDual;  /* hyper-dual: two nilpotents,
+    eps1^2 = eps2^2 = 0, eps1*eps2 kept — one pass yields an exact mixed
+    second partial in e12 (design entry 4a, Hessian increment) */
 
 typedef enum : uint8_t {
     VAL_NULL, VAL_BOOL, VAL_INT, VAL_FLOAT, VAL_COMPLEX,
     VAL_STRING, VAL_ARRAY, VAL_RECORD, VAL_CLOSURE, VAL_BUILTIN,
     VAL_SPARSE,                     /* appended: existing kind numbers stable */
     VAL_DUAL,                       /* dual number a + b*eps — immediate scalar */
+    VAL_HDUAL,                      /* hyper-dual a + b*eps1 + c*eps2 + d*eps1eps2 — immediate */
 } ValueKind;
 
 /* array element type — the numeric tower plus a logical (Bool) element */
-typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING, ELT_DUAL } EltType;
+typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING, ELT_DUAL, ELT_HDUAL } EltType;
 
 typedef struct Obj Obj;
 
@@ -35,6 +39,8 @@ typedef struct {
         double   f;
         Cplx     z;
         Dual     d;
+        HDual    h;                 /* grows the union to 32 bytes; see the
+                                       sizeof(Value) note at readcsv's assert */
         Obj     *obj;   /* STRING, ARRAY, RECORD, CLOSURE, BUILTIN */
     } as;
 } Value;
@@ -102,6 +108,8 @@ static inline Value val_int(int64_t i)    { return (Value){ .kind = VAL_INT,   .
 static inline Value val_float(double f)   { return (Value){ .kind = VAL_FLOAT, .as.f = f }; }
 static inline Value val_complex(double re, double im) { return (Value){ .kind = VAL_COMPLEX, .as.z = { re, im } }; }
 static inline Value val_dual(double v, double e)      { return (Value){ .kind = VAL_DUAL,    .as.d = { v, e } }; }
+static inline Value val_hdual(double v, double e1, double e2, double e12)
+                                                      { return (Value){ .kind = VAL_HDUAL,   .as.h = { v, e1, e2, e12 } }; }
 
 /* --- heap constructors (return +1 ref) --- */
 Value val_string(const char *bytes, uint32_t len);   /* copies */

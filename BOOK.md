@@ -1964,6 +1964,9 @@ language.
 | `gamma` | `gamma(x)` | gamma function (real, elementwise) | math |
 | `gammainc` | `gammainc(x, a)` | regularized lower incomplete gamma P(a, x) (the chi^2 CDF) | math |
 | `getfield` | `getfield(r, name)` | dynamic field read; error if the record has no such field | core |
+| `hdual` | `hdual(x, s1, s2)` | the hyper-dual x + s1*eps1 + s2*eps2 (optional 4th arg seeds eps1*eps2); one pass carries an exact mixed second partial | autodiff |
+| `hdual12` | `hdual12(x)` | the eps1*eps2 (second-derivative) part; 0 for a plain number | autodiff |
+| `hdualval` | `hdualval(x)` | the value part of a hyper-dual; plain numbers pass through | autodiff |
 | `help` | `help / help(f)` | help lists every builtin; help(f) describes one | core |
 | `hist` | `hist(y[, nbins][, opts])` | histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend) | plot |
 | `hypot` | `hypot(a, b)` | sqrt(a^2 + b^2) without overflow (elementwise) | math |
@@ -2070,7 +2073,7 @@ language.
 | `writecsv` | `writecsv(file, A[, opts])` | matrix -> CSV, full precision (round-trips); opts: {delim} | files |
 | `zeros` | `zeros(r, c)` | r-by-c matrix of zeros | arrays |
 
-*171 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
+*174 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
 <!-- INDEX:END -->
 
 ---

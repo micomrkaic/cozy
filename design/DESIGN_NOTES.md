@@ -108,7 +108,14 @@ Nelder–Mead and a quasi-Newton to start; constrained later or never.
 **Trigger.** The first optimization done by hand-rolled iteration at the
 prompt that deserved a verb.
 
-## 4. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
+## 4. First-class differentiation — 4a SHIPPED 0.0.12; HESSIAN INCREMENT
+SHIPPED 0.0.24 (VAL_HDUAL/ELT_HDUAL hyper-duals — the fixed-size jet the
+Hessian actually needs; hess(f) and minimize_newton/maximize_newton on top;
+Newton solves a PD quadratic in one iteration, golden-pinned. Residue:
+gamma/lgamma refuse hyper-duals pending a trigamma implementation — trigger:
+the first second-derivative-of-gamma need, likely an MLE with gamma-family
+likelihoods. jet(k>2) remains parked: Taylor territory, no named user.)
+## 4-was. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
 dense element + autodiff.cz d/grad; complex×dual a recorded rejection with a
 teaching gate; jet(k) parked — dual is its k=1 instantiation, trigger: the
 first Hessian or Taylor-series need). 4b (ast quotation) still parked on its

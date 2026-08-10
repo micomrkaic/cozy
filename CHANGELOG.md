@@ -1,5 +1,36 @@
 # Cozy changelog
 
+## 0.0.24 — hyper-duals: exact Hessians and true Newton
+
+### Added
+- **VAL_HDUAL + ELT_HDUAL** (entry 4a's Hessian increment, the owner's
+  schedule): hyper-duals a + b*eps1 + c*eps2 + d*eps1eps2 as a fifth
+  numeric rank and a dense element type — a fixed four-double immediate,
+  the same architectural pattern that made dual land cleanly (the
+  jet-the-Hessian-needs, not the general jet). One chain-rule helper
+  (hd_chain with f, f', f'') serves every unary kernel; the macro
+  families each gained a second-derivative expression. sizeof(Value)
+  grows 32 -> 40; the setjmp-copy assert's bound moves with a recorded
+  rationale (boxing would put refcount churn in every arithmetic op).
+- **Builtins** hdual(x, s1, s2[, s12]) (elementwise with scalar
+  broadcast — hdual(x, e_i, e_j) seeds two directions at once),
+  hdualval, hdual12 — accessors total on plain numbers.
+- **hess(f)** in autodiff.cz: the exact Hessian, one pass per index
+  pair, symmetry filled. **minimize_newton / maximize_newton** in
+  optim.cz: true Newton on exact derivatives with Levenberg damping;
+  on a positive-definite quadratic the first step lands on the minimum
+  — golden-pinned at iters == 1, the method's signature. Rosenbrock:
+  21 iterations to the exact [1; 1].
+- tests/60_hessian.test: 22 goldens, equalities throughout.
+
+### Promotion law (extended, gated everywhere)
+- int/float lift into hyper-dual; **hyper-dual mixes with neither
+  complex nor dual** (seeding both directions is what hdual's two
+  slots are for) — arithmetic, comparisons, literals, index-assign,
+  sparse, and every linalg/norm/binary-kernel gate extended.
+- gamma/lgamma refuse hyper-duals: their second derivative needs
+  trigamma, not implemented — recorded docket residue with trigger.
+
 ## 0.0.23 — entry 7 reviewed; the rite gains a lint
 
 ### Design (entry 7: namespaces — the last unreviewed docket item)

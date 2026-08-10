@@ -591,8 +591,16 @@ cozy> dualeps(sqrt(dual(4, 1)))
 0.25
 ```
 
-`load("packages/autodiff.cz")` turns this into `d(f)` and `grad(f)` —
-see the packages guide.
+**Hyper-duals carry second derivatives**: `hdual(x, s1, s2)` seeds two
+directions at once (`eps1^2 = eps2^2 = 0`, their product survives), and
+`hdual12` reads the exact mixed partial from one pass — `hdual12(hdual(3,
+1, 1)^2)` is exactly `2`. The same promotion law applies twice over:
+hyper-dual mixes with neither complex nor dual. `gamma`/`lgamma` refuse
+hyper-duals (their second derivative needs trigamma — a recorded
+residue).
+
+`load("packages/autodiff.cz")` turns all of this into `d(f)`, `grad(f)`,
+and `hess(f)` — see the packages guide.
 
 ## 11. Special functions and statistics
 
@@ -1333,6 +1341,9 @@ cozy> clear("scatter"); who
 | `dual(a, b)` | the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction) |
 | `dualval(x)` | the value part of a dual; a plain number passes through (total, so constant branches differentiate) |
 | `dualeps(x)` | the eps (derivative) part of a dual; 0 for a plain number |
+| `hdual(x, s1, s2)` | the hyper-dual x + s1*eps1 + s2*eps2 (optional 4th arg seeds eps1*eps2); one pass carries an exact mixed second partial |
+| `hdualval(x)` | the value part of a hyper-dual; plain numbers pass through |
+| `hdual12(x)` | the eps1*eps2 (second-derivative) part; 0 for a plain number |
 
 ### Trigonometric & hyperbolic
 

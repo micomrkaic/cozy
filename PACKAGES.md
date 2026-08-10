@@ -555,6 +555,15 @@ cozy> grad(rosen)([0.0; 0.0])
 [-2; 0]
 ```
 
+`hess(f)` returns the exact Hessian, one hyper-dual pass per index pair
+with symmetry filled in:
+
+```
+cozy> load("packages/autodiff.cz")
+cozy> hess(fn x -> x[1] * x[2]^2)([2.0; 3.0])
+[0, 6; 6, 4]
+```
+
 **Discussion.** The Rosenbrock gradient vanishing at `[1; 1]` is the
 textbook minimum, found here without a single hand-written derivative.
 `grad` seeds one coordinate direction per pass with `dual(x, e_i)`, and
@@ -582,6 +591,17 @@ cozy> let cd = fn x -> x[1]^0.3 * x[2]^0.7
 cozy> let bud = fn x -> [2 * x[1] + 3 * x[2] - 12]
 cozy> maximize_con(cd, [1.0; 1.0], {eq = bud}).x
 [1.8; 2.8]
+```
+
+`minimize_newton` / `maximize_newton(f, x0)` run true Newton on the
+exact gradient and Hessian, with Levenberg damping when the Hessian is
+indefinite. On a positive-definite quadratic the first step lands on the
+minimum:
+
+```
+cozy> load("packages/optim.cz")
+cozy> minimize_newton(fn x -> sum(x .* ([3.0, 1.0; 1.0, 2.0] * x)) - sum([1.0; 1.0] .* x), [9.0; -7.0]).iters
+1
 ```
 
 **Discussion.** The last transcript is a Cobb-Douglas utility maximum
