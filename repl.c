@@ -20,6 +20,7 @@
 #include "value.h"
 #include <time.h>
 #include "version.h"
+#include "linalg.h"
 #include "eval.h"
 #include "vm.h"
 
@@ -240,8 +241,8 @@ static void print_banner(bool color)
         fputs("\n  \033[38;2;120;132;150ma heavier numerical language, warmly held\033[0m\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("  \033[38;2;120;132;150mv%s · built %s · session %s\033[0m\n",
-               COZY_VERSION, COZY_BUILT, now);
+        printf("  \033[38;2;120;132;150mv%s · %s backend · built %s · session %s\033[0m\n",
+               COZY_VERSION, cozy_linalg()->name, COZY_BUILT, now);
     } else {
         fputs("   a88888b.                            \n", stdout);
         fputs("  d8'   `88                            \n", stdout);
@@ -254,7 +255,8 @@ static void print_banner(bool color)
         fputs("\n  a heavier numerical language, warmly held\n", stdout);
         char now[32]; time_t t = time(NULL);
         strftime(now, sizeof now, "%Y-%m-%d %H:%M:%S", localtime(&t));
-        printf("  v%s · built %s · session %s\n", COZY_VERSION, COZY_BUILT, now);
+        printf("  v%s · %s backend · built %s · session %s\n",
+               COZY_VERSION, cozy_linalg()->name, COZY_BUILT, now);
     }
 }
 

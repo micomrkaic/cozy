@@ -1,5 +1,17 @@
 # Cozy changelog
 
+## 0.0.33 — the banner names its backend
+
+### Changed
+- **The splash's version line now includes the linalg backend** (e.g.
+  "v0.0.33 · tier0 backend · built ..."), born from a real friction
+  transcript: the owner benchmarked a plain `make` build on the X1 and
+  read 2.6s inversions as breakage — it was tier0, the zero-dependency
+  default, doing exactly what it does. The single fact that determines
+  whether a session is fast is now on screen at startup; `make
+  BACKEND=openblas` (or accelerate) remains the explicit opt-in, per
+  the portability-first default.
+
 ## 0.0.32 — the workbench: RStudio ergonomics, Cozy engines
 
 ### Added
