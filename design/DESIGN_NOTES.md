@@ -118,8 +118,13 @@ likelihoods. jet(k>2) remains parked: Taylor territory, no named user.)
 ## 4-was. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
 dense element + autodiff.cz d/grad; complex×dual a recorded rejection with a
 teaching gate; jet(k) parked — dual is its k=1 instantiation, trigger: the
-first Hessian or Taylor-series need). 4b (ast quotation) still parked on its
-own trigger. ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
+first Hessian or Taylor-series need). 4b SHIPPED 0.0.30: ast(f) reparses the
+closure's retained source into a symb-shaped record tree ({op="pow", l,
+n} with numeric exponents, unary minus as mul(-1), single-arg calls as
+{op=name, l}); v1 scope = the symb expression subset, everything else a
+teaching gate. The chartered payoff is a golden: ddx(ast(fn x -> x^2 +
+sin(x)).body) simplifies to 2x + cos(x). Residue trigger: the first
+non-subset quotation need. ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
 
 **Motivation.** Neutrino's symb.cz proved symbolic differentiation is
 expressible with expression trees as records — but only via constructor

@@ -28,14 +28,12 @@ def md_cell(text):
     return text.replace("|", "\\|")
 
 def main():
-    src = open("eval.c").read()
-    rows = re.findall(
-        r'\{\s*"([a-z_0-9]+)",\s*"((?:[^"\\]|\\.)*)",\s*"((?:[^"\\]|\\.)*)",'
-        r'\s*"([a-z]+)"\s*,\s*"(?:[^"\\]|\\.)*"\s*\},', src)
+    # One source, many readers: rows come from doc/builtins.tsv (0.0.29).
     cats = OrderedDict()
-    for name, sig, desc, cat in rows:
-        sig = sig.replace('\\"', '"')
-        desc = desc.replace('\\"', '"').replace("\\\\", "\\")
+    for line in open("doc/builtins.tsv"):
+        if line.startswith("#") or not line.strip():
+            continue
+        name, sig, desc, cat, _help = line.rstrip("\n").split("\t")
         cats.setdefault(cat, []).append((sig, desc))
 
     total = sum(len(v) for v in cats.values())

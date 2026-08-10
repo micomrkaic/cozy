@@ -1,5 +1,59 @@
 # Cozy changelog
 
+## 0.0.30 — ast(f): the founding capability list, completed
+
+### Added
+- **ast(f) quotation** (design entry 4b, the last unbuilt item on the
+  charter's capability list, by owner's schedule): a closure's body as
+  a symb.cz-style record tree — {op = "add"/"sub"/"mul"/"div", l, r},
+  {op = "pow", l, n} with symb's numeric exponent, {op = "const", v},
+  {op = "var", name}, single-argument calls as {op = <name>, l}, unary
+  minus as multiplication by -1 for symb compatibility; params exposed
+  as a string row. Implementation reparses the closure's RETAINED
+  SOURCE (the same store body() prints), so no AST lifetime machinery
+  was needed. v1 scope is the symb expression subset; if/loops/
+  indexing/multi-arg calls/non-constant exponents gate with teaching
+  errors, residue trigger written.
+- **The chartered payoff is a golden**: show(simp(ddx(ast(fn x -> x^2 +
+  sin(x)).body))) == "((2 * x) + cos(x))" — symbolic differentiation
+  of what you typed, symb.cz unmodified. tests/63_ast.test: 11 goldens.
+
+With this, every capability on the founding list is shipped: sparse,
+external LAPACK (three backends), optimization (constrained, Newton),
+and first-class differentiation — duals, hyper-duals, and quotation.
+
+## 0.0.29 — the doc table moves to a data file
+
+### Changed
+- **The 174-row builtin doc table now lives in doc/builtins.tsv** (the
+  charter's second fix-from-day-one debt): plain tab-separated text —
+  name, signature, description, category, help examples — with
+  tools/gen_doc_table.py as THE one escaper producing doc_table.inc,
+  which eval.c #includes. The escaping bug class the charter named is
+  dead: nobody hand-writes C string literals for documentation again.
+- **All readers read the one source**: gen_reference and gen_emacs_mode
+  now parse the TSV instead of regexing eval.c — their --check passes
+  byte-identically, closing the two-parsers-one-truth lesson for good
+  — and gen_doc_table's own --check joins the lattice, so a TSV edit
+  without regeneration refuses the suite. help() output is unchanged
+  to the byte.
+
+## 0.0.28 — session-block goldens: the charter's oldest debt, paid
+
+### Added
+- **Golden session blocks**: an input line beginning with '.. ' chains
+  onto the previous case's session — lets, loads, ans, indexed
+  assignment, and the seeded rng carry across the chain, so stateful
+  behavior is finally golden-testable instead of hiding in the manual
+  harness. The runner replays each chain's prefix into one vmtest
+  process (vmtest already held one Interp across stdin — the
+  fresh-session constraint lived in run.sh all along); every case still
+  reports independently, error cases work mid-chain (the current line
+  must add no stdout and its message must appear on stderr), and flat
+  cases run byte-identically to before. tests/62_sessions.test
+  demonstrates ten chained shapes. This was the first item on the
+  charter's fix-from-day-one list.
+
 ## 0.0.27 — namespaces, taught where readers read
 
 ### Changed

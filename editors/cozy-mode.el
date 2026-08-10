@@ -72,6 +72,7 @@
     "asin"
     "asinh"
     "assert"
+    "ast"
     "atan"
     "atan2"
     "atanh"

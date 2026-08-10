@@ -9,6 +9,14 @@
 #     <input>
 #     => !<substring>          error test: stdout empty, stderr must contain this
 #
+# SESSION BLOCKS (0.0.28, the charter's session-block debt): an input line
+# beginning with '.. ' continues the PREVIOUS case's session — state (lets,
+# loads, ans, the rng) carries across the chain. The runner replays the
+# chain's prefix into one vmtest process (vmtest holds one Interp across
+# stdin), and this case's expectation applies to the last line's output.
+# Error cases work mid-chain: earlier chain lines were already verified
+# clean, so stderr belongs to the current line.
+#
 # '#' lines and blank lines are ignored. Inputs are fed to ./vmtest, which reads
 # a line, evaluates it, and prints the value of the last (non-';'-suppressed)
 # statement — so one input line yields one output line.
@@ -39,11 +47,23 @@ errf="$(mktemp)"; trap 'rm -f "$errf"' EXIT
 rstrip() { printf '%s' "$1" | sed -e 's/[[:space:]]*$//'; }
 
 run_one() {
-    local input=$1 exp=$2 file=$3
+    local input=$1 exp=$2 file=$3 prefix=${4:-}
     total=$((total+1))
     local out err
-    out="$(printf '%s\n' "$input" | "$VMTEST" 2>"$errf")"
+    out="$(printf '%s' "$prefix$input
+" | "$VMTEST" 2>"$errf")"
     err="$(cat "$errf")"
+    local pn=0
+    if [[ -n "$prefix" ]]; then
+        pn=$(printf '%s' "$prefix" | grep -c '')            # prior chain lines
+        local on; on=$(printf '%s' "$out" | grep -c '')
+        if [[ "$exp" == '!'* ]]; then
+            # error case mid-chain: current line must add NO stdout line
+            if [[ $on -gt $pn ]]; then out="${out##*$'\n'}"; else out=""; fi
+        else
+            out="${out##*$'\n'}"                           # value case: last line
+        fi
+    fi
 
     if [[ $ASAN == 1 ]]; then                # memory-safety sweep only
         if grep -qE 'AddressSanitizer|LeakSanitizer|runtime error:' "$errf"; then
@@ -72,17 +92,23 @@ run_one() {
 }
 
 run_file() {
-    local f=$1 input="" have=0
+    local f=$1 input="" have=0 prefix=""
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         local line="${raw%$'\r'}"
         local t="${line#"${line%%[![:space:]]*}"}"      # ltrim
         [[ -z "$t" || "$t" == '#'* ]] && continue
         if [[ "$t" == '=>'* ]]; then
             local exp="${t#=>}"; exp="${exp# }"
-            if [[ $have == 1 ]]; then run_one "$input" "$exp" "$(basename "$f")"; have=0
+            if [[ $have == 1 ]]; then run_one "$input" "$exp" "$(basename "$f")" "$prefix"; have=0
             else echo "runner: '=>' with no input in $f: $t" >&2; fi
         else
-            input="$t"; have=1
+            if [[ "$t" == '.. '* ]]; then
+                prefix="$prefix$input
+"; input="${t#.. }"
+            else
+                prefix=""; input="$t"
+            fi
+            have=1
         fi
     done < "$f"
 }

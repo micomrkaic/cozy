@@ -1,0 +1,25 @@
+# ast(f) quotation (design entry 4b, the charter's last capability item):
+# a closure's body as a symb-style record tree. v1 = the symb expression
+# subset; everything else gates with a teaching error.
+ast(fn x -> x^2 + 1).body.op
+=> "add"
+ast(fn x -> x^2 + 1).params
+=> ["x"]
+ast(fn x -> x^2).body.n
+=> 2
+ast(fn x -> sin(x)).body.op
+=> "sin"
+ast(fn x -> -x).body.l.v
+=> -1
+ast(fn a, b -> a * b).params
+=> ["a", "b"]
+ast(fn x -> x^2 + 3 * sin(x)).body.r.l.v
+=> 3
+ast(sin)
+=> !'sin' is a builtin
+ast(fn x -> x^x)
+=> !only constant exponents
+ast(fn x -> if x then 1 else 2 end)
+=> !not quotable yet
+load("packages/symb.cz"); show(simp(ddx(ast(fn x -> x^2 + sin(x)).body)))
+=> "((2 * x) + cos(x))"

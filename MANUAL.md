@@ -1178,6 +1178,7 @@ cozy> clear("scatter"); who
 | `mem` | print workspace size (variables) and peak process memory |
 | `tic` | start the wall-clock timer (monotonic) |
 | `toc` | seconds elapsed since tic |
+| `ast(f)` | quote a function: its body as a symb-style record tree ({op, l, r, ...}); params as a string row |
 
 ### Strings
 
