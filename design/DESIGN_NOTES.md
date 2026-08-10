@@ -123,8 +123,14 @@ closure's retained source into a symb-shaped record tree ({op="pow", l,
 n} with numeric exponents, unary minus as mul(-1), single-arg calls as
 {op=name, l}); v1 scope = the symb expression subset, everything else a
 teaching gate. The chartered payoff is a golden: ddx(ast(fn x -> x^2 +
-sin(x)).body) simplifies to 2x + cos(x). Residue trigger: the first
-non-subset quotation need. ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
+sin(x)).body) simplifies to 2x + cos(x). The residue trigger FIRED the day it
+shipped (the owner quoted op_dot, whose body uses .*) and was paid at
+0.0.31: quotation is now TOTAL over the expression and statement grammar
+— elementwise ops, comparisons, logic, pipes, calls of any arity (argc +
+a1..aN fields), indexing, fields, ranges, matrices, transposes, if/let/
+assign/blocks/loops/break/return, nested fn — with symb's shapes kept
+where symb has opinions (pow-with-constant carries n; single-arg calls
+are {op=name, l}). ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
 
 **Motivation.** Neutrino's symb.cz proved symbolic differentiation is
 expressible with expression trees as records — but only via constructor

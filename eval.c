@@ -1990,43 +1990,66 @@ static Value ast_rec(Interp *I, uint32_t n2, ...)
 }
 static void ast_check(Interp *I, const AstNode *e)
 {
-    switch (e->kind) {
-    case AST_INT: case AST_FLOAT: case AST_IDENT: return;
-    case AST_UNARY:
-        if (e->as.unary.op == TOK_MINUS || e->as.unary.op == TOK_PLUS)
-            { ast_check(I, e->as.unary.operand); return; }
-        break;
-    case AST_BINARY:
-        switch (e->as.binary.op) {
-        case TOK_PLUS: case TOK_MINUS: case TOK_STAR: case TOK_SLASH:
-            ast_check(I, e->as.binary.lhs); ast_check(I, e->as.binary.rhs); return;
-        case TOK_CARET:
-            if (e->as.binary.rhs->kind != AST_INT && e->as.binary.rhs->kind != AST_FLOAT)
-                runtime_error(I, "ast: only constant exponents are quotable "
-                                 "(symb's pow carries a number)");
-            ast_check(I, e->as.binary.lhs); return;
-        default: break;
-        }
-        break;
-    case AST_CALL:
-        if (e->as.call.callee->kind == AST_IDENT && e->as.call.args.count == 1)
-            { ast_check(I, e->as.call.args.items[0]); return; }
-        runtime_error(I, "ast: only single-argument named calls are quotable yet");
-    default: break;
+    (void)I; (void)e;   /* quotation is total since 0.0.31; kept as the seam
+                           for any future node kind that cannot be quoted */
+}
+static Value ast_quote(Interp *I, const AstNode *e);
+static Value ast_list(Interp *I, const char *cntkey, AstList l, uint32_t extra, ...)
+{
+    /* {<extra pairs...>, <cntkey> = N, a1 = ..., a2 = ...} */
+    Value r = val_record(extra + 1 + l.count);
+    RecObj *rc = as_rec(r); rc->owns_keys = true;
+    uint32_t k = 0;
+    va_list ap; va_start(ap, extra);
+    for (uint32_t i = 0; i < extra; i++) {
+        const char *key = va_arg(ap, const char *); Value v = va_arg(ap, Value);
+        rc->keys[k] = strdup(key); rc->keylens[k] = (uint32_t)strlen(key); rc->vals[k] = v; k++;
     }
-    runtime_error(I, "ast: this construct is not quotable yet — 4b covers the "
-                     "symb expression subset (numbers, variables, + - * / ^, "
-                     "single-argument calls)");
+    va_end(ap);
+    rc->keys[k] = strdup(cntkey); rc->keylens[k] = (uint32_t)strlen(cntkey);
+    rc->vals[k] = val_int((long long)l.count); k++;
+    for (uint32_t i = 0; i < l.count; i++) {
+        char kb[16]; snprintf(kb, sizeof kb, "a%u", i + 1);
+        rc->keys[k] = strdup(kb); rc->keylens[k] = (uint32_t)strlen(kb);
+        rc->vals[k] = ast_quote(I, l.items[i]); k++;
+    }
+    return r;
+}
+static const char *ast_binop_name(enum TokenKind op)
+{
+    switch (op) {
+    case TOK_PLUS: return "add";   case TOK_MINUS: return "sub";
+    case TOK_STAR: return "mul";   case TOK_SLASH: return "div";
+    case TOK_BACKSLASH: return "ldiv";
+    case TOK_DOT_STAR: return "emul"; case TOK_DOT_SLASH: return "ediv";
+    case TOK_DOT_CARET: return "epow"; case TOK_DOT_BACKSLASH: return "eldiv";
+    case TOK_EQ: return "eq"; case TOK_NE: return "ne";
+    case TOK_LT: return "lt"; case TOK_LE: return "le";
+    case TOK_GT: return "gt"; case TOK_GE: return "ge";
+    case TOK_AND: case TOK_AMP: return "and";
+    case TOK_OR:  case TOK_PIPE: return "or";
+    case TOK_PIPE_GT: return "pipe"; case TOK_TILDE_GT: return "mappipe";
+    case TOK_PIPE_GTGT: return "teepipe";
+    default: return NULL;
+    }
 }
 static Value ast_quote(Interp *I, const AstNode *e)
 {
     switch (e->kind) {
-    case AST_INT: {
-        long long v = strtoll(e->as.lit.text, NULL, 10);
-        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_int(v));
-    }
+    case AST_INT:
+        return ast_rec(I, 2, "op", ast_str("const", 5),
+                       "v", val_int(strtoll(e->as.lit.text, NULL, 10)));
     case AST_FLOAT:
         return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_float(strtod(e->as.lit.text, NULL)));
+    case AST_IMAG:
+        return ast_rec(I, 2, "op", ast_str("const", 5),
+                       "v", val_complex(0.0, strtod(e->as.lit.text, NULL)));
+    case AST_STRING:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", ast_str(e->as.lit.text, e->as.lit.len));
+    case AST_BOOL:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_bool(e->as.boolean));
+    case AST_NULL:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_null());
     case AST_IDENT:
         return ast_rec(I, 2, "op", ast_str("var", 3), "name", ast_str(e->as.lit.text, e->as.lit.len));
     case AST_UNARY:
@@ -2036,43 +2059,104 @@ static Value ast_quote(Interp *I, const AstNode *e)
                            "r", ast_quote(I, e->as.unary.operand));
         if (e->as.unary.op == TOK_PLUS)
             return ast_quote(I, e->as.unary.operand);
-        break;
+        return ast_rec(I, 2, "op", ast_str(e->as.unary.op == TOK_BANG ? "not" : "bnot", e->as.unary.op == TOK_BANG ? 3 : 4),
+                       "l", ast_quote(I, e->as.unary.operand));
+    case AST_POSTFIX:
+        return ast_rec(I, 2, "op",
+                       e->as.unary.op == TOK_CTRANSPOSE ? ast_str("ctrans", 6) : ast_str("trans", 5),
+                       "l", ast_quote(I, e->as.unary.operand));
     case AST_BINARY: {
-        const char *op = NULL;
-        switch (e->as.binary.op) {
-        case TOK_PLUS:  op = "add"; break;
-        case TOK_MINUS: op = "sub"; break;
-        case TOK_STAR:  op = "mul"; break;
-        case TOK_SLASH: op = "div"; break;
-        case TOK_CARET: {
+        if (e->as.binary.op == TOK_CARET) {
             const AstNode *r = e->as.binary.rhs;
-            double n3;
-            if (r->kind == AST_INT)        n3 = (double)strtoll(r->as.lit.text, NULL, 10);
-            else if (r->kind == AST_FLOAT) n3 = strtod(r->as.lit.text, NULL);
-            else runtime_error(I, "ast: only constant exponents are quotable "
-                                  "(symb's pow carries a number)");
+            if (r->kind == AST_INT || r->kind == AST_FLOAT)   /* symb's shape */
+                return ast_rec(I, 3, "op", ast_str("pow", 3),
+                               "l", ast_quote(I, e->as.binary.lhs),
+                               "n", val_float(r->kind == AST_INT
+                                              ? (double)strtoll(r->as.lit.text, NULL, 10)
+                                              : strtod(r->as.lit.text, NULL)));
             return ast_rec(I, 3, "op", ast_str("pow", 3),
-                           "l", ast_quote(I, e->as.binary.lhs), "n", val_float(n3));
+                           "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
         }
-        default: break;
-        }
-        if (op)
-            return ast_rec(I, 3, "op", ast_str(op, 3),
-                           "l", ast_quote(I, e->as.binary.lhs),
-                           "r", ast_quote(I, e->as.binary.rhs));
-        break;
+        const char *op = ast_binop_name(e->as.binary.op);
+        if (!op) runtime_error(I, "ast: unquotable binary operator");
+        return ast_rec(I, 3, "op", ast_str(op, (uint32_t)strlen(op)),
+                       "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
     }
+    case AST_RANGE:
+        if (e->as.range.step)
+            return ast_rec(I, 4, "op", ast_str("range", 5), "start", ast_quote(I, e->as.range.start),
+                           "step", ast_quote(I, e->as.range.step), "stop", ast_quote(I, e->as.range.stop));
+        return ast_rec(I, 3, "op", ast_str("range", 5), "start", ast_quote(I, e->as.range.start),
+                       "stop", ast_quote(I, e->as.range.stop));
     case AST_CALL:
         if (e->as.call.callee->kind == AST_IDENT && e->as.call.args.count == 1)
-            return ast_rec(I, 2, "op",
+            return ast_rec(I, 2, "op",   /* symb's single-arg shape */
                            ast_str(e->as.call.callee->as.lit.text, e->as.call.callee->as.lit.len),
                            "l", ast_quote(I, e->as.call.args.items[0]));
-        runtime_error(I, "ast: only single-argument named calls are quotable yet");
-    default: break;
+        return ast_list(I, "argc", e->as.call.args, 2,
+                        "op", ast_str("call", 4), "f", ast_quote(I, e->as.call.callee));
+    case AST_INDEX:
+        return ast_list(I, "argc", e->as.call.args, 2,
+                        "op", ast_str("index", 5), "l", ast_quote(I, e->as.call.callee));
+    case AST_FIELD:
+        return ast_rec(I, 3, "op", ast_str("field", 5), "l", ast_quote(I, e->as.field.target),
+                       "name", ast_str(e->as.field.name, e->as.field.namelen));
+    case AST_ROW:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("row", 3));
+    case AST_MATRIX:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("matrix", 6));
+    case AST_LAMBDA: {
+        uint32_t np = e->as.lambda.params.count;
+        Value params = val_array(ELT_STRING, 1, np ? np : 1);
+        if (!np) as_arr(params)->cols = 0;
+        for (uint32_t i = 0; i < np; i++) {
+            Value ps = ast_str(e->as.lambda.params.items[i]->as.lit.text,
+                               e->as.lambda.params.items[i]->as.lit.len);
+            arr_set(as_arr(params), i, ps); value_release(ps);
+        }
+        return ast_rec(I, 3, "op", ast_str("fn", 2), "params", params,
+                       "body", ast_quote(I, e->as.lambda.body));
     }
-    runtime_error(I, "ast: this construct is not quotable yet — 4b covers the "
-                     "symb expression subset (numbers, variables, + - * / ^, "
-                     "single-argument calls)");
+    case AST_IF:
+        if (e->as.iff.else_e)
+            return ast_rec(I, 4, "op", ast_str("if", 2), "cond", ast_quote(I, e->as.iff.cond),
+                           "then", ast_quote(I, e->as.iff.then_e), "els", ast_quote(I, e->as.iff.else_e));
+        return ast_rec(I, 3, "op", ast_str("if", 2), "cond", ast_quote(I, e->as.iff.cond),
+                       "then", ast_quote(I, e->as.iff.then_e));
+    case AST_RECORD:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("record", 6));
+    case AST_RECORD_FIELD:
+        return ast_rec(I, 3, "op", ast_str("setf", 4),
+                       "name", ast_str(e->as.recfield.name, e->as.recfield.namelen),
+                       "value", ast_quote(I, e->as.recfield.value));
+    case AST_LET:
+        if (e->as.let.body)
+            return ast_rec(I, 4, "op", ast_str("let", 3), "name", ast_str(e->as.let.name, e->as.let.namelen),
+                           "value", ast_quote(I, e->as.let.value), "body", ast_quote(I, e->as.let.body));
+        return ast_rec(I, 3, "op", ast_str("let", 3), "name", ast_str(e->as.let.name, e->as.let.namelen),
+                       "value", ast_quote(I, e->as.let.value));
+    case AST_ASSIGN:
+        return ast_rec(I, 3, "op", ast_str("assign", 6),
+                       "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
+    case AST_BLOCK: case AST_BLOCK_EXPR:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("block", 5));
+    case AST_COLON: return ast_rec(I, 1, "op", ast_str("colon", 5));
+    case AST_END:   return ast_rec(I, 1, "op", ast_str("end", 3));
+    case AST_BREAK: return ast_rec(I, 1, "op", ast_str("break", 5));
+    case AST_CONTINUE: return ast_rec(I, 1, "op", ast_str("continue", 8));
+    case AST_RETURN:
+        if (e->as.unary.operand)
+            return ast_rec(I, 2, "op", ast_str("return", 6), "l", ast_quote(I, e->as.unary.operand));
+        return ast_rec(I, 1, "op", ast_str("return", 6));
+    case AST_WHILE:
+        return ast_rec(I, 3, "op", ast_str("while", 5), "cond", ast_quote(I, e->as.whileloop.cond),
+                       "body", ast_quote(I, e->as.whileloop.body));
+    case AST_FOR:
+        return ast_rec(I, 4, "op", ast_str("for", 3), "var", ast_str(e->as.forloop.var, e->as.forloop.varlen),
+                       "iter", ast_quote(I, e->as.forloop.iter), "body", ast_quote(I, e->as.forloop.body));
+    default:
+        runtime_error(I, "ast: this construct is not quotable yet");
+    }
 }
 static Value bi_ast(Interp *I, Value *args, uint32_t n)
 {

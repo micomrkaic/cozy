@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.0.31 — quotation goes total
+
+### Changed
+- **ast(f) now quotes the whole grammar** — the v1 residue trigger
+  fired on its first real encounter (the owner quoted op_dot, whose
+  body uses .*): elementwise operators (emul/ediv/epow/eldiv), \ as
+  ldiv, comparisons, and/or/not, all three pipes, calls of any arity
+  ({op="call", f, argc, a1..aN} — single-argument named calls keep
+  symb's {op=name, l} shape), indexing, field access, ranges, matrix
+  literals (row/matrix lists), both transposes, if with and without
+  else, let (and let..in), assignment, blocks, while/for/break/
+  continue/return, nested fn (recursive, with its own params row), and
+  non-constant exponents ({op="pow", l, r}; constants keep symb's n).
+  Package bodies quote whole: ast(op_bt).body.op is "block".
+  The validator remains as the seam for future node kinds. Nine new
+  goldens; the symb integration golden unchanged.
+
 ## 0.0.30 — ast(f): the founding capability list, completed
 
 ### Added
