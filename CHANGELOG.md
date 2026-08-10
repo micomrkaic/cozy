@@ -1,5 +1,37 @@
 # Cozy changelog
 
+## 0.0.35 — the workout: a stress tier above the rite
+
+### Added
+- **make stress** (owner's request: "give this version a proper
+  workout"), heavier than make test and outside it, same law — the
+  verdict is the exit code. Four tiers: a randomized, seeded PROPERTY
+  BATTERY (inv/mldivide residuals, det·det(inv)=1, eig and svd
+  reconstruction, transpose laws, reduction identities, at eight random
+  sizes); a CALCULUS battery (dual derivatives and hyper-dual second
+  derivatives against finite differences at a dozen points; Newton
+  one-step on random PD quadratics against the analytic solution, BFGS
+  agreeing); SPARSE at equivalence sizes against dense and cg on a
+  3000-node system; and PARSER FUZZ under ASan — 400 seeded lines of
+  token soup that must produce clean errors, never sanitizer hits —
+  plus a 2000-eval long-session tier asserting peak RSS plateaus.
+  Green under tier0 and OpenBLAS.
+
+### Found by the new suite, on its first run
+- **Session arena retention** (docket entry 11, KNOWN_LIMITATIONS): the
+  long-session tier measured peak RSS climbing 8.6 -> 112.7 MB over
+  2000 closure-free evals — every line's parse arena is retained for
+  closure-source lifetime, unconditionally. The tier reports the growth
+  with an explicit in-code waiver and flips to enforcing when the fix
+  lands. A stress suite that finds a real retention cost on day one is
+  a stress suite earning its keep.
+
+### Design
+- Docket entry 10 opened, trigger already fired by the owner's
+  benchmark: the tier-1 complex funnel makes real inv() pay zgetrf/
+  zgetri prices versus Octave's dgetrf/dgetri — a real-typed fast path
+  is scheduled as the next backend session.
+
 ## 0.0.34 — the packages pane grows up: checkboxes, one truth
 
 ### Fixed

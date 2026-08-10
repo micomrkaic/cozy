@@ -375,3 +375,23 @@ loads), plus native plot polling (COZY_PLOT_TERM=svg; the pane diffs GET
 /plots). The browser is the rendering surface, not necessarily the compute
 engine. v1 excludes debugger, editor completion, data viewer — each waits
 on its own friction.
+
+## 10. Real-typed LAPACK fast path (trigger FIRED by the owner: inv() is
+slightly slower than Octave under OpenBLAS). Cause, confirmed in the
+architecture: the tier-1 funnels ALL matrices through the six COMPLEX
+routines (zgetrf/zgetri/zgesv/...), so real matrices pay ~2x memory
+traffic and 2-4x flops versus Octave's dgetrf/dgetri dispatch. Design:
+when elt == FLOAT, dispatch to real routines (dgesv/dgetrf/dgetri first —
+inv and mldivide are the hot pair — then dsyev/dgeev/dgesvd), sharing the
+existing invariance conventions; goldens are already backend-invariant so
+the change is measured by the stress battery plus benchmarks, not new
+goldens. Scheduled as the next backend working session.
+
+## 11. Session arena retention (trigger FIRED by the stress suite on its
+first run: peak RSS 8.6 -> 112.7 MB over 2000 closure-free evals). Every
+line's parse arena + source is retained for closure-source lifetime,
+unconditionally. Design: free the arena/src when the compiled line created
+no closure (cheap flag from the compiler), or refcount chunks so retention
+follows references; the workbench server shares the fix. Acceptance: the
+stress long-session tier's plateau bound flips from reporting to
+enforcing.

@@ -1,0 +1,27 @@
+% calculus.cz — derivatives against finite differences; optimizers against truth.
+load("packages/optim.cz")
+let tol = 1e-4
+let fd = fn f, x -> (f(x + 1e-6) - f(x - 1e-6)) / 2e-6
+for trial = 1:12 do
+  let a = 0.5 + trial * 0.2;
+  let f = fn x -> exp(sin(a * x)) + x^3 / (1 + x^2);
+  assert(abs(d(f)(a) - fd(f, a)) < tol, "d vs fd");
+  let h2 = hdual12(f(hdual(a, 1, 1)));
+  let fdh = (d(f)(a + 1e-6) - d(f)(a - 1e-6)) / 2e-6;
+  assert(abs(h2 - fdh) < 1e-3, "hess vs fd")
+end
+for trial = 1:6 do
+  let n = 2 + trial;
+  let Q0 = randn(n, n); let Q = Q0' * Q0 + eye(n) * n;
+  let c = randn(n, 1);
+  let xstar = Q \ c;
+  let f = fn x -> 0.5 * sum(x .* (Q * x)) - sum(c .* x);
+  let r = minimize_newton(f, zeros(n, 1));
+  assert(r.iters == 1, "newton one-step");
+  assert(sqrt(sum((r.x - xstar) .* (r.x - xstar))) < 1e-6, "newton exact");
+  let rb = minimize(f, zeros(n, 1));
+  assert(sqrt(sum((rb.x - xstar) .* (rb.x - xstar))) < 1e-5, "bfgs agrees")
+end
+let H = hess(fn x -> x[1]^2 * x[2] + exp(x[1] * x[2]))([0.7; -0.3]);
+assert(max(abs(H - H')) == 0, "hessian symmetric");
+print("calculus: all green")

@@ -187,4 +187,9 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 wasm-ubuntu:
 	NODE_PATH=/usr/share/nodejs $(MAKE) wasm EMCC_C23='-Dnullptr=NULL -Dalignof=_Alignof -Dtypeof=__typeof__ -Dstatic_assert=_Static_assert'
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu manual pdfs
+# The workout: heavier than the rite; run before big releases and after
+# backend work. make stress (tier0) or make BACKEND=openblas stress.
+stress: $(BIN) vmtest-asan
+	bash stress/run.sh
+
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu manual pdfs stress

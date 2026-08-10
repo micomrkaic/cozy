@@ -127,3 +127,14 @@ compiled.
   trio — getfield(r, name), setfield(r, name, v) returning a new record,
   and construction from parallel name/value arrays — the same reflection
   family as ast(f).
+
+## Sessions retain every line's parse arena (found by the stress suite, 0.0.35)
+
+Closures point into their chunk's source, so the REPL retains each line's
+arena and source for the life of the session — unconditionally, including
+lines that created no closure. Cost: ~50 KB per eval; a 2000-eval session
+peaks above 100 MB. Harmless for normal interactive use, real for very
+long sessions and the workbench server. The fix (docket entry 11): free
+the arena when compilation produced no closure, or refcount chunks so
+retention follows actual references. The stress suite's long-session tier
+reports the growth and will enforce a plateau once the fix lands.
