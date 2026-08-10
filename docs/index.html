@@ -441,6 +441,7 @@
   function refreshWorkspace() {
     evalAny('who').then(function (txt) {
       document.getElementById('ws-pre').textContent = txt.trim() ? txt : '(empty workspace)';
+      updatePkgChecks(txt);
     }).catch(function () {});
   }
   function refreshPlotsNative() {
@@ -460,24 +461,41 @@
   }
   function afterEval() { refreshWorkspace(); refreshPlotsNative(); }
   var PKGS = ['astro','autodiff','demo','dist','finance','optim','phys','poly','rmt','scatter','sparselin','symb'];
+  var pkgChecks = {};
   (function buildPkgs() {
     var box = document.getElementById('pkgs');
+    var hint = document.createElement('div');
+    hint.textContent = 'Tick to load, untick to unload (clear the package\u2019s names). State follows the workspace, however a package was loaded.';
+    hint.style.cssText = 'font-size:12px; color:#99a3b3; padding:2px 4px 10px;';
+    box.appendChild(hint);
     PKGS.forEach(function (p) {
-      var row = document.createElement('div');
-      row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06);';
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; font-size:13px;';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.dataset.pkg = p;
+      pkgChecks[p] = cb;
       var name = document.createElement('span');
-      name.textContent = 'packages/' + p + '.cz'; name.style.fontSize = '13px';
-      var b = document.createElement('button'); b.className = 'btn'; b.textContent = 'load';
-      b.addEventListener('click', function () {
-        writeLine('echo', 'cozy> load("packages/' + p + '.cz")');
-        evalAny('load("packages/' + p + '.cz"); 1').then(function () {
-          writeLine('dim', '  loaded packages/' + p + '.cz');
-          afterEval(); scroll();
+      name.textContent = 'packages/' + p + '.cz';
+      cb.addEventListener('change', function () {
+        var line = cb.checked ? 'load("packages/' + p + '.cz"); 1' : 'clear("' + p + '")';
+        window.nuTerm.writeLine('echo', 'cozy> ' + (cb.checked ? 'load("packages/' + p + '.cz")' : 'clear("' + p + '")'));
+        evalAny(line).then(function () {
+          window.nuTerm.writeLine('dim', cb.checked ? '  loaded packages/' + p + '.cz'
+                                                    : '  cleared packages/' + p + '.cz');
+          afterEval(); window.nuTerm.scroll();
+        }).catch(function (e) {
+          cb.checked = !cb.checked;   /* revert on failure */
+          window.nuTerm.writeLine('err', '  ' + e.message); window.nuTerm.scroll();
         });
       });
-      row.appendChild(name); row.appendChild(b); box.appendChild(row);
+      row.appendChild(cb); row.appendChild(name); box.appendChild(row);
     });
   })();
+  function updatePkgChecks(whoText) {
+    PKGS.forEach(function (p) {
+      pkgChecks[p].checked = whoText.indexOf('packages/' + p + '.cz') !== -1;
+    });
+  }
   try {   /* native engine detection: jsdom/file:// lack fetch or the server */
     if (typeof fetch === 'function')
       fetch('/native-ping').then(function (r) { return r.text(); }).then(function (tx) {

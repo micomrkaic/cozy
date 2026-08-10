@@ -1,5 +1,25 @@
 # Cozy changelog
 
+## 0.0.34 — the packages pane grows up: checkboxes, one truth
+
+### Fixed
+- **The packages pane's load button never worked**: its click handler
+  called writeLine/scroll, which live inside the terminal IIFE — the
+  same scope boundary that bit the pane's first build — so every click
+  died on a silent ReferenceError. All pane wiring now goes through the
+  window.nuTerm bridge that exists precisely for code outside the IIFE.
+
+### Changed
+- **Load buttons are now checkboxes whose state is DERIVED from the
+  workspace** (the owner's design, and the better one): after every
+  eval the pane re-reads who and ticks exactly the packages whose load
+  groups exist — so a load("...") typed at the prompt ticks the box,
+  and the box never lies. Ticking loads; unticking unloads via the
+  group-aware clear("pkg") (verified: clears the package's names,
+  leaves everything else, and the teaching hint returns for its names).
+  A failed toggle reverts the box and prints the error. Simulated
+  end-to-end under jsdom: load issued, state follows who both ways.
+
 ## 0.0.33 — the banner names its backend
 
 ### Changed
