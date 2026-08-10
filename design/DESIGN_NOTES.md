@@ -392,10 +392,17 @@ dgetrf when both operands are real (covers \, /, inv, det, negative
 matrix powers via the one mldivide funnel); tier0 provides parity
 wrappers. Measured on inv(700): 0.051s real vs 0.097s complex — 1.9x,
 the predicted flop ratio — and the result is exactly real by
-construction, no snap involved. PHASE 2 residue (triggers: profiling or
-the owner's next benchmark): real eig_sym via dsyev, svd via dgesvd,
-chol via dpotrf; real NONSYMMETRIC eig stays complex-funneled until
-someone wants to unpack dgeev's paired-column format.
+construction, no snap involved. PHASE 2 SHIPPED
+0.0.37 (owner: "now do phase 2"): eig_sym_d/svd_d/chol_d seam entries;
+OpenBLAS runs dsyev/dgesvd/dpotrf on real inputs; tier0 parity wrappers.
+The real kernels do the O(n^3) work, then results convert INTO the
+existing complex buffers so all downstream shaping (eigenvalue sort,
+phase anchor, snap, demotion) stays single-path — no new divergence
+class. Measured under OpenBLAS at n=400: symmetric eig 3.5x, svd 3.1x;
+residuals at machine precision. REMAINING residue: real nonsymmetric
+eig stays complex-funneled until dgeev's paired-column eigenvector
+format earns its unpacking (trigger: a profiled real nonsymmetric eig
+hot path).
 
 ## 11. Session arena retention (trigger FIRED by the stress suite on its
 first run: peak RSS 8.6 -> 112.7 MB over 2000 closure-free evals). Every

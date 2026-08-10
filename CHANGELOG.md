@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.0.37 — real routines, phase 2: eig, svd, chol
+
+### Changed
+- **Symmetric eig, svd, and chol now run real LAPACK on real inputs**
+  (entry 10 phase 2, owner's schedule): dsyev/dgesvd/dpotrf behind new
+  eig_sym_d/svd_d/chol_d seam entries, tier0 carrying parity wrappers.
+  Design choice that keeps invariance cheap: the real kernels do the
+  O(n^3) work, then convert into the existing complex buffers, so every
+  downstream shaping step — eigenvalue sorting, the tolerance-aware
+  phase anchor, the singular-value snap, real demotion — remains
+  single-path. Measured under OpenBLAS at n=400, same binary: symmetric
+  eig 0.099s vs 0.342s complex (3.5x), svd 0.115s vs 0.356s (3.1x),
+  chol 3.6ms; reconstruction residuals at machine precision.
+- Real NONSYMMETRIC eig remains complex-funneled, recorded with its
+  trigger: dgeev's paired-column eigenvector format earns its
+  unpacking when a profiled hot path asks.
+
 ## 0.0.36 — real data on real routines (entry 10, phase 1)
 
 ### Changed

@@ -4970,7 +4970,17 @@ static Value bi_chol(Interp *I, Value *args, uint32_t n)
     bool ro = arr_real(args[0]);
     if (c != N) { free(A); runtime_error(I, "chol: matrix must be square (got %ux%u)", N, c); }
     Cplx *L = malloc((size_t)(N ? N*N : 1) * sizeof *L);
-    if (cozy_linalg()->chol(A, N, L) != 0)
+    int chrc;
+    if (ro && cozy_linalg()->chol_d) {                  /* entry 10 phase 2: dpotrf */
+        size_t cc = (size_t)(N ? N*N : 1);
+        double *Ad = malloc(cc * sizeof *Ad), *Ld = malloc(cc * sizeof *Ld);
+        for (size_t q = 0; q < (size_t)N*N; q++) Ad[q] = A[q].re;
+        chrc = cozy_linalg()->chol_d(Ad, N, Ld);
+        if (chrc == 0) for (size_t q = 0; q < (size_t)N*N; q++) L[q] = (Cplx){ Ld[q], 0 };
+        free(Ad); free(Ld);
+    } else
+        chrc = cozy_linalg()->chol(A, N, L);
+    if (chrc != 0)
         { free(A); free(L); runtime_error(I, "chol: matrix is not positive definite"); }
     Value Lv = from_cplx(L, N, N, ro);     /* lower-triangular: L * L' = A  (Hermitian for complex) */
     free(A); free(L);
@@ -5003,6 +5013,14 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 
     if (hermitian) {
         double *ev = malloc((N ? N : 1) * sizeof *ev);
+        if (real_in && cozy_linalg()->eig_sym_d) {      /* entry 10 phase 2: dsyev */
+            size_t cc = (size_t)(N ? N*N : 1);
+            double *Ad = malloc(cc * sizeof *Ad), *Vd = malloc(cc * sizeof *Vd);
+            for (size_t k = 0; k < (size_t)N*N; k++) Ad[k] = A[k].re;
+            cozy_linalg()->eig_sym_d(Ad, N, ev, Vd);
+            for (size_t k = 0; k < (size_t)N*N; k++) V[k] = (Cplx){ Vd[k], 0 };
+            free(Ad); free(Vd);
+        } else
         cozy_linalg()->eig_herm(A, N, ev, V);
         for (uint32_t i = 0; i < N; i++) ord[i] = i;
         for (uint32_t i = 1; i < N; i++) {                 /* sort pairs by ascending eigenvalue */
@@ -5106,6 +5124,17 @@ static Value bi_svd(Interp *I, Value *args, uint32_t n)
     Cplx   *U = malloc((size_t)(m  ? m  : 1) * (k ? k : 1) * sizeof *U);
     Cplx   *V = malloc((size_t)(nc ? nc : 1) * (k ? k : 1) * sizeof *V);
     double *s = malloc((k ? k : 1) * sizeof *s);
+    if (ro && cozy_linalg()->svd_d) {                   /* entry 10 phase 2: dgesvd */
+        size_t ca = (size_t)m * nc, cu = (size_t)m * k, cv = (size_t)nc * k;
+        double *Ad = malloc((ca ? ca : 1) * sizeof *Ad);
+        double *Ud = malloc((cu ? cu : 1) * sizeof *Ud);
+        double *Vd = malloc((cv ? cv : 1) * sizeof *Vd);
+        for (size_t q = 0; q < ca; q++) Ad[q] = Araw[q].re;
+        cozy_linalg()->svd_d(Ad, m, nc, Ud, s, Vd);
+        for (size_t q = 0; q < cu; q++) U[q] = (Cplx){ Ud[q], 0 };
+        for (size_t q = 0; q < cv; q++) V[q] = (Cplx){ Vd[q], 0 };
+        free(Ad); free(Ud); free(Vd);
+    } else
     cozy_linalg()->svd(Araw, m, nc, U, s, V);
     free(Araw);
     for (uint32_t i = 1; i < k; i++)              /* same snap rule: s below */

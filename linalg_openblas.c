@@ -218,11 +218,70 @@ static int ob_chol(const Cplx *A, uint32_t n, Cplx *L)
 #ifndef COZY_LAPACK_NAME
 #define COZY_LAPACK_NAME "openblas"
 #endif
+extern void dsyev_(const char *jobz, const char *uplo, const int *n, double *a,
+                   const int *lda, double *w, double *work, const int *lwork, int *info);
+extern void dgesvd_(const char *jobu, const char *jobvt, const int *m, const int *n,
+                    double *a, const int *lda, double *s, double *u, const int *ldu,
+                    double *vt, const int *ldvt, double *work, const int *lwork, int *info);
+extern void dpotrf_(const char *uplo, const int *n, double *a, const int *lda, int *info);
+
+static int ob_eig_sym_d(double *A, uint32_t n, double *w, double *V)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, lwork = -1;
+    double *a = to_cm_d(A, n, n);
+    double wkq;
+    dsyev_("V", "L", &N, a, &N, w, &wkq, &lwork, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dsyev_("V", "L", &N, a, &N, w, work, &lwork, &info);
+    from_cm_d(V, a, n, n);
+    free(a); free(work);
+    return info != 0;
+}
+static int ob_svd_d(const double *A, uint32_t m, uint32_t n,
+                    double *U, double *s, double *V)
+{
+    if (m == 0 || n == 0) return 0;
+    int M = (int)m, N = (int)n, K = m < n ? (int)m : (int)n, info = 0, lwork = -1;
+    double *a = to_cm_d(A, m, n);
+    double *u = malloc((size_t)m * K * sizeof *u);
+    double *vt = malloc((size_t)K * n * sizeof *vt);
+    double wkq;
+    dgesvd_("S", "S", &M, &N, a, &M, s, u, &M, vt, &K, &wkq, &lwork, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dgesvd_("S", "S", &M, &N, a, &M, s, u, &M, vt, &K, work, &lwork, &info);
+    if (info == 0) {
+        from_cm_d(U, u, m, (uint32_t)K);
+        for (uint32_t i = 0; i < n; i++)                 /* V = VTᵀ, row-major n×K */
+            for (int j = 0; j < K; j++) V[(size_t)i*K + j] = vt[j + (size_t)K*i];
+    }
+    free(a); free(u); free(vt); free(work);
+    return info != 0;
+}
+static int ob_chol_d(const double *A, uint32_t n, double *L)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0;
+    double *a = to_cm_d(A, n, n);          /* symmetric: transpose immaterial */
+    dpotrf_("L", &N, a, &N, &info);
+    if (info == 0)
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < n; j++)
+                L[(size_t)i*n + j] = j <= i ? a[i + (size_t)j*n] : 0.0;
+    free(a);
+    return info != 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
     .solve_d  = ob_solve_d,
     .det_d    = ob_det_d,
+    .eig_sym_d = ob_eig_sym_d,
+    .svd_d    = ob_svd_d,
+    .chol_d   = ob_chol_d,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,
