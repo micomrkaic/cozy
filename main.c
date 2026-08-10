@@ -76,7 +76,12 @@ int main(int argc, char **argv)
     const char *path = nullptr;
     bool want_sample = false;
     for (int i = 1; i < argc; i++) {
-        if      (strcmp(argv[i], "--version") == 0) {
+        if      (strcmp(argv[i], "--workbench") == 0) {
+            extern int cozy_workbench(int port);
+            int port = (i + 1 < argc) ? atoi(argv[i + 1]) : 8765;
+            return cozy_workbench(port > 0 ? port : 8765);
+        }
+        else if (strcmp(argv[i], "--version") == 0) {
             printf("cozy %s (built %s)\n", COZY_VERSION, COZY_BUILT);
             return 0;
         }

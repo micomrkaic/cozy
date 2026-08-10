@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.32 — the workbench: RStudio ergonomics, Cozy engines
+
+### Added
+- **cozy --workbench [port]** (design entry 9, owner's ruling): a tiny
+  localhost HTTP server — POSIX sockets, ~180 lines, zero dependencies,
+  127.0.0.1 only by hard scope — serving the playground page and
+  answering POST /eval through the NATIVE interpreter: Accelerate or
+  OpenBLAS speed, real filesystem, persistent workspace. Verified over
+  curl: stateful evals, package loads, and plot_N.svg landing for the
+  plot pane (the server sets COZY_PLOT_TERM=svg).
+- **The page grew panes**: Workspace (live who, refreshed after every
+  eval) and Packages (the twelve packages with one-click loads) join
+  Plots/Editor/Docs; eval routing is dual-engine — the page detects the
+  local native server and says so in the terminal, and the embedded
+  wasm engine remains the zero-install fallback for GitHub Pages and
+  file://. Native plots arrive by polling GET /plots. The browser is
+  the rendering surface; the compute engine is whichever is best
+  available.
+- tests/run_page.js extended for the async routing; both phases green.
+  docs/README.md documents the workbench and its scope fence.
+
 ## 0.0.31 — quotation goes total
 
 ### Changed

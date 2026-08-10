@@ -363,3 +363,15 @@ evolved; migration would churn hundreds of verified transcript lines for
 zero behavioral gain. Cozy-original packages should prefer the record
 namespace from birth, with the helper-prefix convention in the package
 authoring guide from day one.
+
+## 9. The workbench — SHIPPED 0.0.32 (owner's ruling: "we are ready for the
+GUI — it will facilitate econometric testing"). Dual engine, one page: cozy
+--workbench is a ~180-line localhost HTTP server (127.0.0.1 only, no TLS or
+auth — a loopback tool by declared scope) serving docs/ and running POST
+/eval through the native interpreter; the page detects it and routes evals
+there, falling back to the embedded wasm engine on GitHub Pages or file://.
+New panes: Workspace (live who after every eval) and Packages (one-click
+loads), plus native plot polling (COZY_PLOT_TERM=svg; the pane diffs GET
+/plots). The browser is the rendering surface, not necessarily the compute
+engine. v1 excludes debugger, editor completion, data viewer — each waits
+on its own friction.

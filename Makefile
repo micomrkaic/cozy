@@ -16,7 +16,7 @@ STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
 LDFLAGS ?=
-SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c
+SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c serve.c
 HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h
 BIN      = cozy
 LIBS     = -lm $(LINALG_LIBS)
@@ -95,7 +95,7 @@ $(ASANDIR)/%.o: %.c | $(ASANDIR)
 
 -include $(wildcard $(OBJDIR)/*.d) $(wildcard $(ASANDIR)/*.d)
 
-$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/main.o
+$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
 
 # Headless test driver: same VM as `cozy`, but reads stdin line by line and
