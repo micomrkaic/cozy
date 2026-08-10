@@ -1,0 +1,14 @@
+# UTF-8 identifiers (0.0.25): bytes >= 0x80 are identifier characters.
+# Purely additive — every line here was "unexpected character" before.
+let α = 0.05; let β = 1.96; α * β
+=> 0.098
+let θ = [1.0; 2.0]; sum(θ .* θ)
+=> 5
+let σ2 = fn x -> var(x); σ2([1.0, 2.0, 3.0, 4.0])
+=> 1.66667
+{μ = 1, σ = 2}.σ
+=> 2
+let π_hat = 3.0; π_hat + 1
+=> 4
+let Δ = fn f, x -> f(x + 1) - f(x); Δ(fn x -> x ^ 2, 3)
+=> 7

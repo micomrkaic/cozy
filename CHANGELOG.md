@@ -1,5 +1,20 @@
 # Cozy changelog
 
+## 0.0.25 — Greek at last: UTF-8 identifiers
+
+### Added
+- **UTF-8 identifiers**, asked by the owner: any byte with the high bit
+  set is an identifier character (start or continue), so α, β, θ, σ, λ,
+  ℓ, π_hat, Δ — the whole econometrics alphabet — are ordinary names in
+  variables, functions, parameters, and record fields. Two lines in the
+  lexer, zero Unicode tables, and purely additive by construction:
+  every such program was "unexpected character" before, so no legal
+  program changes meaning. Names compare by BYTES (normalization is the
+  user's concern — documented); keywords stay ASCII. Known cosmetic:
+  who's column padding counts bytes, so multibyte names sit slightly
+  off-grid. tests/61_unicode_idents.test pins six shapes including a
+  Greek-named objective handed to minimize.
+
 ## 0.0.24 — hyper-duals: exact Hessians and true Newton
 
 ### Added

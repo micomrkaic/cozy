@@ -178,6 +178,12 @@ scripts clobber it as a side effect.
 
 ## 3. Values and types
 
+**Identifiers** are `[A-Za-z_]` plus any UTF-8 byte above ASCII, then
+digits too — so Greek reads naturally: `let α = 0.05`, `let θ = [1; 2]`,
+`{μ = 1, σ = 2}.σ`, `minimize(ℓ, θ0)`. Names compare by *bytes*: two
+visually identical characters in different Unicode normalizations are
+different names (type your α one way). Keywords stay ASCII.
+
 Cozy has eleven value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
