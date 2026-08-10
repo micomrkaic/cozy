@@ -1,5 +1,31 @@
 # Cozy changelog
 
+## 0.0.36 — real data on real routines (entry 10, phase 1)
+
+### Changed
+- **Real matrices now dispatch to real LAPACK** (owner's ruling: "run
+  float on float/double matrices and complex algorithms on complex
+  matrices alone — not only faster, but more accurate"): the kernel
+  seam grows solve_d/det_d; OpenBLAS (and therefore Accelerate — same
+  source) calls dgesv/dgetrf when both operands are real, and tier0
+  carries parity wrappers. One funnel covers everything: \, /, inv,
+  det, and negative matrix powers all ride mldivide. Measured on
+  inv(700) under OpenBLAS, same binary, same matrix: 0.051s real path
+  vs 0.097s complex-typed — 1.9x, the predicted flop ratio — with the
+  result exactly real by construction (dgesv arithmetic has no
+  imaginary residue to snap; the accuracy half of the ruling).
+- Phase 2 recorded in the docket with triggers: dsyev/dgesvd/dpotrf
+  real paths; real nonsymmetric eig stays complex-funneled until
+  dgeev's paired-column format earns its unpacking.
+- Full stress battery green under both backends on the new path.
+- **One golden repaired for the right reason**: the poly table's worked
+  example fit y = x^2 + 1, whose middle coefficient is analytically
+  ZERO — the table was pinning ulp noise (complex funnel -8.3e-16,
+  dgesv 6.1e-16), fragile under any backend change. The example now
+  fits x^2 + x + 1: every coefficient O(1), printing-stable, verified
+  byte-identical under tier0 and OpenBLAS. Goldens define the
+  language; a golden pinning noise defines nothing.
+
 ## 0.0.35 — the workout: a stress tier above the rite
 
 ### Added

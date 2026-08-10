@@ -385,7 +385,17 @@ when elt == FLOAT, dispatch to real routines (dgesv/dgetrf/dgetri first —
 inv and mldivide are the hot pair — then dsyev/dgeev/dgesvd), sharing the
 existing invariance conventions; goldens are already backend-invariant so
 the change is measured by the stress battery plus benchmarks, not new
-goldens. Scheduled as the next backend working session.
+goldens. PHASE 1
+SHIPPED 0.0.36 (owner's ruling: real data on real routines — faster AND
+more accurate): solve_d/det_d seam entries; OpenBLAS dispatches dgesv/
+dgetrf when both operands are real (covers \, /, inv, det, negative
+matrix powers via the one mldivide funnel); tier0 provides parity
+wrappers. Measured on inv(700): 0.051s real vs 0.097s complex — 1.9x,
+the predicted flop ratio — and the result is exactly real by
+construction, no snap involved. PHASE 2 residue (triggers: profiling or
+the owner's next benchmark): real eig_sym via dsyev, svd via dgesvd,
+chol via dpotrf; real NONSYMMETRIC eig stays complex-funneled until
+someone wants to unpack dgeev's paired-column format.
 
 ## 11. Session arena retention (trigger FIRED by the stress suite on its
 first run: peak RSS 8.6 -> 112.7 MB over 2000 closure-free evals). Every

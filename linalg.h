@@ -47,6 +47,12 @@ typedef struct LinalgKernels {
     /* Solve A X = B in place: A (n×n, row-major) is destroyed, B (n×m)
      * becomes X. Returns 0 on success, nonzero if A is singular. */
     int (*solve)(Cplx *A, Cplx *B, uint32_t n, uint32_t m);
+    /* Real-typed fast paths (design entry 10, owner's ruling: real data on
+     * real routines — faster AND more accurate: exact real arithmetic, no
+     * imaginary residue to snap). NULL means "backend has no real path";
+     * callers must fall back to the complex funnel. */
+    int (*solve_d)(double *A, double *B, uint32_t n, uint32_t m);
+    int (*det_d)(double *A, uint32_t n, double *out);
 
     /* Determinant of A (n×n); A is destroyed. Result in *out (0 for a
      * singular matrix). Returns 0. n >= 1 (n == 0 is eval.c's case). */

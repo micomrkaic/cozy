@@ -365,9 +365,35 @@ static int t0_chol(const Cplx *A, uint32_t N, Cplx *L)
 
 /* ---- the table ---------------------------------------------------------- */
 
+static int t0_solve_d(double *A, double *B, uint32_t n, uint32_t m)
+{
+    Cplx *a = malloc((size_t)n * n * sizeof *a);
+    Cplx *b = malloc((size_t)n * m * sizeof *b);
+    if ((!a && n) || (!b && n && m)) abort();
+    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
+    for (size_t k = 0; k < (size_t)n * m; k++) b[k] = (Cplx){ B[k], 0 };
+    int rc = t0_solve(a, b, n, m);
+    if (rc == 0) for (size_t k = 0; k < (size_t)n * m; k++) B[k] = b[k].re;
+    free(a); free(b);
+    return rc;
+}
+static int t0_det_d(double *A, uint32_t n, double *out)
+{
+    Cplx *a = malloc((size_t)n * n * sizeof *a);
+    if (!a && n) abort();
+    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
+    Cplx d;
+    int rc = t0_det(a, n, &d);
+    free(a);
+    *out = d.re;
+    return rc;
+}
+
 static const LinalgKernels tier0 = {
     .name     = "tier0",
     .solve    = t0_solve,
+    .solve_d  = t0_solve_d,
+    .det_d    = t0_det_d,
     .det      = t0_det,
     .eig_herm = t0_eig_herm,
     .eig_gen  = t0_eig_gen,

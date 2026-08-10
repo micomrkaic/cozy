@@ -68,6 +68,52 @@ static int ob_solve(Cplx *A, Cplx *B, uint32_t n, uint32_t m)
     return info != 0;
 }
 
+extern void dgesv_(const int *n, const int *nrhs, double *a, const int *lda,
+                   int *ipiv, double *b, const int *ldb, int *info);
+extern void dgetrf_(const int *m, const int *n, double *a, const int *lda,
+                    int *ipiv, int *info);
+static double *to_cm_d(const double *A, uint32_t r, uint32_t c)
+{
+    double *o = malloc((size_t)r * c * sizeof *o);
+    if (!o && r && c) abort();
+    for (uint32_t i = 0; i < r; i++)
+        for (uint32_t j = 0; j < c; j++) o[(size_t)j*r+i] = A[(size_t)i*c+j];
+    return o;
+}
+static void from_cm_d(double *A, const double *cm, uint32_t r, uint32_t c)
+{
+    for (uint32_t i = 0; i < r; i++)
+        for (uint32_t j = 0; j < c; j++) A[(size_t)i*c+j] = cm[(size_t)j*r+i];
+}
+static int ob_solve_d(double *A, double *B, uint32_t n, uint32_t m)
+{
+    if (n == 0) return 0;
+    int N = (int)n, M = (int)m, info = 0;
+    double *a = to_cm_d(A, n, n);
+    double *b = to_cm_d(B, n, m);
+    int *ipiv = malloc((size_t)n * sizeof *ipiv);
+    dgesv_(&N, &M, a, &N, ipiv, b, &N, &info);
+    if (info == 0) from_cm_d(B, b, n, m);
+    free(a); free(b); free(ipiv);
+    return info != 0;
+}
+static int ob_det_d(double *A, uint32_t n, double *out)
+{
+    if (n == 0) { *out = 1.0; return 0; }
+    int N = (int)n, info = 0;
+    int *ipiv = malloc((size_t)n * sizeof *ipiv);
+    dgetrf_(&N, &N, A, &N, ipiv, &info);   /* row-major read as A^T: same det */
+    if (info > 0) { *out = 0.0; free(ipiv); return 0; }
+    double det = 1.0;
+    for (uint32_t k = 0; k < n; k++) {
+        det *= A[(size_t)k * n + k];
+        if (ipiv[k] != (int)k + 1) det = -det;
+    }
+    free(ipiv);
+    *out = det;
+    return 0;
+}
+
 static int ob_det(Cplx *A, uint32_t n, Cplx *out)
 {
     if (n == 0) { *out = (Cplx){ 1, 0 }; return 0; }
@@ -175,6 +221,8 @@ static int ob_chol(const Cplx *A, uint32_t n, Cplx *L)
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
+    .solve_d  = ob_solve_d,
+    .det_d    = ob_det_d,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,

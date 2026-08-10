@@ -653,6 +653,25 @@ static Value mldivide(Interp *I, Value A, Value B)
         runtime_error(I, "left division dimensions disagree: %ux%u \\ %ux%u",
                       a->rows, a->cols, b->rows, b->cols);
 
+    bool real_fast = a->elt != ELT_COMPLEX && b->elt != ELT_COMPLEX
+                     && cozy_linalg()->solve_d;
+    if (real_fast) {
+        /* real data on real routines (entry 10): dgesv-class arithmetic is
+         * both faster and exactly real — no imaginary residue exists to snap */
+        double *LUd = malloc((size_t)n * n * sizeof *LUd);
+        double *Xd  = malloc((size_t)n * m * sizeof *Xd);
+        if ((!LUd && n) || (!Xd && n && m)) abort();
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < n; j++) LUd[(size_t)i*n+j] = as_double(arr_get(a, (size_t)i*n+j));
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < m; j++) Xd[(size_t)i*m+j]  = as_double(arr_get(b, (size_t)i*m+j));
+        if (cozy_linalg()->solve_d(LUd, Xd, n, m) != 0)
+            { free(LUd); free(Xd); runtime_error(I, "left division: matrix is singular"); }
+        Value outd = val_array(ELT_FLOAT, n, m);
+        memcpy(as_arr(outd)->data, Xd, (size_t)n * m * sizeof(double));
+        free(LUd); free(Xd);
+        return outd;
+    }
     Cplx *LU = malloc((size_t)n * n * sizeof *LU);
     Cplx *X  = malloc((size_t)n * m * sizeof *X);
     if ((!LU && n) || (!X && n && m)) abort();
@@ -4664,6 +4683,14 @@ static Value bi_det(Interp *I, Value *args, uint32_t n)
         runtime_error(I, "det on dual matrices is not supported — dualval(A) for the value part");
     bool real_in = a->elt != ELT_COMPLEX;
     if (N == 0) return val_int(1);
+    if (real_in && cozy_linalg()->det_d) {          /* entry 10: real dgetrf path */
+        double *Md = malloc((size_t)N * N * sizeof *Md);
+        for (size_t k = 0; k < (size_t)N * N; k++) Md[k] = as_double(arr_get(a, k));
+        double dd;
+        cozy_linalg()->det_d(Md, N, &dd);
+        free(Md);
+        return val_float(dd);
+    }
     Cplx *M = malloc((size_t)N * N * sizeof *M);
     for (size_t k = 0; k < (size_t)N * N; k++) M[k] = as_cplx(arr_get(a, k));
     Cplx det;
