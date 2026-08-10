@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.0.26 — the error that teaches the load line
+
+### Added
+- **Undefined-name errors now teach package loads**, born from a real
+  friction transcript: the owner typed minimize into a fresh session
+  and got a bare "undefined name". The error now reads: undefined name
+  'minimize' — it lives in packages/optim.cz; load("packages/optim.cz")
+  first. The name -> package table (pkg_hints.h, 174 names) is
+  GENERATED from packages/*.cz by tools/gen_pkg_hints.py with --check
+  wired into make test, so it can never go stale — the generator
+  pattern, twelfth application. Unknown names that match no package
+  stay a plain error. Three goldens pin the shapes.
+
 ## 0.0.25 — Greek at last: UTF-8 identifiers
 
 ### Added
