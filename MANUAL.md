@@ -732,7 +732,17 @@ cozy> fields({} |> setfield(@, "lo", 1) |> setfield(@, "hi", 2))
 
 `load("file.cz")` runs a file in the current session; its `let` bindings
 persist afterwards. A package is just a file of definitions — and a record
-of closures makes a namespace, so packages don't collide:
+of closures makes a namespace, so packages don't collide. Namespaces need
+no new machinery: `fields(r)` is the manifest, `getfield(r, name)` the
+dynamic door, and sibling fields may call each other through the record's
+own global name (`stats.z` calling `stats.se` works, because functions
+resolve globals at call time). The same late binding is the one law worth
+memorizing: **a record namespace hides the face, never the body** — a
+field's body still resolves its helpers as globals at call time, so
+`keep()` of the record alone strands every call on `undefined name`. The
+standard packages therefore tag-prefix their helpers (`op_`, `ad_`,
+`sl_`); the full authoring convention is in the packages guide under
+"Writing your own". Example:
 
 ```
 cozy> load("tests/data/mathlib.cz")

@@ -1,5 +1,21 @@
 # Cozy changelog
 
+## 0.0.27 — namespaces, taught where readers read
+
+### Changed
+- **The manual's namespace story grows from one sentence to the whole
+  law** (owner's audit: "sufficiently described?" — honestly, no): the
+  load section now covers the manifest (fields), the dynamic door
+  (getfield), sibling calls through the record's own global name, and
+  the law — a record namespace hides the face, never the body — with a
+  pointer to the authoring convention in the packages guide.
+- **BOOK gains Problem 9.9**, "A namespace is a record that grew up":
+  the pattern demonstrated in four verified transcript lines, and the
+  keep() trap staged deliberately in prose (the book harness pins
+  stdout, so the error is narrated rather than transcribed) with the
+  discussion explaining why it fires and how the tag-prefix convention
+  defends against it.
+
 ## 0.0.26 — the error that teaches the load line
 
 ### Added

@@ -720,6 +720,36 @@ the fan-out doesn't care who wrote its entries.
 
 ---
 
+**Problem 9.9 — A namespace is a record that grew up.** Pack an API into
+a record and three things come free: a manifest, dynamic access, and
+sibling calls. A fourth thing comes due — the law at the end.
+
+```
+cozy> let stats = {se = fn v -> sqrt(v / 100), z = fn m -> m / stats.se(4.0)}
+{se = <fn/1>, z = <fn/1>}
+cozy> stats.z(0.5)
+2.5
+cozy> getfield(stats, "z")(0.5)
+2.5
+cozy> fields(stats)'
+["se", "z"]
+```
+
+Now the fourth thing. Try `let m = stats; keep("m"); m.z(0.5)` — it dies
+with `undefined name 'stats'`.
+
+**Discussion.** `stats.z` calls `stats.se` through the record's own
+global name — legal because functions resolve globals at *call* time,
+by which point `stats` exists. `getfield` computes the field name at
+runtime; `fields` lists the API. The failing line is the lesson, staged
+deliberately: copying the record to `m` and `keep`ing only `m` looks
+like encapsulation, but `z`'s body still says `stats.se`, resolved at
+call time — and `keep` deleted `stats`. A record namespace hides the
+face, never the body: helpers must survive in the workspace, which is
+why every standard package tag-prefixes its internals (`op_`, `ad_`,
+`sl_`) so one glob spares them. The full authoring convention lives in
+the packages guide.
+
 ## 10. Calculus
 
 ![Calculus](vignettes/cozy_10_calculus.png)
