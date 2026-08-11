@@ -1,5 +1,421 @@
 # Cozy changelog
 
+## 0.0.43 — clang reads what gcc forgives
+
+### Fixed
+- **An uninitialized-bool load flagged by UBSan on the owner's Mac**
+  (clang instruments what gcc folds away): two indexing paths declared
+  bool rs, cs and the one-index branch silenced the unused cs with
+  (void)cs — which is still an lvalue-to-rvalue LOAD of an
+  indeterminate bool, and Darwin's clang found the 143 sitting there.
+  Both declaration sites now initialize; behavior unchanged on every
+  correct path. Second lesson from the same deploy: the Mac toolchain
+  is an adversarial reviewer this Linux/gcc container cannot imitate —
+  the owner's make test-asan under Apple clang is a lattice layer of
+  its own.
+
+## 0.0.42 — the Mac deploy unbroken
+
+### Fixed
+- **serve.c failed to compile on macOS** (owner's deploy transcript):
+  strict _POSIX_C_SOURCE makes Darwin headers hide BSD-heritage
+  symbols, and INADDR_LOOPBACK is one — glibc leaks it through, Apple
+  does not, and the Linux container cannot catch what only a Mac
+  header set refuses. Guarded fallback define (the loopback address is
+  eternal); no behavior change anywhere. Trap recorded in PLAYBOOK:
+  each new platform is an adversarial reviewer, and strict-POSIX on
+  Darwin is a known interrogation technique.
+
+## 0.0.41 — one banner, one truth
+
+### Fixed
+- **The workbench banner's version line now states the computing
+  engine, not the booting module** (owner's third catch, and the right
+  ruling: rewriting beats appending). When the native server is
+  detected, the page rewrites "0.0.41 (wasm, built ...)" IN PLACE to
+  "0.0.41 · openblas backend · native engine" in the warm accent, and
+  the "packages are preloaded" line becomes the mode-neutral truth.
+  On GitHub Pages / file:// nothing rewrites and the wasm line stands
+  correctly. The two appended clarification lines from 0.0.39/0.0.40
+  are gone — the banner itself is now honest.
+
+## 0.0.40 — the engine line lands where eyes land
+
+### Fixed
+- **The native-engine announcement printed before the wasm banner** and
+  was buried above the splash (owner's second catch: timings proved
+  native OpenBLAS was computing while the visible banner still said
+  wasm). Native detection resolves in milliseconds; the wasm module
+  boots slower and writes its banner afterward. The announcement now
+  waits for the terminal to boot, so it lands directly BELOW the
+  splash in the warm accent — plus one honest clarification for native
+  mode: packages are not preloaded there; the Packages tab or load(...)
+  brings them in.
+
+## 0.0.39 — the workbench names its engine
+
+### Fixed
+- **The workbench terminal claimed "(wasm)" while evals ran natively**
+  (owner's catch): the banner belongs to the wasm module that boots the
+  page, and the native-detection line neither named the backend nor
+  stood out. /native-ping now reports "cozy <version> <backend>", and
+  on detection the page prints, in the banner's warm accent: "native
+  engine: v0.0.39 · openblas backend — evals run in the local cozy
+  process, not wasm", plus an immediate workspace refresh. The wasm
+  banner above it remains truthful about what booted the page; the
+  engine line states what computes.
+
+## 0.0.38 — entry 11: sessions stop hoarding their history
+
+### Fixed
+- **Session arena retention** (the stress suite's day-one catch, owner-
+  scheduled): sessions retained every line's parse arena and source
+  unconditionally — ~50 KB per eval, 110 MB peak over a 2000-eval
+  session. Two coordinated changes: the environment now OWNS its
+  binding names (copied at define, freed at all five drop sites), so a
+  plain let no longer pins its line; and the compiler flags lines whose
+  compiled output genuinely borrows source pointers — lambdas (via
+  chunk->src), record literals, and the fan-out desugar's record
+  emission (non-owning keys, a site the AST-level flag missed and the
+  BOOK's verified transcripts caught) — with all four session hosts
+  (REPL, vmtest, wasm, the workbench server) retaining arena+src only
+  when flagged. Measured: 2000 closure-free evals now peak at 2.6 MB.
+  The stress suite's plateau bound flips from reporting to ENFORCING —
+  the acceptance criterion entry 11 wrote for itself.
+- The lattice earned this one twice over: the 0.0.28 session-block
+  goldens caught the env-name use-after-free within seconds of the
+  first attempt, and the book harness caught the fan-out gap.
+
+## 0.0.37 — real routines, phase 2: eig, svd, chol
+
+### Changed
+- **Symmetric eig, svd, and chol now run real LAPACK on real inputs**
+  (entry 10 phase 2, owner's schedule): dsyev/dgesvd/dpotrf behind new
+  eig_sym_d/svd_d/chol_d seam entries, tier0 carrying parity wrappers.
+  Design choice that keeps invariance cheap: the real kernels do the
+  O(n^3) work, then convert into the existing complex buffers, so every
+  downstream shaping step — eigenvalue sorting, the tolerance-aware
+  phase anchor, the singular-value snap, real demotion — remains
+  single-path. Measured under OpenBLAS at n=400, same binary: symmetric
+  eig 0.099s vs 0.342s complex (3.5x), svd 0.115s vs 0.356s (3.1x),
+  chol 3.6ms; reconstruction residuals at machine precision.
+- Real NONSYMMETRIC eig remains complex-funneled, recorded with its
+  trigger: dgeev's paired-column eigenvector format earns its
+  unpacking when a profiled hot path asks.
+
+## 0.0.36 — real data on real routines (entry 10, phase 1)
+
+### Changed
+- **Real matrices now dispatch to real LAPACK** (owner's ruling: "run
+  float on float/double matrices and complex algorithms on complex
+  matrices alone — not only faster, but more accurate"): the kernel
+  seam grows solve_d/det_d; OpenBLAS (and therefore Accelerate — same
+  source) calls dgesv/dgetrf when both operands are real, and tier0
+  carries parity wrappers. One funnel covers everything: \, /, inv,
+  det, and negative matrix powers all ride mldivide. Measured on
+  inv(700) under OpenBLAS, same binary, same matrix: 0.051s real path
+  vs 0.097s complex-typed — 1.9x, the predicted flop ratio — with the
+  result exactly real by construction (dgesv arithmetic has no
+  imaginary residue to snap; the accuracy half of the ruling).
+- Phase 2 recorded in the docket with triggers: dsyev/dgesvd/dpotrf
+  real paths; real nonsymmetric eig stays complex-funneled until
+  dgeev's paired-column format earns its unpacking.
+- Full stress battery green under both backends on the new path.
+- **One golden repaired for the right reason**: the poly table's worked
+  example fit y = x^2 + 1, whose middle coefficient is analytically
+  ZERO — the table was pinning ulp noise (complex funnel -8.3e-16,
+  dgesv 6.1e-16), fragile under any backend change. The example now
+  fits x^2 + x + 1: every coefficient O(1), printing-stable, verified
+  byte-identical under tier0 and OpenBLAS. Goldens define the
+  language; a golden pinning noise defines nothing.
+
+## 0.0.35 — the workout: a stress tier above the rite
+
+### Added
+- **make stress** (owner's request: "give this version a proper
+  workout"), heavier than make test and outside it, same law — the
+  verdict is the exit code. Four tiers: a randomized, seeded PROPERTY
+  BATTERY (inv/mldivide residuals, det·det(inv)=1, eig and svd
+  reconstruction, transpose laws, reduction identities, at eight random
+  sizes); a CALCULUS battery (dual derivatives and hyper-dual second
+  derivatives against finite differences at a dozen points; Newton
+  one-step on random PD quadratics against the analytic solution, BFGS
+  agreeing); SPARSE at equivalence sizes against dense and cg on a
+  3000-node system; and PARSER FUZZ under ASan — 400 seeded lines of
+  token soup that must produce clean errors, never sanitizer hits —
+  plus a 2000-eval long-session tier asserting peak RSS plateaus.
+  Green under tier0 and OpenBLAS.
+
+### Found by the new suite, on its first run
+- **Session arena retention** (docket entry 11, KNOWN_LIMITATIONS): the
+  long-session tier measured peak RSS climbing 8.6 -> 112.7 MB over
+  2000 closure-free evals — every line's parse arena is retained for
+  closure-source lifetime, unconditionally. The tier reports the growth
+  with an explicit in-code waiver and flips to enforcing when the fix
+  lands. A stress suite that finds a real retention cost on day one is
+  a stress suite earning its keep.
+
+### Design
+- Docket entry 10 opened, trigger already fired by the owner's
+  benchmark: the tier-1 complex funnel makes real inv() pay zgetrf/
+  zgetri prices versus Octave's dgetrf/dgetri — a real-typed fast path
+  is scheduled as the next backend session.
+
+## 0.0.34 — the packages pane grows up: checkboxes, one truth
+
+### Fixed
+- **The packages pane's load button never worked**: its click handler
+  called writeLine/scroll, which live inside the terminal IIFE — the
+  same scope boundary that bit the pane's first build — so every click
+  died on a silent ReferenceError. All pane wiring now goes through the
+  window.nuTerm bridge that exists precisely for code outside the IIFE.
+
+### Changed
+- **Load buttons are now checkboxes whose state is DERIVED from the
+  workspace** (the owner's design, and the better one): after every
+  eval the pane re-reads who and ticks exactly the packages whose load
+  groups exist — so a load("...") typed at the prompt ticks the box,
+  and the box never lies. Ticking loads; unticking unloads via the
+  group-aware clear("pkg") (verified: clears the package's names,
+  leaves everything else, and the teaching hint returns for its names).
+  A failed toggle reverts the box and prints the error. Simulated
+  end-to-end under jsdom: load issued, state follows who both ways.
+
+## 0.0.33 — the banner names its backend
+
+### Changed
+- **The splash's version line now includes the linalg backend** (e.g.
+  "v0.0.33 · tier0 backend · built ..."), born from a real friction
+  transcript: the owner benchmarked a plain `make` build on the X1 and
+  read 2.6s inversions as breakage — it was tier0, the zero-dependency
+  default, doing exactly what it does. The single fact that determines
+  whether a session is fast is now on screen at startup; `make
+  BACKEND=openblas` (or accelerate) remains the explicit opt-in, per
+  the portability-first default.
+
+## 0.0.32 — the workbench: RStudio ergonomics, Cozy engines
+
+### Added
+- **cozy --workbench [port]** (design entry 9, owner's ruling): a tiny
+  localhost HTTP server — POSIX sockets, ~180 lines, zero dependencies,
+  127.0.0.1 only by hard scope — serving the playground page and
+  answering POST /eval through the NATIVE interpreter: Accelerate or
+  OpenBLAS speed, real filesystem, persistent workspace. Verified over
+  curl: stateful evals, package loads, and plot_N.svg landing for the
+  plot pane (the server sets COZY_PLOT_TERM=svg).
+- **The page grew panes**: Workspace (live who, refreshed after every
+  eval) and Packages (the twelve packages with one-click loads) join
+  Plots/Editor/Docs; eval routing is dual-engine — the page detects the
+  local native server and says so in the terminal, and the embedded
+  wasm engine remains the zero-install fallback for GitHub Pages and
+  file://. Native plots arrive by polling GET /plots. The browser is
+  the rendering surface; the compute engine is whichever is best
+  available.
+- tests/run_page.js extended for the async routing; both phases green.
+  docs/README.md documents the workbench and its scope fence.
+
+## 0.0.31 — quotation goes total
+
+### Changed
+- **ast(f) now quotes the whole grammar** — the v1 residue trigger
+  fired on its first real encounter (the owner quoted op_dot, whose
+  body uses .*): elementwise operators (emul/ediv/epow/eldiv), \ as
+  ldiv, comparisons, and/or/not, all three pipes, calls of any arity
+  ({op="call", f, argc, a1..aN} — single-argument named calls keep
+  symb's {op=name, l} shape), indexing, field access, ranges, matrix
+  literals (row/matrix lists), both transposes, if with and without
+  else, let (and let..in), assignment, blocks, while/for/break/
+  continue/return, nested fn (recursive, with its own params row), and
+  non-constant exponents ({op="pow", l, r}; constants keep symb's n).
+  Package bodies quote whole: ast(op_bt).body.op is "block".
+  The validator remains as the seam for future node kinds. Nine new
+  goldens; the symb integration golden unchanged.
+
+## 0.0.30 — ast(f): the founding capability list, completed
+
+### Added
+- **ast(f) quotation** (design entry 4b, the last unbuilt item on the
+  charter's capability list, by owner's schedule): a closure's body as
+  a symb.cz-style record tree — {op = "add"/"sub"/"mul"/"div", l, r},
+  {op = "pow", l, n} with symb's numeric exponent, {op = "const", v},
+  {op = "var", name}, single-argument calls as {op = <name>, l}, unary
+  minus as multiplication by -1 for symb compatibility; params exposed
+  as a string row. Implementation reparses the closure's RETAINED
+  SOURCE (the same store body() prints), so no AST lifetime machinery
+  was needed. v1 scope is the symb expression subset; if/loops/
+  indexing/multi-arg calls/non-constant exponents gate with teaching
+  errors, residue trigger written.
+- **The chartered payoff is a golden**: show(simp(ddx(ast(fn x -> x^2 +
+  sin(x)).body))) == "((2 * x) + cos(x))" — symbolic differentiation
+  of what you typed, symb.cz unmodified. tests/63_ast.test: 11 goldens.
+
+With this, every capability on the founding list is shipped: sparse,
+external LAPACK (three backends), optimization (constrained, Newton),
+and first-class differentiation — duals, hyper-duals, and quotation.
+
+## 0.0.29 — the doc table moves to a data file
+
+### Changed
+- **The 174-row builtin doc table now lives in doc/builtins.tsv** (the
+  charter's second fix-from-day-one debt): plain tab-separated text —
+  name, signature, description, category, help examples — with
+  tools/gen_doc_table.py as THE one escaper producing doc_table.inc,
+  which eval.c #includes. The escaping bug class the charter named is
+  dead: nobody hand-writes C string literals for documentation again.
+- **All readers read the one source**: gen_reference and gen_emacs_mode
+  now parse the TSV instead of regexing eval.c — their --check passes
+  byte-identically, closing the two-parsers-one-truth lesson for good
+  — and gen_doc_table's own --check joins the lattice, so a TSV edit
+  without regeneration refuses the suite. help() output is unchanged
+  to the byte.
+
+## 0.0.28 — session-block goldens: the charter's oldest debt, paid
+
+### Added
+- **Golden session blocks**: an input line beginning with '.. ' chains
+  onto the previous case's session — lets, loads, ans, indexed
+  assignment, and the seeded rng carry across the chain, so stateful
+  behavior is finally golden-testable instead of hiding in the manual
+  harness. The runner replays each chain's prefix into one vmtest
+  process (vmtest already held one Interp across stdin — the
+  fresh-session constraint lived in run.sh all along); every case still
+  reports independently, error cases work mid-chain (the current line
+  must add no stdout and its message must appear on stderr), and flat
+  cases run byte-identically to before. tests/62_sessions.test
+  demonstrates ten chained shapes. This was the first item on the
+  charter's fix-from-day-one list.
+
+## 0.0.27 — namespaces, taught where readers read
+
+### Changed
+- **The manual's namespace story grows from one sentence to the whole
+  law** (owner's audit: "sufficiently described?" — honestly, no): the
+  load section now covers the manifest (fields), the dynamic door
+  (getfield), sibling calls through the record's own global name, and
+  the law — a record namespace hides the face, never the body — with a
+  pointer to the authoring convention in the packages guide.
+- **BOOK gains Problem 9.9**, "A namespace is a record that grew up":
+  the pattern demonstrated in four verified transcript lines, and the
+  keep() trap staged deliberately in prose (the book harness pins
+  stdout, so the error is narrated rather than transcribed) with the
+  discussion explaining why it fires and how the tag-prefix convention
+  defends against it.
+
+## 0.0.26 — the error that teaches the load line
+
+### Added
+- **Undefined-name errors now teach package loads**, born from a real
+  friction transcript: the owner typed minimize into a fresh session
+  and got a bare "undefined name". The error now reads: undefined name
+  'minimize' — it lives in packages/optim.cz; load("packages/optim.cz")
+  first. The name -> package table (pkg_hints.h, 174 names) is
+  GENERATED from packages/*.cz by tools/gen_pkg_hints.py with --check
+  wired into make test, so it can never go stale — the generator
+  pattern, twelfth application. Unknown names that match no package
+  stay a plain error. Three goldens pin the shapes.
+
+## 0.0.25 — Greek at last: UTF-8 identifiers
+
+### Added
+- **UTF-8 identifiers**, asked by the owner: any byte with the high bit
+  set is an identifier character (start or continue), so α, β, θ, σ, λ,
+  ℓ, π_hat, Δ — the whole econometrics alphabet — are ordinary names in
+  variables, functions, parameters, and record fields. Two lines in the
+  lexer, zero Unicode tables, and purely additive by construction:
+  every such program was "unexpected character" before, so no legal
+  program changes meaning. Names compare by BYTES (normalization is the
+  user's concern — documented); keywords stay ASCII. Known cosmetic:
+  who's column padding counts bytes, so multibyte names sit slightly
+  off-grid. tests/61_unicode_idents.test pins six shapes including a
+  Greek-named objective handed to minimize.
+
+## 0.0.24 — hyper-duals: exact Hessians and true Newton
+
+### Added
+- **VAL_HDUAL + ELT_HDUAL** (entry 4a's Hessian increment, the owner's
+  schedule): hyper-duals a + b*eps1 + c*eps2 + d*eps1eps2 as a fifth
+  numeric rank and a dense element type — a fixed four-double immediate,
+  the same architectural pattern that made dual land cleanly (the
+  jet-the-Hessian-needs, not the general jet). One chain-rule helper
+  (hd_chain with f, f', f'') serves every unary kernel; the macro
+  families each gained a second-derivative expression. sizeof(Value)
+  grows 32 -> 40; the setjmp-copy assert's bound moves with a recorded
+  rationale (boxing would put refcount churn in every arithmetic op).
+- **Builtins** hdual(x, s1, s2[, s12]) (elementwise with scalar
+  broadcast — hdual(x, e_i, e_j) seeds two directions at once),
+  hdualval, hdual12 — accessors total on plain numbers.
+- **hess(f)** in autodiff.cz: the exact Hessian, one pass per index
+  pair, symmetry filled. **minimize_newton / maximize_newton** in
+  optim.cz: true Newton on exact derivatives with Levenberg damping;
+  on a positive-definite quadratic the first step lands on the minimum
+  — golden-pinned at iters == 1, the method's signature. Rosenbrock:
+  21 iterations to the exact [1; 1].
+- tests/60_hessian.test: 22 goldens, equalities throughout.
+
+### Promotion law (extended, gated everywhere)
+- int/float lift into hyper-dual; **hyper-dual mixes with neither
+  complex nor dual** (seeding both directions is what hdual's two
+  slots are for) — arithmetic, comparisons, literals, index-assign,
+  sparse, and every linalg/norm/binary-kernel gate extended.
+- gamma/lgamma refuse hyper-duals: their second derivative needs
+  trigamma, not implemented — recorded docket residue with trigger.
+
+## 0.0.23 — entry 7 reviewed; the rite gains a lint
+
+### Design (entry 7: namespaces — the last unreviewed docket item)
+- **Review conducted by execution, every claim re-verified in Cozy**:
+  sibling recursion through a record's own global name works (late
+  binding); getfield is the dynamic door (landed 0.0.6, satisfying the
+  entry's one open condition); who's load groups arrived intact from
+  upstream 2.28 (packages/optim.cz 11 names — clutter solved
+  orthogonally, as the baton predicted); and the pack-then-prune trap
+  reproduced verbatim — keep() of a record of optimizer faces killed
+  the first call on the helpers the record hid. The design stands:
+  records are the module system, no new kind.
+- **Ruling recorded** (same logic as the entry's own anti-decision):
+  the three instrument packages — autodiff, optim, sparselin — are
+  grandfathered flat. Short daily-typed faces (d, grad, minimize, cg)
+  are the feature; helpers are already tag-prefixed (ad_, op_, sl_).
+  Record namespaces are the recommendation for future large-API
+  packages.
+- **The namespace law is now written where authors read**: PACKAGES.md
+  "Writing your own" carries the pattern, the late-binding law, the
+  helper-prefix convention, and the trap — "a record namespace hides
+  the face, never the body." (The section also no longer claims the
+  language has four packages.)
+
+### Added
+- **Release lint** (charter fix-from-day-one debt, paid):
+  tools/check_release.py refuses the suite when CHANGELOG.md lacks an
+  entry for version.h's version — wired into make test, python-only so
+  it can never be environment-gated into a dead guard, and verified to
+  FIRE before being trusted (run against the stale state first, per
+  the 0.0.17 lesson).
+
+## 0.0.22 — the owner's vignettes
+
+### Changed
+- **BOOK.md carries the owner's new vignette set**: a title-page plate
+  and twenty chapter/appendix illustrations (chapters 1-14, appendices
+  A-F), replacing the vin*.png placeholders; references carry alt text;
+  the 14th file's "ifiom" typo corrected to "idiom" on import; PNGs
+  losslessly optimized (34.3 -> 28.7 MB). Chapter 15 and Appendix G
+  have no plates yet — flagged for the owner. Tarball and BOOK.pdf grow
+  accordingly (~30 MB each; the art is the payload).
+- **BOOK.pdf now genuinely embeds the art** (--resource-path resolves
+  vignettes/ under docs/), verified by pdfimages: 21 images.
+- **make pdfs**: all three books from one target, exit codes bare.
+
+### Fixed, and owned
+- **The 0.0.18 "PDFs rebuilt" claim was false**: lmodern.sty had been
+  removed as collateral of the emscripten apt work, pandoc failed on
+  every run — silently, behind > /dev/null — and releases 0.0.18-0.0.21
+  shipped the Aug-8 Neutrino-era PDFs under a changelog saying
+  otherwise. Caught at 0.0.22 by mtime; lmodern restored; all three
+  PDFs truly rebuilt and image-verified. Ledgered in LESSONS.md as a
+  second, self-inflicted occurrence of the grep-that-hid-the-verdict
+  class, with the audit habit recorded: after "regenerated X", stat X.
+
 ## 0.0.21 — one word, warmly: the nancyj splash
 
 ### Changed

@@ -1,0 +1,17 @@
+% sparse_scale.cz — CSR against dense at equivalence sizes, then at scale.
+load("packages/sparselin.cz")
+for trial = 1:5 do
+  let n = 30 * trial;
+  let D = pick(rand(n) < 0.1, rand(n), zeros(n, n));
+  let S = sparse(D);
+  assert(max(abs(dense(S + S) - (D + D))) == 0, "sp add");
+  assert(max(abs(dense(S * 2.5) - D * 2.5)) == 0, "sp scale");
+  let v = randn(n, 1);
+  assert(max(abs(S * v - D * v)) < 1e-10, "sp matvec")
+end
+let n = 3000; let i = [1:n, 1:n-1, 2:n]; let j = [1:n, 2:n, 1:n-1];
+let L = sparse(i, j, [2 * ones(1, n) + 0.01 * (1:n), -ones(1, n-1), -ones(1, n-1)], n, n);
+assert(nnz(L) == 3 * n - 2, "big nnz");
+let s = cg(L, ones(n, 1));
+assert(s.relres < 1e-9, "cg at scale");
+print("sparse: all green")

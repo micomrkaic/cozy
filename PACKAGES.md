@@ -115,7 +115,7 @@ cozy> conv([1, -1], [1, -2])
 | `polyval(c, x)` | `polyval([2, -3, 1], 4)` | `21` |
 | `roots(c)` | `sort(real(roots([1, -6, 11, -6])))'` | `[1.00000, 2.00000, 3.00000]` |
 | `companion(c)` | `companion([1, 0, -4])` | `[0.00000, 4.00000; 1.00000, 0.00000]` |
-| `polyfit(x, y, n)` | `polyfit([1, 2, 3], [2, 5, 10], 2)` | `[1.00000, -8.32667e-16, 1.00000]` |
+| `polyfit(x, y, n)` | `polyfit([1, 2, 3], [3, 7, 13], 2)` | `[1.00000, 1.00000, 1.00000]` |
 | `polyder(c)` | `polyder([1, -6, 11, -6])` | `[3, -12, 11]` |
 | `polyint(c, k)` | `polyint([3, -12, 11], -6)` | `[1.00000, -6.00000, 11.0000, -6.00000]` |
 | `conv(a, b)` | `conv([1, -1], [1, -2])` | `[1.00000, -3.00000, 2.00000]` |
@@ -555,6 +555,15 @@ cozy> grad(rosen)([0.0; 0.0])
 [-2; 0]
 ```
 
+`hess(f)` returns the exact Hessian, one hyper-dual pass per index pair
+with symmetry filled in:
+
+```
+cozy> load("packages/autodiff.cz")
+cozy> hess(fn x -> x[1] * x[2]^2)([2.0; 3.0])
+[0, 6; 6, 4]
+```
+
 **Discussion.** The Rosenbrock gradient vanishing at `[1; 1]` is the
 textbook minimum, found here without a single hand-written derivative.
 `grad` seeds one coordinate direction per pass with `dual(x, e_i)`, and
@@ -584,6 +593,17 @@ cozy> maximize_con(cd, [1.0; 1.0], {eq = bud}).x
 [1.8; 2.8]
 ```
 
+`minimize_newton` / `maximize_newton(f, x0)` run true Newton on the
+exact gradient and Hessian, with Levenberg damping when the Hessian is
+indefinite. On a positive-definite quadratic the first step lands on the
+minimum:
+
+```
+cozy> load("packages/optim.cz")
+cozy> minimize_newton(fn x -> sum(x .* ([3.0, 1.0; 1.0, 2.0] * x)) - sum([1.0; 1.0] .* x), [9.0; -7.0]).iters
+1
+```
+
 **Discussion.** The last transcript is a Cobb-Douglas utility maximum
 on a budget line — the constrained maximization the design was scoped
 around — and `[1.8; 2.8]` is the analytic answer `(a m / p, b m / q)`
@@ -593,8 +613,24 @@ and all, because `max` on duals takes the one-sided derivative.
 
 ## Writing your own
 
-The pattern all four follow: a file of `let` definitions, `assert`-validated
-inputs, a record of closures when a namespace helps, and a golden test file
-whose reference values come from an independent implementation. Multi-line
-definitions are fine wherever a bracket is open. `save` your workspace, `load`
-it tomorrow — a package is just a workspace you chose to keep.
+The pattern the twelve packages follow: a file of `let` definitions,
+`assert`-validated inputs, and a golden test file whose reference values
+come from an independent implementation. Multi-line definitions are fine
+wherever a bracket is open. `save` your workspace, `load` it tomorrow — a
+package is just a workspace you chose to keep.
+
+**The namespace law** (design entry 7 — records are the module system).
+A package that wants a namespace packs its public API into a record:
+`{cdf = fn ..., pdf = fn ...}` — `fields(pkg)` is then the manifest and
+`getfield(pkg, name)` the dynamic door, and sibling fields may call each
+other through the record's own global name (functions resolve globals at
+CALL time, so `p.isod` inside `p.isev` works). The same late binding is
+also the one trap: **a record namespace hides the face, never the body.**
+Helpers that your public functions call remain ordinary globals forever —
+pack the faces into a record, `keep()` the record alone, and every call
+dies with "undefined name". So: prefix internal helpers with the package's
+tag (`op_`, `sl_`, `ad_`), document that `keep()` must spare them, and
+never expect the record to encapsulate. Small instrument packages with a
+handful of daily-typed faces (`minimize`, `d`, `grad`, `cg`) stay flat by
+deliberate choice — brevity is the feature — with prefixed helpers; a
+large API is where the record namespace earns its keep.

@@ -10,7 +10,12 @@ static inline bool is_digit(char c) { return c >= '0' && c <= '9'; }
 static inline bool is_hex(char c)   { char l = c | 0x20; return is_digit(c) || (l >= 'a' && l <= 'f'); }
 static inline bool is_bin(char c)   { return c == '0' || c == '1'; }
 static inline bool is_alpha(char c) { return (c|0x20) >= 'a' && (c|0x20) <= 'z'; }
-static inline bool is_ident0(char c){ return is_alpha(c) || c == '_'; }
+/* UTF-8 identifiers, byte-wise: any byte with the high bit set is an
+ * identifier character, start or continue — so Greek (and anything else)
+ * works with no Unicode tables. Identifiers compare by BYTES: two visually
+ * identical names in different normalizations are different names. Purely
+ * additive: every such program was a lex error before 0.0.25. */
+static inline bool is_ident0(char c){ return is_alpha(c) || c == '_' || (unsigned char)c >= 0x80; }
 static inline bool is_identc(char c){ return is_ident0(c) || is_digit(c); }
 
 /* A '  is a transpose operator (not an opening quote) iff the previous

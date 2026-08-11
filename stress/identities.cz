@@ -1,0 +1,26 @@
+% identities.cz — the randomized property battery (seeded: reproducible).
+% Every law the language claims, checked at random sizes with assert().
+let tol = 1e-8
+let check = fn name, ok -> (assert(ok, name); 0)
+for trial = 1:8 do
+  let n = 20 + trial * 15;
+  let A = rand(n) + eye(n) * n;
+  check("inv", max(abs(A * inv(A) - eye(n))) < tol);
+  let b = rand(n, 1);
+  check("mldivide", max(abs(A * (A \ b) - b)) < tol);
+  check("det/inv", abs(det(A) * det(inv(A)) - 1) < 1e-4);
+  let S = A + A';
+  let e = eig(S);
+  check("eig-recon", max(abs(S * e.vectors - e.vectors * diag(e.values))) < 1e-6);
+  let sv = svd(rand(n, n - 5));
+  check("svd-desc", all(sv.S[1:end-1] >= sv.S[2:end]));
+  check("transpose", max(abs((A * A')' - A * A')) < tol)
+end
+for trial = 1:6 do
+  let m = 50 * trial;
+  let v = randn(m, 1);
+  check("mean/sum", abs(mean(v) - sum(v) / m) < tol);
+  check("sort", all(diff(sort(v)) >= 0));
+  check("cumsum", abs(cumsum(v)[end] - sum(v)) < tol)
+end
+print("identities: all green")

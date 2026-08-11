@@ -113,11 +113,12 @@ const char *cozy_eval(const char *line)
         fprintf(cap, "  parse error at %u:%u: %s\n", p.err_tok.line, p.err_tok.col, p.err_msg);
         arena_free(a); free(src);
     } else {
-        keep_push(&keep, a, src);
         Value r = vm_eval_program(&I, prog, globals, /*echo=*/true);
         if (I.had_error)
             fprintf(cap, "  error at %u:%u: %s\n", I.cur_line, I.cur_col, I.err);
         value_release(r);
+        if (I.line_borrows_src) keep_push(&keep, a, src);
+        else { arena_free(a); free(src); }
     }
     fclose(cap); g_cap = NULL; /* finalizes g_buf */
     value_set_out(NULL);

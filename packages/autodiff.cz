@@ -20,3 +20,20 @@ let ad_seed = fn x, i -> ( let z = 0.0 * x; z[i] = 1; z )
 let grad = fn f -> fn x -> (
   map(fn i -> dualeps(f(dual(x, ad_seed(x, i)))), (1:numel(x))')
 )
+
+# hess(f): the exact Hessian of f: R^n -> R. One hyper-dual pass per
+# (i, j) pair with i <= j — hdual(x, e_i, e_j) seeds both directions,
+# hdual12 reads d2f/dxi dxj, and symmetry fills the mirror. hdual12 is
+# total on plain numbers, so constant branches contribute exact zeros.
+let hess = fn f -> fn x -> (
+  let n = numel(x);
+  let H = zeros(n, n);
+  for i = 1:n do
+    for j = i:n do
+      let h = hdual12(f(hdual(x, ad_seed(x, i), ad_seed(x, j))));
+      H[i, j] = h;
+      H[j, i] = h
+    end
+  end;
+  H
+)

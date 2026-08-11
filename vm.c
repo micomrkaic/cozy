@@ -22,6 +22,7 @@
  * non-consuming runtime helper, and only on success pops them and pushes a result.
  */
 #include "vm.h"
+#include "pkg_hints.h"
 #include "chunk.h"
 #include "compile.h"
 #include "nrt.h"
@@ -200,7 +201,18 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             uint16_t k = RD_U16();
             Value out;
             if (!env_lookup(fr->env, ch_->names[k], ch_->namelens[k], &out))
-                runtime_error(I, "undefined name '%.*s'", (int)ch_->namelens[k], ch_->names[k]);
+                {
+                    /* teach the load line when the name is a known package
+                     * export (pkg_hints.h, generated from packages/) — born
+                     * from the owner typing minimize into a fresh session */
+                    const char *nm = ch_->names[k]; size_t nl = ch_->namelens[k];
+                    for (size_t hi = 0; hi < sizeof pkg_hints / sizeof *pkg_hints; hi++)
+                        if (strlen(pkg_hints[hi].name) == nl && memcmp(pkg_hints[hi].name, nm, nl) == 0)
+                            runtime_error(I, "undefined name '%.*s' — it lives in %s; "
+                                             "load(\"%s\") first", (int)nl, nm,
+                                          pkg_hints[hi].pkg, pkg_hints[hi].pkg);
+                    runtime_error(I, "undefined name '%.*s'", (int)nl, nm);
+                }
             PUSH(out);
             break;
         }
@@ -516,6 +528,7 @@ Value vm_eval_program(Interp *I, AstNode *block, EnvObj *globals, bool echo)
 {
     I->globals   = globals;
     I->had_error = false;
+    I->line_borrows_src = false;      /* compiler sets it; sessions consult it */
 
     AstNode  *single = block;
     AstNode **items  = &single;

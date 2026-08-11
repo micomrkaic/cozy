@@ -68,6 +68,52 @@ static int ob_solve(Cplx *A, Cplx *B, uint32_t n, uint32_t m)
     return info != 0;
 }
 
+extern void dgesv_(const int *n, const int *nrhs, double *a, const int *lda,
+                   int *ipiv, double *b, const int *ldb, int *info);
+extern void dgetrf_(const int *m, const int *n, double *a, const int *lda,
+                    int *ipiv, int *info);
+static double *to_cm_d(const double *A, uint32_t r, uint32_t c)
+{
+    double *o = malloc((size_t)r * c * sizeof *o);
+    if (!o && r && c) abort();
+    for (uint32_t i = 0; i < r; i++)
+        for (uint32_t j = 0; j < c; j++) o[(size_t)j*r+i] = A[(size_t)i*c+j];
+    return o;
+}
+static void from_cm_d(double *A, const double *cm, uint32_t r, uint32_t c)
+{
+    for (uint32_t i = 0; i < r; i++)
+        for (uint32_t j = 0; j < c; j++) A[(size_t)i*c+j] = cm[(size_t)j*r+i];
+}
+static int ob_solve_d(double *A, double *B, uint32_t n, uint32_t m)
+{
+    if (n == 0) return 0;
+    int N = (int)n, M = (int)m, info = 0;
+    double *a = to_cm_d(A, n, n);
+    double *b = to_cm_d(B, n, m);
+    int *ipiv = malloc((size_t)n * sizeof *ipiv);
+    dgesv_(&N, &M, a, &N, ipiv, b, &N, &info);
+    if (info == 0) from_cm_d(B, b, n, m);
+    free(a); free(b); free(ipiv);
+    return info != 0;
+}
+static int ob_det_d(double *A, uint32_t n, double *out)
+{
+    if (n == 0) { *out = 1.0; return 0; }
+    int N = (int)n, info = 0;
+    int *ipiv = malloc((size_t)n * sizeof *ipiv);
+    dgetrf_(&N, &N, A, &N, ipiv, &info);   /* row-major read as A^T: same det */
+    if (info > 0) { *out = 0.0; free(ipiv); return 0; }
+    double det = 1.0;
+    for (uint32_t k = 0; k < n; k++) {
+        det *= A[(size_t)k * n + k];
+        if (ipiv[k] != (int)k + 1) det = -det;
+    }
+    free(ipiv);
+    *out = det;
+    return 0;
+}
+
 static int ob_det(Cplx *A, uint32_t n, Cplx *out)
 {
     if (n == 0) { *out = (Cplx){ 1, 0 }; return 0; }
@@ -172,9 +218,70 @@ static int ob_chol(const Cplx *A, uint32_t n, Cplx *L)
 #ifndef COZY_LAPACK_NAME
 #define COZY_LAPACK_NAME "openblas"
 #endif
+extern void dsyev_(const char *jobz, const char *uplo, const int *n, double *a,
+                   const int *lda, double *w, double *work, const int *lwork, int *info);
+extern void dgesvd_(const char *jobu, const char *jobvt, const int *m, const int *n,
+                    double *a, const int *lda, double *s, double *u, const int *ldu,
+                    double *vt, const int *ldvt, double *work, const int *lwork, int *info);
+extern void dpotrf_(const char *uplo, const int *n, double *a, const int *lda, int *info);
+
+static int ob_eig_sym_d(double *A, uint32_t n, double *w, double *V)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, lwork = -1;
+    double *a = to_cm_d(A, n, n);
+    double wkq;
+    dsyev_("V", "L", &N, a, &N, w, &wkq, &lwork, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dsyev_("V", "L", &N, a, &N, w, work, &lwork, &info);
+    from_cm_d(V, a, n, n);
+    free(a); free(work);
+    return info != 0;
+}
+static int ob_svd_d(const double *A, uint32_t m, uint32_t n,
+                    double *U, double *s, double *V)
+{
+    if (m == 0 || n == 0) return 0;
+    int M = (int)m, N = (int)n, K = m < n ? (int)m : (int)n, info = 0, lwork = -1;
+    double *a = to_cm_d(A, m, n);
+    double *u = malloc((size_t)m * K * sizeof *u);
+    double *vt = malloc((size_t)K * n * sizeof *vt);
+    double wkq;
+    dgesvd_("S", "S", &M, &N, a, &M, s, u, &M, vt, &K, &wkq, &lwork, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dgesvd_("S", "S", &M, &N, a, &M, s, u, &M, vt, &K, work, &lwork, &info);
+    if (info == 0) {
+        from_cm_d(U, u, m, (uint32_t)K);
+        for (uint32_t i = 0; i < n; i++)                 /* V = VTᵀ, row-major n×K */
+            for (int j = 0; j < K; j++) V[(size_t)i*K + j] = vt[j + (size_t)K*i];
+    }
+    free(a); free(u); free(vt); free(work);
+    return info != 0;
+}
+static int ob_chol_d(const double *A, uint32_t n, double *L)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0;
+    double *a = to_cm_d(A, n, n);          /* symmetric: transpose immaterial */
+    dpotrf_("L", &N, a, &N, &info);
+    if (info == 0)
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < n; j++)
+                L[(size_t)i*n + j] = j <= i ? a[i + (size_t)j*n] : 0.0;
+    free(a);
+    return info != 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
+    .solve_d  = ob_solve_d,
+    .det_d    = ob_det_d,
+    .eig_sym_d = ob_eig_sym_d,
+    .svd_d    = ob_svd_d,
+    .chol_d   = ob_chol_d,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,

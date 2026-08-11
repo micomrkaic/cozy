@@ -145,3 +145,42 @@ let maximize_con = fn f, x0, cons -> (
   let r = minimize_con(fn x -> -f(x), x0, cons);
   {x = r.x, fx = f(r.x), iters = r.iters, converged = r.converged}
 )
+
+# minimize_newton(f, x0): true Newton on exact derivatives — grad from
+# dual numbers, hess from hyper-duals, the step from the linear solver.
+# Levenberg damping (H + lam*I) grows when the Newton direction is not
+# a descent direction, so indefinite Hessians fall back gracefully; on a
+# positive-definite quadratic the first step lands on the minimum.
+let minimize_newton = fn f, x0 -> (
+  let g = grad(f);
+  let Hf = hess(f);
+  let x = 1.0 * x0;
+  let n = numel(x);
+  let iters = 0;
+  let gx = g(x);
+  let converged = op_norm(gx) <= 1e-8 * (1 + abs(f(x)));
+  let lam = 0.0;
+  while !converged & (iters < 100) do
+    let p = -((Hf(x) + lam * eye(n)) \ gx);
+    let slope = op_dot(gx, p);
+    if slope >= 0 then (
+      lam = max(1e-4, 10 * lam);
+      p = -((Hf(x) + lam * eye(n)) \ gx);
+      slope = op_dot(gx, p)
+    ) end;
+    if slope >= 0 then (p = -gx; slope = op_dot(gx, p)) end;
+    let fx = f(x);
+    let t = op_bt(f, x, fx, slope, p);
+    x = x + t * p;
+    gx = g(x);
+    iters = iters + 1;
+    lam = lam / 4;
+    if op_norm(gx) <= 1e-8 * (1 + abs(f(x))) then (converged = true) end
+  end;
+  {x = x, fx = f(x), iters = iters, converged = converged}
+)
+
+let maximize_newton = fn f, x0 -> (
+  let r = minimize_newton(fn x -> -f(x), x0);
+  {x = r.x, fx = f(r.x), iters = r.iters, converged = r.converged}
+)

@@ -25,7 +25,7 @@ SPECS = {
     ("polyval(c, x)",    "polyval([2, -3, 1], 4)"),
     ("roots(c)",         "sort(real(roots([1, -6, 11, -6])))\x27"),
     ("companion(c)",     "companion([1, 0, -4])"),
-    ("polyfit(x, y, n)", "polyfit([1, 2, 3], [2, 5, 10], 2)"),
+    ("polyfit(x, y, n)", "polyfit([1, 2, 3], [3, 7, 13], 2)"),
     ("polyder(c)",       "polyder([1, -6, 11, -6])"),
     ("polyint(c, k)",    "polyint([3, -12, 11], -6)"),
     ("conv(a, b)",       "conv([1, -1], [1, -2])"),

@@ -365,9 +365,79 @@ static int t0_chol(const Cplx *A, uint32_t N, Cplx *L)
 
 /* ---- the table ---------------------------------------------------------- */
 
+static int t0_solve_d(double *A, double *B, uint32_t n, uint32_t m)
+{
+    Cplx *a = malloc((size_t)n * n * sizeof *a);
+    Cplx *b = malloc((size_t)n * m * sizeof *b);
+    if ((!a && n) || (!b && n && m)) abort();
+    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
+    for (size_t k = 0; k < (size_t)n * m; k++) b[k] = (Cplx){ B[k], 0 };
+    int rc = t0_solve(a, b, n, m);
+    if (rc == 0) for (size_t k = 0; k < (size_t)n * m; k++) B[k] = b[k].re;
+    free(a); free(b);
+    return rc;
+}
+static int t0_det_d(double *A, uint32_t n, double *out)
+{
+    Cplx *a = malloc((size_t)n * n * sizeof *a);
+    if (!a && n) abort();
+    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
+    Cplx d;
+    int rc = t0_det(a, n, &d);
+    free(a);
+    *out = d.re;
+    return rc;
+}
+
+static int t0_eig_sym_d(double *A, uint32_t n, double *w, double *V)
+{
+    size_t c = (size_t)n * n;
+    Cplx *a = calloc(c ? c : 1, sizeof *a), *v = calloc(c ? c : 1, sizeof *v);
+    if (!a || !v) abort();
+    for (size_t k = 0; k < c; k++) a[k] = (Cplx){ A[k], 0 };
+    int rc = t0_eig_herm(a, n, w, v);
+    if (rc == 0) for (size_t k = 0; k < c; k++) V[k] = v[k].re;
+    free(a); free(v);
+    return rc;
+}
+static int t0_svd_d(const double *A, uint32_t m, uint32_t n,
+                    double *U, double *s, double *V)
+{
+    uint32_t k = m < n ? m : n;
+    size_t ca = (size_t)m * n, cu = (size_t)m * k, cv = (size_t)n * k;
+    Cplx *a = calloc(ca ? ca : 1, sizeof *a);
+    Cplx *u = malloc((cu ? cu : 1) * sizeof *u);
+    Cplx *v = malloc((cv ? cv : 1) * sizeof *v);
+    if (!a || !u || !v) abort();
+    for (size_t q = 0; q < ca; q++) a[q] = (Cplx){ A[q], 0 };
+    int rc = t0_svd(a, m, n, u, s, v);
+    if (rc == 0) {
+        for (size_t q = 0; q < cu; q++) U[q] = u[q].re;
+        for (size_t q = 0; q < cv; q++) V[q] = v[q].re;
+    }
+    free(a); free(u); free(v);
+    return rc;
+}
+static int t0_chol_d(const double *A, uint32_t n, double *L)
+{
+    size_t c = (size_t)n * n;
+    Cplx *a = calloc(c ? c : 1, sizeof *a), *l = calloc(c ? c : 1, sizeof *l);
+    if (!a || !l) abort();
+    for (size_t k = 0; k < c; k++) a[k] = (Cplx){ A[k], 0 };
+    int rc = t0_chol(a, n, l);
+    if (rc == 0) for (size_t k = 0; k < c; k++) L[k] = l[k].re;
+    free(a); free(l);
+    return rc;
+}
+
 static const LinalgKernels tier0 = {
     .name     = "tier0",
     .solve    = t0_solve,
+    .solve_d  = t0_solve_d,
+    .det_d    = t0_det_d,
+    .eig_sym_d = t0_eig_sym_d,
+    .svd_d    = t0_svd_d,
+    .chol_d   = t0_chol_d,
     .det      = t0_det,
     .eig_herm = t0_eig_herm,
     .eig_gen  = t0_eig_gen,

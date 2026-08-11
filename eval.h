@@ -18,6 +18,11 @@ typedef struct Interp {
     bool     had_error;
     EnvObj  *globals;             /* current global frame (for who/help introspection) */
     uint64_t rng_s[4];            /* xoshiro256** state (never all-zero) */
+    bool     line_borrows_src;    /* set by the compiler when the compiled line
+                                     creates values pointing into its source or
+                                     arena (closures via chunk->src, record
+                                     literals via non-owning keys): the session
+                                     retains arena+src iff so (entry 11) */
 } Interp;
 
 void    interp_init(Interp *I);

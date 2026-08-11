@@ -178,6 +178,12 @@ scripts clobber it as a side effect.
 
 ## 3. Values and types
 
+**Identifiers** are `[A-Za-z_]` plus any UTF-8 byte above ASCII, then
+digits too — so Greek reads naturally: `let α = 0.05`, `let θ = [1; 2]`,
+`{μ = 1, σ = 2}.σ`, `minimize(ℓ, θ0)`. Names compare by *bytes*: two
+visually identical characters in different Unicode normalizations are
+different names (type your α one way). Keywords stay ASCII.
+
 Cozy has eleven value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
@@ -591,8 +597,16 @@ cozy> dualeps(sqrt(dual(4, 1)))
 0.25
 ```
 
-`load("packages/autodiff.cz")` turns this into `d(f)` and `grad(f)` —
-see the packages guide.
+**Hyper-duals carry second derivatives**: `hdual(x, s1, s2)` seeds two
+directions at once (`eps1^2 = eps2^2 = 0`, their product survives), and
+`hdual12` reads the exact mixed partial from one pass — `hdual12(hdual(3,
+1, 1)^2)` is exactly `2`. The same promotion law applies twice over:
+hyper-dual mixes with neither complex nor dual. `gamma`/`lgamma` refuse
+hyper-duals (their second derivative needs trigamma — a recorded
+residue).
+
+`load("packages/autodiff.cz")` turns all of this into `d(f)`, `grad(f)`,
+and `hess(f)` — see the packages guide.
 
 ## 11. Special functions and statistics
 
@@ -718,7 +732,17 @@ cozy> fields({} |> setfield(@, "lo", 1) |> setfield(@, "hi", 2))
 
 `load("file.cz")` runs a file in the current session; its `let` bindings
 persist afterwards. A package is just a file of definitions — and a record
-of closures makes a namespace, so packages don't collide:
+of closures makes a namespace, so packages don't collide. Namespaces need
+no new machinery: `fields(r)` is the manifest, `getfield(r, name)` the
+dynamic door, and sibling fields may call each other through the record's
+own global name (`stats.z` calling `stats.se` works, because functions
+resolve globals at call time). The same late binding is the one law worth
+memorizing: **a record namespace hides the face, never the body** — a
+field's body still resolves its helpers as globals at call time, so
+`keep()` of the record alone strands every call on `undefined name`. The
+standard packages therefore tag-prefix their helpers (`op_`, `ad_`,
+`sl_`); the full authoring convention is in the packages guide under
+"Writing your own". Example:
 
 ```
 cozy> load("tests/data/mathlib.cz")
@@ -1154,6 +1178,7 @@ cozy> clear("scatter"); who
 | `mem` | print workspace size (variables) and peak process memory |
 | `tic` | start the wall-clock timer (monotonic) |
 | `toc` | seconds elapsed since tic |
+| `ast(f)` | quote a function: its body as a symb-style record tree ({op, l, r, ...}); params as a string row |
 
 ### Strings
 
@@ -1333,6 +1358,9 @@ cozy> clear("scatter"); who
 | `dual(a, b)` | the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction) |
 | `dualval(x)` | the value part of a dual; a plain number passes through (total, so constant branches differentiate) |
 | `dualeps(x)` | the eps (derivative) part of a dual; 0 for a plain number |
+| `hdual(x, s1, s2)` | the hyper-dual x + s1*eps1 + s2*eps2 (optional 4th arg seeds eps1*eps2); one pass carries an exact mixed second partial |
+| `hdualval(x)` | the value part of a hyper-dual; plain numbers pass through |
+| `hdual12(x)` | the eps1*eps2 (second-derivative) part; 0 for a plain number |
 
 ### Trigonometric & hyperbolic
 

@@ -92,6 +92,7 @@ size_t elt_size(EltType e)
     case ELT_FLOAT:   return sizeof(double);
     case ELT_COMPLEX: return sizeof(Cplx);
     case ELT_DUAL:    return sizeof(Dual);
+    case ELT_HDUAL:   return sizeof(HDual);
     case ELT_BOOL:    return sizeof(unsigned char);
     }
     return 0;
@@ -271,6 +272,7 @@ Value arr_get(const ArrObj *a, size_t k)
     case ELT_FLOAT:   return val_float(((const double *)a->data)[k]);
     case ELT_COMPLEX: { Cplx c = ((const Cplx *)a->data)[k]; return val_complex(c.re, c.im); }
     case ELT_DUAL:    { Dual d = ((const Dual *)a->data)[k]; return val_dual(d.v, d.e); }
+    case ELT_HDUAL:   { HDual q = ((const HDual *)a->data)[k]; return val_hdual(q.v, q.e1, q.e2, q.e12); }
     case ELT_BOOL:    return val_bool(((const unsigned char *)a->data)[k] != 0);
     }
     return val_null();
@@ -310,6 +312,15 @@ void arr_set(ArrObj *a, size_t k, Value v)
         ((Dual *)a->data)[k] = d;
         break;
     }
+    case ELT_HDUAL: {
+        HDual q;
+        if      (v.kind == VAL_INT)   q = (HDual){ (double)v.as.i, 0, 0, 0 };
+        else if (v.kind == VAL_FLOAT) q = (HDual){ v.as.f, 0, 0, 0 };
+        else if (v.kind == VAL_BOOL)  q = (HDual){ v.as.b ? 1.0 : 0.0, 0, 0, 0 };
+        else                          q = v.as.h;   /* eval.c gates dual/complex first */
+        ((HDual *)a->data)[k] = q;
+        break;
+    }
     case ELT_BOOL:
         ((unsigned char *)a->data)[k] =
             (v.kind == VAL_BOOL) ? (v.as.b ? 1 : 0)
@@ -332,7 +343,8 @@ EnvObj *env_new(EnvObj *parent)
 
 static void env_free(EnvObj *e)
 {
-    for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
+    for (uint32_t i = 0; i < e->count; i++)
+        { value_release(e->vals[i]); free((char *)e->names[i]); }
     free(e->names); free(e->namelens); free(e->vals);
     env_release(e->parent);
     free(e);
@@ -357,7 +369,9 @@ void env_define(EnvObj *e, const char *name, uint32_t len, Value v)
         e->vals     = realloc(e->vals,     e->cap * sizeof *e->vals);
         if (!e->names || !e->namelens || !e->vals) abort();
     }
-    e->names[e->count]    = name;
+    e->names[e->count]    = strndup(name, len);   /* env OWNS names (entry 11):
+                                       bindings must outlive the line's source */
+    if (!e->names[e->count]) abort();
     e->namelens[e->count] = len;
     e->vals[e->count]     = value_retain(v);
     e->count++;
@@ -393,7 +407,8 @@ bool env_assign(EnvObj *e, const char *name, uint32_t len, Value v)
  * count is zeroed so the later env_free does not double-release. */
 void env_clear(EnvObj *e)
 {
-    for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
+    for (uint32_t i = 0; i < e->count; i++)
+        { value_release(e->vals[i]); free((char *)e->names[i]); }
     e->count = 0;
 }
 
@@ -423,6 +438,21 @@ static void print_dual(FILE *out, double v, double e)
     fputs("eps", out);
 }
 
+/* v+ae1'eps1'+... always all four terms, signs folded — deterministic and
+ * golden-able, mirroring print_dual */
+static void print_hdual(FILE *out, HDual q)
+{
+    fmt_double(out, q.v == 0.0 ? 0.0 : q.v);
+    double c3[3] = { q.e1, q.e2, q.e12 };
+    const char *u[3] = { "eps1", "eps2", "eps12" };
+    for (int i = 0; i < 3; i++) {
+        double x = c3[i] == 0.0 ? 0.0 : c3[i];
+        fputc(x < 0 ? '-' : '+', out);
+        fmt_double(out, x < 0 ? -x : x);
+        fputs(u[i], out);
+    }
+}
+
 static void print_scalar(FILE *out, Value v)
 {
     switch (v.kind) {
@@ -432,6 +462,7 @@ static void print_scalar(FILE *out, Value v)
     case VAL_FLOAT:   fmt_double(out, v.as.f); break;
     case VAL_COMPLEX: print_complex(out, v.as.z.re, v.as.z.im); break;
     case VAL_DUAL:    print_dual(out, v.as.d.v, v.as.d.e); break;
+    case VAL_HDUAL:   print_hdual(out, v.as.h); break;
     case VAL_STRING:  fprintf(out, "\"%.*s\"", (int)((StrObj *)v.as.obj)->len, ((StrObj *)v.as.obj)->data); break;
     default:          break;
     }
@@ -446,6 +477,7 @@ const char *value_type_name(Value v)
     case VAL_FLOAT:   return "Float";
     case VAL_COMPLEX: return "Complex";
     case VAL_DUAL:    return "Dual";
+    case VAL_HDUAL:   return "HDual";
     case VAL_STRING:  return "String";
     case VAL_ARRAY:   return "Array";
     case VAL_SPARSE:  return "Sparse";
@@ -478,6 +510,22 @@ static void scalar_str(char *buf, size_t cap, Value v)
             fmt_double_str(ib, sizeof ib, im < 0 ? -im : im);
             snprintf(buf, cap, "%s%c%si", rb, im < 0 ? '-' : '+', ib);
         }
+        break;
+    }
+    case VAL_HDUAL: {
+        HDual q = v.as.h;
+        char b0[32], b1[32], b2[32], b3[32];
+        fmt_double_str(b0, sizeof b0, q.v == 0.0 ? 0.0 : q.v);
+        double c3[3] = { q.e1, q.e2, q.e12 }; char *bp[3] = { b1, b2, b3 };
+        for (int i = 0; i < 3; i++)
+            fmt_double_str(bp[i], 32, (c3[i] == 0.0 ? 0.0 : c3[i]) < 0 ? -c3[i] : c3[i]);
+        char big[160];
+        snprintf(big, sizeof big, "%s%c%seps1%c%seps2%c%seps12", b0,
+                 q.e1 < 0 ? '-' : '+', b1, q.e2 < 0 ? '-' : '+', b2,
+                 q.e12 < 0 ? '-' : '+', b3);
+        size_t bl = strlen(big);                  /* cell display truncation intended */
+        if (bl >= cap) bl = cap - 1;
+        memcpy(buf, big, bl); buf[bl] = 0;
         break;
     }
     case VAL_DUAL: {                                   /* mirror of the complex cell */
@@ -541,7 +589,7 @@ void value_print(FILE *out, Value v)
     if (v.kind == VAL_SPARSE) { sparse_print(out, as_sp(v)); return; }
     switch (v.kind) {
     case VAL_NULL: case VAL_BOOL: case VAL_INT: case VAL_FLOAT: case VAL_COMPLEX:
-    case VAL_DUAL:
+    case VAL_DUAL: case VAL_HDUAL:
         print_scalar(out, v);
         break;
     case VAL_SPARSE: sparse_print(out, as_sp(v)); return;

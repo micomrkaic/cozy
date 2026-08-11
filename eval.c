@@ -43,6 +43,7 @@ static const char *type_name(ValueKind k)
     case VAL_ARRAY:   return "Array";
     case VAL_SPARSE:  return "Sparse";
     case VAL_DUAL:    return "Dual";
+    case VAL_HDUAL:   return "HDual";
     case VAL_RECORD:  return "Record";
     case VAL_CLOSURE: return "Closure";
     case VAL_BUILTIN: return "Builtin";
@@ -59,12 +60,13 @@ static const char *elt_name(EltType e)
     case ELT_COMPLEX: return "Complex";
     case ELT_STRING:  return "String";
     case ELT_DUAL:    return "Dual";
+    case ELT_HDUAL:   return "HDual";
     }
     return "?";
 }
 
 static bool is_num(Value v)   { return v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_COMPLEX
-                                    || v.kind == VAL_DUAL; }
+                                    || v.kind == VAL_DUAL || v.kind == VAL_HDUAL; }
 static bool is_array(Value v) { return v.kind == VAL_ARRAY; }
 
 /* ------------------------------------------------------------------ */
@@ -73,12 +75,36 @@ static bool is_array(Value v) { return v.kind == VAL_ARRAY; }
 typedef enum { AR_ADD, AR_SUB, AR_MUL, AR_DIV, AR_POW, AR_LDIV } Arith;
 
 static int    num_rank(Value v) { return v.kind == VAL_INT ? 0 : v.kind == VAL_FLOAT ? 1
-                                       : v.kind == VAL_COMPLEX ? 2 : 3; }   /* 3 = dual */
+                                       : v.kind == VAL_COMPLEX ? 2 : v.kind == VAL_DUAL ? 3 : 4; }
+                                       /* 3 = dual, 4 = hyper-dual */
 static double as_double(Value v){ return v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f
-                                       : v.kind == VAL_DUAL ? v.as.d.v : v.as.z.re; }
+                                       : v.kind == VAL_DUAL ? v.as.d.v
+                                       : v.kind == VAL_HDUAL ? v.as.h.v : v.as.z.re; }
 static Dual   as_dual(Value v)  { return v.kind == VAL_DUAL  ? v.as.d
                                        : v.kind == VAL_FLOAT ? (Dual){ v.as.f, 0.0 }
                                                              : (Dual){ (double)v.as.i, 0.0 }; }
+static HDual  as_hdual(Value v) { return v.kind == VAL_HDUAL ? v.as.h
+                                       : v.kind == VAL_FLOAT ? (HDual){ v.as.f, 0, 0, 0 }
+                                                             : (HDual){ (double)v.as.i, 0, 0, 0 }; }
+/* the hyper-dual algebra: eps1^2 = eps2^2 = 0, eps1*eps2 survives once */
+static HDual  hd_mul(HDual a, HDual b)
+{
+    return (HDual){ a.v * b.v,
+                    a.v * b.e1 + a.e1 * b.v,
+                    a.v * b.e2 + a.e2 * b.v,
+                    a.v * b.e12 + a.e1 * b.e2 + a.e2 * b.e1 + a.e12 * b.v };
+}
+static HDual  hd_inv(HDual b)
+{
+    double iv = 1.0 / b.v, iv2 = iv * iv;
+    return (HDual){ iv, -b.e1 * iv2, -b.e2 * iv2,
+                    2.0 * b.e1 * b.e2 * iv2 * iv - b.e12 * iv2 };
+}
+/* one chain rule serves every unary kernel: f(v+beta), beta^2 = 2 e1 e2 eps1eps2 */
+static HDual  hd_chain(HDual x, double f, double d1, double d2)
+{
+    return (HDual){ f, d1 * x.e1, d1 * x.e2, d1 * x.e12 + d2 * x.e1 * x.e2 };
+}
 static Cplx   as_cplx(Value v)  { return v.kind == VAL_COMPLEX ? v.as.z
                                        : v.kind == VAL_FLOAT   ? (Cplx){ v.as.f, 0.0 }
                                                                : (Cplx){ (double)v.as.i, 0.0 }; }
@@ -170,6 +196,13 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
     if ((a.kind == VAL_DUAL && b.kind == VAL_COMPLEX) ||
         (a.kind == VAL_COMPLEX && b.kind == VAL_DUAL))
         runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
+    if (a.kind == VAL_HDUAL || b.kind == VAL_HDUAL) {
+        ValueKind o = a.kind == VAL_HDUAL ? b.kind : a.kind;
+        if (o == VAL_COMPLEX)
+            runtime_error(I, "hyper-dual and complex do not mix — hdualval(x) to take the value part first");
+        if (o == VAL_DUAL)
+            runtime_error(I, "dual and hyper-dual do not mix — seed one kind: hdual(x, s1, s2) carries both directions");
+    }
 
     int rank = num_rank(a) > num_rank(b) ? num_rank(a) : num_rank(b);
     if (kind == AR_DIV && rank < 1) rank = 1;                            /* int/int -> float */
@@ -238,6 +271,33 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
         }
         break;
     }
+    case 4: {                                        /* hyper-dual */
+        HDual x = as_hdual(a), y = as_hdual(b);
+        switch (kind) {
+        case AR_ADD: return val_hdual(x.v + y.v, x.e1 + y.e1, x.e2 + y.e2, x.e12 + y.e12);
+        case AR_SUB: return val_hdual(x.v - y.v, x.e1 - y.e1, x.e2 - y.e2, x.e12 - y.e12);
+        case AR_MUL: { HDual r = hd_mul(x, y); return val_hdual(r.v, r.e1, r.e2, r.e12); }
+        case AR_DIV: { HDual r = hd_mul(x, hd_inv(y)); return val_hdual(r.v, r.e1, r.e2, r.e12); }
+        case AR_POW: {
+            if (y.e1 == 0.0 && y.e2 == 0.0 && y.e12 == 0.0 && y.v == floor(y.v)) {
+                double n2 = y.v, f = pow(x.v, n2);
+                double d1 = n2 * pow(x.v, n2 - 1.0);
+                double d2 = n2 * (n2 - 1.0) * pow(x.v, n2 - 2.0);
+                HDual r = hd_chain(x, f, d1, d2);
+                return val_hdual(r.v, r.e1, r.e2, r.e12);
+            }
+            if (x.v <= 0.0)
+                runtime_error(I, "hyper-dual power: base must be positive for a non-integer "
+                                 "or seeded exponent (the result would be complex)");
+            HDual la = hd_chain(x, log(x.v), 1.0 / x.v, -1.0 / (x.v * x.v));
+            HDual e = hd_mul(y, la);
+            HDual r = hd_chain(e, exp(e.v), exp(e.v), exp(e.v));
+            return val_hdual(r.v, r.e1, r.e2, r.e12);
+        }
+        default:     break;
+        }
+        break;
+    }
     }
     runtime_error(I, "unsupported arithmetic");
 }
@@ -262,6 +322,13 @@ static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
     if ((a.kind == VAL_DUAL && b.kind == VAL_COMPLEX) ||
         (a.kind == VAL_COMPLEX && b.kind == VAL_DUAL))
         runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
+    if (a.kind == VAL_HDUAL || b.kind == VAL_HDUAL) {
+        ValueKind o = a.kind == VAL_HDUAL ? b.kind : a.kind;
+        if (o == VAL_COMPLEX)
+            runtime_error(I, "hyper-dual and complex do not mix — hdualval(x) to take the value part first");
+        if (o == VAL_DUAL)
+            runtime_error(I, "dual and hyper-dual do not mix — seed one kind: hdual(x, s1, s2) carries both directions");
+    }
     /* Duals compare by VALUE PART (documented law): conditionals inside a
      * differentiated function take the branch the values take, so the
      * derivative of abs at a kink is one-sided. The as_double tail below
@@ -298,7 +365,8 @@ static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
 static EltType vk_elt(ValueKind k)
 {
     return k == VAL_BOOL ? ELT_BOOL : k == VAL_INT ? ELT_INT : k == VAL_FLOAT ? ELT_FLOAT
-         : k == VAL_STRING ? ELT_STRING : k == VAL_DUAL ? ELT_DUAL : ELT_COMPLEX;
+         : k == VAL_STRING ? ELT_STRING : k == VAL_DUAL ? ELT_DUAL
+         : k == VAL_HDUAL ? ELT_HDUAL : ELT_COMPLEX;
 }
 static EltType elt_max(EltType a, EltType b) { return a > b ? a : b; }   /* numeric tower only */
 
@@ -441,8 +509,9 @@ static Value sparse_empty_like(SpObj *s) { return sp_from_triplets(s->elt, s->ro
 
 static Value sparse_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
-    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL ||
-        (is_array(a) && as_arr(a)->elt == ELT_DUAL) || (is_array(b) && as_arr(b)->elt == ELT_DUAL))
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL || a.kind == VAL_HDUAL || b.kind == VAL_HDUAL ||
+        (is_array(a) && (as_arr(a)->elt == ELT_DUAL || as_arr(a)->elt == ELT_HDUAL)) ||
+        (is_array(b) && (as_arr(b)->elt == ELT_DUAL || as_arr(b)->elt == ELT_HDUAL)))
         runtime_error(I, "sparse and dual do not mix — dense(S) if intended");
     bool sa = is_sparse(a), sb = is_sparse(b);
     switch (op) {
@@ -574,7 +643,7 @@ Value transpose(Interp *I, Value v, bool conj)
 static Value mldivide(Interp *I, Value A, Value B)
 {
     ArrObj *a = as_arr(A), *b = as_arr(B);
-    if (a->elt == ELT_DUAL || b->elt == ELT_DUAL)
+    if (a->elt == ELT_DUAL || b->elt == ELT_DUAL || a->elt == ELT_HDUAL || b->elt == ELT_HDUAL)
         runtime_error(I, "left division on dual matrices is not supported — "
                          "autodiff flows through elementwise ops, matmul, and reductions");
     uint32_t n = a->rows, m = b->cols;
@@ -584,6 +653,25 @@ static Value mldivide(Interp *I, Value A, Value B)
         runtime_error(I, "left division dimensions disagree: %ux%u \\ %ux%u",
                       a->rows, a->cols, b->rows, b->cols);
 
+    bool real_fast = a->elt != ELT_COMPLEX && b->elt != ELT_COMPLEX
+                     && cozy_linalg()->solve_d;
+    if (real_fast) {
+        /* real data on real routines (entry 10): dgesv-class arithmetic is
+         * both faster and exactly real — no imaginary residue exists to snap */
+        double *LUd = malloc((size_t)n * n * sizeof *LUd);
+        double *Xd  = malloc((size_t)n * m * sizeof *Xd);
+        if ((!LUd && n) || (!Xd && n && m)) abort();
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < n; j++) LUd[(size_t)i*n+j] = as_double(arr_get(a, (size_t)i*n+j));
+        for (uint32_t i = 0; i < n; i++)
+            for (uint32_t j = 0; j < m; j++) Xd[(size_t)i*m+j]  = as_double(arr_get(b, (size_t)i*m+j));
+        if (cozy_linalg()->solve_d(LUd, Xd, n, m) != 0)
+            { free(LUd); free(Xd); runtime_error(I, "left division: matrix is singular"); }
+        Value outd = val_array(ELT_FLOAT, n, m);
+        memcpy(as_arr(outd)->data, Xd, (size_t)n * m * sizeof(double));
+        free(LUd); free(Xd);
+        return outd;
+    }
     Cplx *LU = malloc((size_t)n * n * sizeof *LU);
     Cplx *X  = malloc((size_t)n * m * sizeof *X);
     if ((!LU && n) || (!X && n && m)) abort();
@@ -890,7 +978,7 @@ Value do_index(Interp *I, Value target, Value *idx, uint32_t argc, uint8_t colon
             int64_t c0 = scalar_ix(I, idx[1], a->cols, "column");
             result = value_retain(arr_get(a, (size_t)r0 * a->cols + (size_t)c0));
         } else {
-        size_t rc, cc; bool rs, cs;
+        size_t rc, cc; bool rs = false, cs = false;
         sel0 = resolve_index_dim(I, idx[0], colonmask & 1, a->rows, &rc, &rs, "row");
         sel1 = resolve_index_dim(I, idx[1], colonmask & 2, a->cols, &cc, &cs, "column");
         if (rs && cs) { result = value_retain(arr_get(a, (size_t)sel0[0] * a->cols + (size_t)sel1[0])); }
@@ -915,6 +1003,7 @@ static int elt_rank(EltType e)
     switch (e) { case ELT_BOOL: return 0; case ELT_INT: return 1;
                  case ELT_FLOAT: return 2; case ELT_COMPLEX: return 3;
                  case ELT_DUAL: return 3;  /* above float; incomparable with complex (gated) */
+                 case ELT_HDUAL: return 3; /* likewise; all cross-mixes gated explicitly */
                  case ELT_STRING: return 4; /* never promotes with numerics */ }
     return 0;
 }
@@ -927,6 +1016,7 @@ static EltType scalar_elt(Interp *I, Value v)
     case VAL_FLOAT:   return ELT_FLOAT;
     case VAL_COMPLEX: return ELT_COMPLEX;
     case VAL_DUAL:    return ELT_DUAL;
+    case VAL_HDUAL:   return ELT_HDUAL;
     case VAL_STRING:  return ELT_STRING;
     default: runtime_error(I, "cannot assign a value of type %s into an array", type_name(v.kind));
     }
@@ -961,7 +1051,9 @@ Value do_index_set(Interp *I, Value target, Value *idx, uint32_t argc,
                       a->elt == ELT_STRING ? "String" : "numeric");
 
     /* resolve selectors and count the addressed positions */
-    size_t rc, cc; bool rs, cs;
+    size_t rc, cc; bool rs = false, cs = false;   /* cs unread in the 1-index
+        branch — but (void)cs was still a LOAD of an indeterminate bool;
+        clang's UBSan on the owner's Mac flagged the 143 it found there */
     if (argc == 1) {
         sel0 = resolve_index_dim(I, idx[0], colonmask & 1, (int64_t)a->rows * a->cols, &rc, &rs, "");
         cc = 1; (void)cs;
@@ -979,6 +1071,9 @@ Value do_index_set(Interp *I, Value target, Value *idx, uint32_t argc,
     if ((velt == ELT_DUAL) != (a->elt == ELT_DUAL) &&
         (velt == ELT_COMPLEX || a->elt == ELT_COMPLEX))
         runtime_error(I, "dual and complex do not mix — dualval(x) to take the value part first");
+    if ((velt == ELT_HDUAL) != (a->elt == ELT_HDUAL) &&
+        (velt == ELT_COMPLEX || a->elt == ELT_COMPLEX || velt == ELT_DUAL || a->elt == ELT_DUAL))
+        runtime_error(I, "hyper-dual mixes with neither complex nor dual — hdualval(x) for the value part");
     /* element type of the result; promotion forces a fresh array */
     EltType relt = elt_rank(velt) > elt_rank(a->elt) ? velt : a->elt;
     bool unique  = (a->obj.rc == 2);
@@ -1029,7 +1124,7 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
     for (uint32_t r = 0; r < nrows; r++) ntot += (uint32_t)rowcounts[r];
 
     bool saw_bool = false, saw_num = false, saw_str = false;
-    bool saw_cplx = false, saw_dual = false;
+    bool saw_cplx = false, saw_dual = false, saw_hd = false;
     EltType numelt = ELT_INT;
     for (uint32_t k = 0; k < ntot; k++) {
         Value e = ev[k];
@@ -1040,11 +1135,14 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
         else if (ee == ELT_STRING) saw_str = true;
         else { saw_num = true; numelt = elt_max(numelt, ee);
                if (ee == ELT_COMPLEX) saw_cplx = true;
-               if (ee == ELT_DUAL)    saw_dual = true; }
+               if (ee == ELT_DUAL)    saw_dual = true;
+               if (ee == ELT_HDUAL)   saw_hd = true; }
     }
     if (saw_cplx && saw_dual)
         runtime_error(I, "cannot mix complex and dual elements in a matrix "
                          "— dual and complex do not mix");
+    if (saw_hd && (saw_cplx || saw_dual))
+        runtime_error(I, "cannot mix hyper-dual elements with complex or dual in a matrix");
     if (saw_str && (saw_num || saw_bool))
         runtime_error(I, "cannot mix strings with numbers in a matrix");
     if (saw_bool && saw_num)
@@ -1551,9 +1649,9 @@ static Value sc_dual_make(Interp *I, Value a, Value b)
 {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX)
         runtime_error(I, "dual: components must be real (dual and complex do not mix)");
-    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL || a.kind == VAL_HDUAL || b.kind == VAL_HDUAL)
         runtime_error(I, "dual: components are already dual — jets beyond first order "
-                         "are not supported yet");
+                         "are not supported yet (hdual carries second order)");
     if (!is_num(a) || !is_num(b))
         runtime_error(I, "dual: expected numbers, got (%s, %s)", type_name(a.kind), type_name(b.kind));
     return val_dual(as_double(a), as_double(b));
@@ -1577,6 +1675,64 @@ static Value sc_dualeps(Interp *I, Value v)
 }
 static Value bi_dualval(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_dualval); }
 static Value bi_dualeps(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_dualeps); }
+
+/* ---- hyper-duals (entry 4a, Hessian increment) ---------------------------
+ * hdual(x, s1, s2[, s12]) builds x + s1*eps1 + s2*eps2 (+ s12*eps1eps2),
+ * elementwise with scalar broadcast — hdual(x, ei, ej) seeds two directions
+ * at once, and hdual12 of f's result is the exact mixed partial d2f/dxi dxj.
+ * hdualval/hdual12 are TOTAL on plain numbers (x and 0), for constant
+ * branches, exactly as dualval/dualeps are. */
+static double hd_comp(Interp *I, Value v, size_t k, const char *who)
+{
+    Value e = is_array(v) ? arr_get(as_arr(v), is_array(v) && as_arr(v)->rows * as_arr(v)->cols == 1 ? 0 : k) : v;
+    if (e.kind == VAL_INT)   return (double)e.as.i;
+    if (e.kind == VAL_FLOAT) return e.as.f;
+    if (e.kind == VAL_BOOL)  return e.as.b ? 1.0 : 0.0;
+    runtime_error(I, "%s: components must be real numbers, got %s "
+                     "(dual, hyper-dual, and complex may not nest)", who, type_name(e.kind));
+}
+static Value bi_hdual(Interp *I, Value *args, uint32_t n)
+{
+    uint32_t rows = 0, cols = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (is_array(args[i])) {
+            ArrObj *a = as_arr(args[i]);
+            if (a->rows * a->cols != 1) {
+                if (rows && (rows != a->rows || cols != a->cols))
+                    runtime_error(I, "hdual: array arguments must share one shape");
+                rows = a->rows; cols = a->cols;
+            }
+        } else if (!is_num(args[i]) && args[i].kind != VAL_BOOL)
+            runtime_error(I, "hdual: expected numbers or arrays, got %s", type_name(args[i].kind));
+    }
+    if (!rows) {                                        /* all scalars */
+        double s12 = n >= 4 ? hd_comp(I, args[3], 0, "hdual") : 0.0;
+        return val_hdual(hd_comp(I, args[0], 0, "hdual"), hd_comp(I, args[1], 0, "hdual"),
+                         hd_comp(I, args[2], 0, "hdual"), s12);
+    }
+    Value out = val_array(ELT_HDUAL, rows, cols);
+    ArrObj *o = as_arr(out);
+    for (size_t k = 0; k < (size_t)rows * cols; k++) {
+        double s12 = n >= 4 ? hd_comp(I, args[3], k, "hdual") : 0.0;
+        arr_set(o, k, val_hdual(hd_comp(I, args[0], k, "hdual"), hd_comp(I, args[1], k, "hdual"),
+                                hd_comp(I, args[2], k, "hdual"), s12));
+    }
+    return out;
+}
+static Value sc_hdualval(Interp *I, Value v)
+{
+    if (v.kind == VAL_HDUAL) return val_float(v.as.h.v);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return v;
+    runtime_error(I, "hdualval: expected a hyper-dual or real number, got %s", type_name(v.kind));
+}
+static Value sc_hdual12(Interp *I, Value v)
+{
+    if (v.kind == VAL_HDUAL) return val_float(v.as.h.e12);
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(0.0);
+    runtime_error(I, "hdual12: expected a hyper-dual or real number, got %s", type_name(v.kind));
+}
+static Value bi_hdualval(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdualval); }
+static Value bi_hdual12(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdual12); }
 
 static Value bi_map(Interp *I, Value *args, uint32_t n)
 {
@@ -1616,6 +1772,11 @@ static Value abs_scalar(Interp *I, Value v)
         double x = v.as.d.v, s = (x > 0) - (x < 0);
         return val_dual(fabs(x), v.as.d.e * s);
     }
+    case VAL_HDUAL: {
+        double x = v.as.h.v, s = (x > 0) - (x < 0);
+        HDual r = hd_chain(v.as.h, fabs(x), s, 0.0);
+        return val_hdual(r.v, r.e1, r.e2, r.e12);
+    }
     default:          runtime_error(I, "abs: expected a number, got %s", type_name(v.kind));
     }
 }
@@ -1629,6 +1790,15 @@ static Value sqrt_scalar(Interp *I, Value v)
                              "and dual and complex do not mix)");
         double r = sqrt(x);
         return val_dual(r, dx / (2.0 * r));   /* natural formula: inf at the origin */
+    }
+    if (v.kind == VAL_HDUAL) {
+        double x = v.as.h.v;
+        if (x < 0.0)
+            runtime_error(I, "sqrt: dual input is negative (the result would be complex, "
+                             "and dual and complex do not mix)");
+        double r0 = sqrt(x);
+        HDual r = hd_chain(v.as.h, r0, 0.5 / r0, -0.25 / (r0 * x));
+        return val_hdual(r.v, r.e1, r.e2, r.e12);
     }
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT) {
         double d = as_double(v);
@@ -1701,187 +1871,7 @@ typedef struct { const char *name, *sig, *desc, *cat, *ex; } BuiltinDoc;
 
 static const BuiltinDoc builtin_docs[] = {
     /* core ------------------------------------------------------------ */
-    { "print", "print(...) | print(tmpl, ...)", "print values; template fills {} in order; {:[-][w][.p][f|e|g]} formats a hole ({{ }} literal)", "core" , "print(\"x = {}, root = {:.3f}\", 5, sqrt(2))   % x = 5, root = 1.414" },
-    { "upper",     "upper(s)",           "uppercase (ASCII bytes)", "string" , "upper(\"cozy\")                   %= \"COZY\"" },
-    { "lower",     "lower(s)",           "lowercase (ASCII bytes)", "string" , "lower(\"Hi There\")               %= \"hi there\"" },
-    { "trim",      "trim(s)",            "strip leading and trailing whitespace", "string" , "trim(\"  x  \")                   %= \"x\"" },
-    { "contains",  "contains(s, sub)",   "true if sub occurs in s", "string" , "contains(\"cozy\", \"oz\")         %= true" },
-    { "startswith","startswith(s, p)",   "true if s begins with p", "string" , "startswith(\"cozy\", \"co\")      %= true" },
-    { "endswith",  "endswith(s, p)",     "true if s ends with p", "string" , "endswith(\"data.csv\", \".csv\")   %= true" },
-    { "strrep",    "strrep(s, old, new)","replace every occurrence of old with new", "string" , "strrep(\"a-b-c\", \"-\", \"+\")     %= \"a+b+c\"" },
-    { "str",       "str(x)",             "the display text of any value, as a string", "string" , "str(1.5) + str(true)             %= \"1.5true\"" },
-    { "num",       "num(s)",             "parse a string as a number (Int if exact, else Float)", "string" , "num(\"42\") + num(\"2.5\")         %= 44.5" },
-    { "fmt",       "fmt(tmpl, ...)",     "print's template, returned as a string instead of printed", "string" , "fmt(\"x = {:.2f}\", 3.14159)      %= \"x = 3.14\"" },
-    { "fields","fields(r)",         "the record's field names, as a string column", "core" , "fields({yr = 1, cpi = 2})'        %= [\"yr\", \"cpi\"]" },
-    { "getfield","getfield(r, name)", "dynamic field read; error if the record has no such field", "core" , "getfield({a = 7}, \"a\")           %= 7" },
-    { "setfield","setfield(r, name, v)", "a new record with the field replaced or appended; r is untouched", "core" , "fields(setfield({a = 1}, \"b\", 2))' %= [\"a\", \"b\"]" },
-    { "error",  "error(msg) | error(tmpl, ...)", "raise a runtime error (fmt-style template)", "core" , "error(\"p must be in (0,1), got {}\", 1.5)   % raises that message" },
-    { "assert", "assert(cond) | assert(cond, tmpl, ...)", "error unless cond is true", "core" , "assert(2 > 1)                     % passes silently" },
-    { "strsplit","strsplit(s, sep)", "split a string on a separator, giving a string row vector", "string" , "strsplit(\"a-b-c\", \"-\")          %= [\"a\", \"b\", \"c\"]" },
-    { "strfind", "strfind(s, pat)",  "1-based start positions of every occurrence of pat in s (overlapping), [] if none", "string" , "strfind(\"banana\", \"an\")'         %= [2, 4]" },
-    { "strjoin", "strjoin(a, sep)",  "join a string array with a separator", "string" , "strjoin([\"x\", \"y\", \"z\"], \", \")  %= \"x, y, z\"" },
-    { "version", "version",       "the interpreter version, as a string", "core" , "version                           % the version, e.g. \"1.10.0\"" },
-    { "buildinfo", "buildinfo()", "build introspection -> {backend, version, built}; backend names the linear-algebra kernels", "core" , "buildinfo().backend               % which kernels answered, e.g. \"tier0\"" },
-    { "now",   "now",             "current local date and time: {y, m, d, h, mi, s}", "core" , "now().y                           % this year\nlet t = now                       % bare now echoes the record" },
-    { "whov",  "whov | whov(\"sorted\")", "your variables only (shorthand for who(\"vars\"))", "core" , "whov                              % scalars, arrays, strings" },
-    { "whof",  "whof | whof(\"sorted\")", "your functions only (shorthand for who(\"functions\"))", "core" , "whof(\"sorted\")                    % functions, alphabetical" },
-    { "whor",  "whor | whor(\"sorted\")", "your records only (shorthand for who(\"records\"))", "core" , "whor                              % records, insertion order" },
-    { "whos",  "whos",            "the whole workspace, sorted by name (who(\"sorted\"))", "core" , "whos                              % everything, alphabetical" },
-    { "exit",  "exit | exit(code)", "end the session (also: quit)", "repl" , "exit                              % goodbye" },
-    { "manual", "manual [doc]",  "page rendered documentation: manual, manual book|packages|changelog|lessons|design|readme", "repl" , "manual packages                  % the packages guide, formatted and paged" },
-    { "pretty", "pretty on|off", "aligned multi-line matrix display (default on in the REPL)", "repl" , "pretty off                        % single-line matrices" },
-    { "more",   "more on|off",   "page long output through $PAGER", "repl" , "more on                           % long results go through less" },
-    { "who",   "who | who(\"functions\", \"sorted\")", "list the workspace; filter by \"records\"/\"functions\"/\"vars\", add \"sorted\" for name order", "core" , "who(\"functions\")                  % only your fn bindings\nwho(\"sorted\")                     % everything, alphabetical" },
-    { "help",  "help / help(f)",    "help lists every builtin; help(f) describes one", "core" , "help(sum)                         % details and examples for one builtin" },
-    { "system","system(cmd)",       "run a shell command string; return its exit status", "core" , "system(\"date\")                    % run a shell command, returns its exit status" },
-    { "dis",   "dis(f)",            "disassemble a function's bytecode (compiler/VM introspection)", "core" , "dis(fn x -> x + 1)                % prints the compiled bytecode" },
-    { "fzero",   "fzero(f, a, b)",      "root of f in [a, b] (Brent; f(a), f(b) must differ in sign)", "solve" , "format(6); fzero(cos, 1, 2)       %= 1.57080\nfzero(fn x -> x^3 - 2*x - 5, 2, 3)" },
-    { "fminbnd", "fminbnd(f, a, b)",    "minimum of f on [a, b] (Brent) -> {x, fx}", "solve" , "fminbnd(fn x -> (x - 2)^2, 0, 5).x  %= 2" },
-    { "integral","integral(f, a, b[, tol])", "definite integral (adaptive Simpson, finite limits; default tol 1e-10)", "solve" , "format(6); integral(fn x -> x^2, 0, 1)   %= 0.333333" },
-    { "readcsv", "readcsv(file[, opts])", "numeric CSV -> Float matrix; empty cells are nan; opts: {delim, skip}", "io" , "readcsv(\"data.csv\")               % numeric matrix; empty cells become nan\nreadcsv(\"d.csv\", {delim = \";\", skip = 1})" },
-    { "writecsv","writecsv(file, A[, opts])", "matrix -> CSV, full precision (round-trips); opts: {delim}", "io" , "writecsv(\"out.csv\", [1, 2; 3, 4]) % round-trips at full precision" },
-    { "readtable","readtable(file[, opts])", "CSV with a header -> record of column vectors named from the header", "io" , "let d = readtable(\"macro.csv\")    % record of columns: d.year, d.cpi, ..." },
-    { "plot",  "plot(y) | plot(x, y) | plot(x, Y, opts)", "line plot via gnuplot; Y columns are series; opts: style string or {title, xlabel, ylabel, style, logx, logy, grid, xrange, yrange, label, label1..labelN}", "plot" , "plot(x, map(sin, x), {title = \"sin\", grid = true})\nplot(x, Y, {label1 = \"GDP\", label2 = \"CPI\"})   % matrix columns as series" },
-    { "hist",  "hist(y[, nbins][, opts])", "histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend)", "plot" , "hist(randn(1, 10000), 30)\nhist(u, 20, {yrange = [0, 6000]})   % anchor the axis" },
-        { "format","format / format(n) / format(mode, digits)", "number display: format(n) sets SIGNIFICANT digits; format(\"fixed\", d) / format(\"sci\", d) / format(\"auto\", d) set the mode and digits explicitly; format() shows the current setting", "core" , "format(\"fixed\", 2); 87.40 * 1.15    %= 100.51\nformat(\"default\")                 % back to the terse startup style" },
-    { "size",  "size(x)",           "[rows, cols] of x (a scalar is 1x1)", "core" , "size([1, 2, 3; 4, 5, 6])          %= [2, 3]" },
-    { "sparse", "sparse(A) / sparse(i, j, v, m, n)", "a sparse (CSR) matrix from a dense one, or from 1-based triplets (duplicates summed)", "sparse" , "nnz(sparse([0, 5; 0, 0]))         %= 1" },
-    { "dense", "dense(S)",         "the dense matrix a sparse one represents (the explicit gate in the promotion law)", "sparse" , "dense(speye(2))                   %= [1, 0; 0, 1]" },
-    { "nnz", "nnz(A)",             "the number of stored nonzeros (sparse) or nonzero entries (dense)", "sparse" , "nnz(speye(3))                     %= 3" },
-    { "speye", "speye(n)",         "the n-by-n sparse identity", "sparse" , "nnz(speye(4))                     %= 4" },
-    { "sprand", "sprand(m, n, d)", "a sparse m-by-n matrix with ~d*m*n uniform(0,1) entries at distinct random positions", "sparse" , "size(sprand(9, 5, 0.2))           %= [9, 5]" },
-    { "sprandn", "sprandn(m, n, d)", "like sprand with standard-normal values", "sparse" , "size(sprandn(4, 4, 0.5))          %= [4, 4]" },
-    { "length","length(x)",         "longest dimension of x (0 if empty)", "core" , "length([4, 5, 6])                 %= 3" },
-    { "numel", "numel(x)",          "number of elements (rows*cols)", "core" , "numel([1, 2; 3, 4])               %= 4" },
-    /* constructors ---------------------------------------------------- */
-    { "zeros", "zeros(r, c)",        "r-by-c matrix of zeros", "make" , "zeros(2, 3)                       %= [0, 0, 0; 0, 0, 0]" },
-    { "ones",  "ones(r, c)",         "r-by-c matrix of ones", "make" , "ones(1, 4)                        %= [1, 1, 1, 1]" },
-    { "eye",   "eye(n)",             "n-by-n identity matrix", "make" , "eye(2)                            %= [1, 0; 0, 1]" },
-    { "diag",  "diag(x)",            "vector -> diagonal matrix; matrix -> its diagonal as a column", "make" , "diag([1, 2, 3])                   % 3x3 with the vector on the diagonal\ndiag([1, 2; 3, 4])                %= [1; 4]" },
-    { "linspace","linspace(a, b, n)","row of n points evenly spaced from a to b inclusive", "make" , "linspace(0, 1, 5)                 %= [0, 0.25, 0.5, 0.75, 1]" },
-    { "reshape","reshape(A, r, c)",  "reinterpret A's elements as r-by-c (row-major), element count must match", "make" , "reshape([1, 2, 3, 4, 5, 6], 2, 3) %= [1, 2, 3; 4, 5, 6]" },
-    { "repmat","repmat(A, m, n)",    "tile A into an m-by-n grid of copies", "make" , "repmat([1, 2], 2, 2)              %= [1, 2, 1, 2; 1, 2, 1, 2]" },
-    /* reductions ------------------------------------------------------ */
-    { "sum",   "sum(A) | sum(A, dim)", "sum of all elements, or along dim (1 = columns, 2 = rows)", "reduce" , "sum([1, 2, 3])                    %= 6\nsum([1, 2; 3, 4], 1)              %= [4, 6]" },
-    { "prod",  "prod(A) | prod(A, dim)","product of all elements, or along dim", "reduce" , "prod([1, 2, 3, 4])                %= 24" },
-    { "save",  "save(\"file.cz\")",  "write all variables and functions as reloadable source (restore with load)", "core" , "save(\"ws.cz\")                    % then later: load(\"ws.cz\")" },
-    { "body",  "body(f)",           "print the source of a user-defined function", "core" , "let cube = fn x -> x^3; body(cube)   %= fn x -> x^3" },
-    { "pi",    "pi",   "3.14159..., the circle constant", "const" , "cos(pi)                           %= -1" },
-    { "e",     "e",    "2.71828..., Euler's number", "const" , "log(e)                            %= 1" },
-    { "eulergamma", "eulergamma", "0.57722..., the Euler-Mascheroni constant", "const" , "eulergamma < 0.58                 %= true" },
-    { "phi",   "phi",  "1.61803..., the golden ratio", "const" , "abs(phi ^ 2 - phi - 1) < 1e-12    %= true" },
-    { "eps",   "eps",  "machine epsilon for Float (2^-52)", "const" , "1 + eps > 1                       %= true" },
-    { "inf",   "inf",  "positive infinity (Float)", "const" , "inf > 1e308                       %= true" },
-    { "nan",   "nan",  "not-a-number (Float); nan never equals anything, itself included", "const" , "nan == nan                        %= false" },
-    { "pwd",   "pwd",                "the current working directory, as a string", "io" , "length(pwd()) > 0                 %= true" },
-    { "cd",    "cd(\"dir\") | cd",     "change the working directory (persists, unlike !cd); bare cd goes home", "io" , "cd(\"packages\")                    % ...then load(\"dist.cz\") works\ncd(\"..\")                          % back up" },
-    { "ls",    "ls | ls(\"dir\") | ls(\"*.cz\")", "directory listing as a string array (globs supported)", "io" , "numel(ls(\"packages\")) >= 5        %= true" },
-    { "load",  "load(\"file.cz\")",  "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core" , "load(\"tests/data/mathlib.cz\"); cube(3)   %= 27\nload(\"mylib.cz\"); mylib.f(2)     % record-of-closures as a namespace" },
-    { "eval",  "eval(\"code\")", "run a string as Cozy code in this session; returns the last value", "core" , "eval(\"2 + 2\")                      % 4" },
-    { "names", "names() | names(\"vars\"|\"funcs\")", "your workspace names as a sorted string column (the programmatic who)", "core" , "let a = 1; names(\"vars\")           % [\"a\"]" },
-    { "input", "input(\"prompt\")", "read one line from the keyboard as a string (window.prompt in the browser)", "io" , "let name = input(\"who? \")          % interactive" },
-    { "pause", "pause() | pause(\"msg\")", "wait for the user before continuing (alert in the browser)", "io" , "pause()                            % interactive" },
-    { "clear", "clear() | clear(\"a\", ...)", "remove all user variables, or the named ones; clearing a shadow restores the standard-library original", "core" , "let junk = 42; clear(\"junk\")   % junk is gone\nclear                             % bare: everything user-defined" },
-    { "keep",  "keep(\"a\", \"b\", ...)", "remove all user variables except the named ones (the complement of clear)", "core" , "let a = 1; let b = 2; keep(\"a\")     % b is gone, a survives" },
-    { "mem",   "mem",               "print workspace size (variables) and peak process memory", "core" , "mem                               % e.g.  workspace: 3 variables, 2.1 MB" },
-    { "tic",   "tic",               "start the wall-clock timer (monotonic)", "core" , "tic                               % starts the timer" },
-    { "toc",   "toc",               "seconds elapsed since tic", "core" , "tic; let s = sum(1:1000000); toc() < 60   %= true" },
-    { "unique","unique(A)",         "sorted distinct elements; vectors keep orientation, matrices flatten to a row", "array" , "unique([3, 1, 2, 3, 1])           %= [1, 2, 3]" },
-    { "cov",   "cov(X[, w]) | cov(x, y[, w])", "covariance matrix of X's columns (rows = observations), or scalar cov of two vectors; w as in var", "reduce" , "cov([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])   %= 2" },
-    { "corr",  "corr(X) | corr(x, y)", "Pearson correlation matrix of X's columns, or scalar correlation of two vectors", "reduce" , "format(6); corr([1, 2, 3, 4, 5], [2, 1, 4, 3, 5])   %= 0.800000" },
-    { "var",   "var(A) | var(A, w) | var(A, w, dim)", "variance; w = 0 divides by N-1 (default), w = 1 by N", "reduce" , "var([2, 7, 4, 9, 3])              %= 8.5\nvar([2, 7, 4, 9, 3], 1)           %= 6.8" },
-    { "std",   "std(A) | std(A, w) | std(A, w, dim)", "standard deviation (sqrt of var, same normalization)", "reduce" , "format(6); std([2, 7, 4, 9, 3])   %= 2.91548" },
-    { "median","median(A) | median(A, dim)", "median of all elements, or along dim", "reduce" , "median([1, 2, 3, 4])              %= 2.5" },
-    { "quantile","quantile(x, p)",   "quantile(s) of the data at probability p (scalar or vector); linear interpolation", "reduce" , "quantile([2, 7, 4, 9, 3], 0.5)    %= 4\nquantile(x, [0.05, 0.95])         % a vector of probabilities works too" },
-    { "mean",  "mean(A) | mean(A, dim)","mean of all elements, or along dim", "reduce" , "mean([2, 4, 9])                   %= 5" },
-    { "min",   "min(A) | min(a, b) | min(A, [], dim)", "smallest element; elementwise min; or min along dim", "reduce" , "min([3, 1, 4])                    %= 1\nmin([1, 5; 7, 2], [], 2)          %= [1; 2]" },
-    { "max",   "max(A) | max(a, b) | max(A, [], dim)", "largest element; elementwise max; or max along dim", "reduce" , "max([3, 1, 4])                    %= 4" },
-    { "any",   "any(mask) | any(mask, dim)", "true if any element is nonzero/true (overall or along dim)", "reduce" , "any([0, 0, 2] > 1)                %= true" },
-    { "all",   "all(mask) | all(mask, dim)", "true if every element is nonzero/true (overall or along dim)", "reduce" , "all([1, 2, 3] > 0)                %= true" },
-    /* array shaping --------------------------------------------------- */
-    { "sort",  "sort(A)",            "ascending sort: a vector as a whole, a matrix by column", "array" , "sort([3, 1, 2])                   %= [1, 2, 3]" },
-    { "find",  "find(mask)",         "1-based positions of nonzero/true elements (row-major)", "array" , "find([0, 5, 0, 7] > 1)            %= [2, 4]" },
-    { "pick",  "pick(mask, a, b)",   "elementwise select: a where the mask is true, else b", "array" , "pick([1, 0, 1] > 0, [9, 9, 9], [0, 0, 0])   %= [9, 0, 9]" },
-    { "cumsum","cumsum(A)",          "cumulative sum along a vector, or down each column", "array" , "cumsum([1, 2, 3, 4])              %= [1, 3, 6, 10]" },
-    { "cumprod","cumprod(A)",        "cumulative product along a vector, or down each column", "array" , "cumprod([1, 2, 3, 4])             %= [1, 2, 6, 24]" },
-    { "diff",  "diff(A)",            "consecutive differences along a vector, or down each column", "array" , "diff([1, 4, 9, 16])               %= [3, 5, 7]" },
-    { "flipud","flipud(A)",          "reverse row order (flip up-down)", "array" , "flipud([1; 2; 3])                 %= [3; 2; 1]" },
-    { "fliplr","fliplr(A)",          "reverse column order (flip left-right)", "array" , "fliplr([1, 2, 3])                 %= [3, 2, 1]" },
-    /* elementwise math ------------------------------------------------ */
-    { "abs",   "abs(x)",             "absolute value, or complex magnitude", "math" , "abs(-3.5)                         %= 3.5\nabs(3 + 4i)                       %= 5" },
-    { "sqrt",  "sqrt(x)",            "square root (complex result for negative reals)", "math" , "format(6); sqrt(2)                %= 1.41421\nsqrt(-4)                          %= 2i" },
-    { "cbrt",  "cbrt(x)",            "real cube root", "math" , "cbrt(27)                          %= 3" },
-    { "exp",   "exp(x)",             "e raised to the x (complex-aware)", "math" , "format(6); exp(1)                 %= 2.71828" },
-    { "log",   "log(x)",             "natural logarithm (complex for negatives)", "math" , "log(exp(2))                       %= 2" },
-    { "ln",    "ln(x)",              "natural logarithm (alias for log)", "math" , "ln(exp(2))                        %= 2" },
-    { "log10", "log10(x)",           "base-10 logarithm (complex for negatives)", "math" , "log10(1000)                       %= 3" },
-    { "log2",  "log2(x)",            "base-2 logarithm (complex for negatives)", "math" , "log2(8)                           %= 3" },
-    { "sign",  "sign(x)",            "-1 / 0 / +1 by sign; z/|z| for complex", "math" , "sign(-3.2)                        %= -1" },
-    { "floor", "floor(x)",           "round toward -infinity (componentwise on complex)", "math" , "floor(2.7)                        %= 2" },
-    { "ceil",  "ceil(x)",            "round toward +infinity (componentwise on complex)", "math" , "ceil(2.1)                         %= 3" },
-    { "round", "round(x)",           "round to nearest (componentwise on complex)", "math" , "round(2.5)                        %= 3" },
-    { "trunc", "trunc(x)",           "round toward zero", "math" , "trunc(-2.7)                       %= -2" },
-    { "hypot", "hypot(a, b)",        "sqrt(a^2 + b^2) without overflow (elementwise)", "math" , "hypot(3, 4)                       %= 5" },
-    { "mod",   "mod(a, b)",          "modulo, result takes the sign of b (elementwise)", "math" , "mod(-7, 3)                        %= 2" },
-    { "rem",   "rem(a, b)",          "remainder, result takes the sign of a (elementwise)", "math" , "rem(-7, 3)                        %= -1" },
-    { "gamma", "gamma(x)",           "gamma function (real, elementwise)", "math" , "gamma(5)                          %= 24" },
-    { "erf",   "erf(x)",             "error function (real, elementwise)", "math" , "format(6); erf(0.5)               %= 0.520500" },
-    { "erfc",  "erfc(x)",            "complementary error function 1 - erf(x)", "math" , "format(6); erfc(0.5)              %= 0.479500" },
-    { "beta",  "beta(a, b)",         "beta function (a, b > 0, elementwise)", "math" , "format(6); beta(2, 3)             %= 0.0833333" },
-    { "lbeta", "lbeta(a, b)",        "log of the beta function", "math" , "format(6); lbeta(5, 7)            %= -7.74500" },
-    { "gammainc","gammainc(x, a)",   "regularized lower incomplete gamma P(a, x) (the chi^2 CDF)", "math" , "format(6); gammainc(1, 1)         %= 0.632121   % = 1 - exp(-1)" },
-    { "betainc","betainc(x, a, b)",  "regularized incomplete beta I_x(a, b) (Student-t / F CDFs)", "math" , "format(6); betainc(0.3, 2, 5)     %= 0.579825" },
-    { "norminv","norminv(p)",        "standard normal quantile (inverse CDF)", "math" , "format(6); norminv(0.975)         %= 1.95996" },
-    { "digamma","digamma(x)",        "digamma psi(x) = d/dx log gamma(x)", "math" , "format(6); digamma(1)             %= -0.577216" },
-    { "besselj","besselj(n, x)",     "Bessel function of the first kind, integer order n", "math" , "format(6); besselj(0, 2.4)        %= 0.00250768" },
-    { "bessely","bessely(n, x)",     "Bessel function of the second kind, integer order n (x > 0)", "math" , "format(6); bessely(0, 1)          %= 0.0882570" },
-    { "kron",  "kron(A, B)",         "Kronecker product: (m x n) kron (p x q) -> (mp x nq)", "linalg" , "kron(eye(2), [0, 1; 1, 0])        % block-diagonal swap matrices" },
-    { "lgamma","lgamma(x)",          "log of |gamma(x)| (real, elementwise)", "math" , "format(6); lgamma(10)             %= 12.8018" },
-    /* trig ------------------------------------------------------------ */
-    { "dual",  "dual(a, b)", "the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction)", "autodiff" , "dual(3, 1) * dual(3, 1)           %= 9+6eps" },
-    { "dualval", "dualval(x)", "the value part of a dual; a plain number passes through (total, so constant branches differentiate)", "autodiff" , "dualval(dual(2, 5))               %= 2\ndualval(7)                        %= 7" },
-    { "dualeps", "dualeps(x)", "the eps (derivative) part of a dual; 0 for a plain number", "autodiff" , "dualeps(dual(2, 5))               %= 5\ndualeps(7)                        %= 0" },
-    { "sin",   "sin(x)",  "sine (complex-aware, elementwise)", "trig" , "format(6); sin(1)                 %= 0.841471" },
-    { "cos",   "cos(x)",  "cosine (complex-aware, elementwise)", "trig" , "cos(0)                            %= 1" },
-    { "tan",   "tan(x)",  "tangent (complex-aware, elementwise)", "trig" , "format(6); tan(1)                 %= 1.55741" },
-    { "asin",  "asin(x)", "arcsine (complex outside [-1, 1])", "trig" , "format(6); asin(1)                %= 1.57080" },
-    { "acos",  "acos(x)", "arccosine (complex outside [-1, 1])", "trig" , "acos(1)                           %= 0" },
-    { "atan",  "atan(x)", "arctangent (complex-aware)", "trig" , "format(6); atan(1)                %= 0.785398" },
-    { "atan2", "atan2(y, x)", "two-argument arctangent (elementwise)", "trig" , "format(6); atan2(1, 1)            %= 0.785398" },
-    { "sinh",  "sinh(x)", "hyperbolic sine (complex-aware)", "trig" , "format(6); sinh(1)                %= 1.17520" },
-    { "cosh",  "cosh(x)", "hyperbolic cosine (complex-aware)", "trig" , "format(6); cosh(1)                %= 1.54308" },
-    { "tanh",  "tanh(x)", "hyperbolic tangent (complex-aware)", "trig" , "format(6); tanh(1)                %= 0.761594" },
-    { "asinh", "asinh(x)","inverse hyperbolic sine (complex-aware)", "trig" , "format(6); asinh(1)               %= 0.881374" },
-    { "acosh", "acosh(x)","inverse hyperbolic cosine (complex below 1)", "trig" , "acosh(1)                          %= 0" },
-    { "atanh", "atanh(x)","inverse hyperbolic tangent (complex outside (-1, 1))", "trig" , "format(6); atanh(0.5)             %= 0.549306" },
-    /* complex --------------------------------------------------------- */
-    { "real",  "real(z)", "real part (elementwise)", "complex" , "real(3 + 4i)                      %= 3" },
-    { "imag",  "imag(z)", "imaginary part (elementwise)", "complex" , "imag(3 + 4i)                      %= 4" },
-    { "conj",  "conj(z)", "complex conjugate (elementwise)", "complex" , "conj(3 + 4i)                      %= 3-4i" },
-    { "angle", "angle(z)","argument atan2(im, re) (elementwise)", "complex" , "format(6); angle(1i)              %= 1.57080" },
-    { "arg",   "arg(z)",  "argument atan2(im, re) (alias for angle)", "complex" , "format(6); arg(1i)                %= 1.57080" },
-    /* linear algebra -------------------------------------------------- */
-    { "dot",   "dot(a, b)",          "inner product of two vectors", "linalg" , "dot([1, 2, 3], [4, 5, 6])         %= 32" },
-    { "norm",  "norm(x) | norm(x, p)","vector p-norm (p = 1 or 2, default 2); matrix Frobenius norm", "linalg" , "norm([3, 4])                      %= 5" },
-    { "trace", "trace(A)",           "sum of the diagonal", "linalg" , "trace([1, 2; 3, 4])               %= 5" },
-    { "det",   "det(A)",             "determinant via LU", "linalg" , "det([1, 2; 3, 4])                 %= -2" },
-    { "inv",   "inv(A)",             "matrix inverse (solves A \\ I)", "linalg" , "inv([2, 0; 0, 4])                 %= [0.5, 0; 0, 0.25]" },
-    { "lu",    "lu(A)",              "LU with partial pivoting -> {L, U, p}, so P*A = L*U", "linalg" , "let f = lu([4, 3; 6, 3]); f.L * f.U   % equals P*A" },
-    { "qr",    "qr(A)",              "Householder QR -> {Q, R} (real or complex)", "linalg" , "let f = qr([1, 2; 3, 4]); f.Q * f.R   % reconstructs A" },
-    { "chol",  "chol(A)",            "Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD)", "linalg" , "chol([4, 2; 2, 3])                % lower L with L*L' = A" },
-    { "eig",   "eig(A)",             "eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex)", "linalg" , "eig([2, 0; 0, 5]).values          %= [2; 5]" },
-    { "svd",   "svd(A)",             "thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending)", "linalg" , "svd([3, 0; 0, 4]).S               %= [4; 3]" },
-    /* random ---------------------------------------------------------- */
-    { "rng",   "rng(seed)",          "reseed the generator (xoshiro256**); same seed, same stream", "random" , "rng(42)                           % reseed: same seed, same stream" },
-    { "rand",  "rand() | rand(n) | rand(r, c)", "uniform draws on [0, 1)", "random" , "rng(1); format(6); rand()         %= 0.702922\nrand(2, 2)                        % a 2x2 of uniforms" },
-    { "randn", "randn() | randn(n) | randn(r, c)", "standard-normal draws", "random" , "rng(1); let z = randn(1, 5); numel(z)   %= 5" },
-    { "randi", "randi(imax[, r, c]) | randi([lo, hi], ...)", "uniform random integers", "random" , "rng(1); let k = randi(10); (k >= 1) && (k <= 10)   %= true" },
-    /* predicates ------------------------------------------------------ */
-    { "isnan",    "isnan(x)",    "elementwise test for NaN -> logical", "test" , "isnan(0 / 0)                      %= true" },
-    { "isinf",    "isinf(x)",    "elementwise test for +/-Inf -> logical", "test" , "isinf(1 / 0)                      %= true" },
-    { "isfinite", "isfinite(x)", "elementwise test for a finite value -> logical", "test" , "isfinite(1.5)                     %= true" },
-    /* higher-order ---------------------------------------------------- */
-    { "map",   "map(f, A)",          "apply f to each element of A, returning an array of results", "hof" , "map(fn x -> x * 10, [1, 2, 3])    %= [10, 20, 30]\nmap((_ ^ 2), [1, 2, 3])           %= [1, 4, 9]" },
+    #include "doc_table.inc"   /* GENERATED from doc/builtins.tsv */
     };
 static const size_t n_builtin_docs = sizeof builtin_docs / sizeof *builtin_docs;
 
@@ -1990,6 +1980,250 @@ static Value bi_body(Interp *I, Value *args, uint32_t n)
     return val_null();
 }
 
+/* ---- ast(f): quotation (design entry 4b) — a closure's body as a
+ * symb.cz-style record tree, so symbolic work differentiates what you
+ * TYPED. Reparses the retained source (no AST lifetime games); v1 covers
+ * the symb expression subset — numbers, variables, + - * / ^ (constant
+ * exponents, symb's {op="pow", l, n} shape), unary minus (emitted as
+ * mul by -1 for symb compatibility), and single-argument named calls
+ * ({op=<name>, l=...}). Everything else gates with a teaching error;
+ * the residue trigger is the first non-subset quotation need. */
+static Value ast_rec(Interp *I, uint32_t n2, ...);
+static Value ast_str(const char *s, uint32_t len)
+{
+    return val_string(s, len);
+}
+static Value ast_rec(Interp *I, uint32_t n2, ...)
+{
+    (void)I;
+    va_list ap; va_start(ap, n2);
+    Value r = val_record(n2);
+    RecObj *rc = as_rec(r);
+    rc->owns_keys = true;
+    for (uint32_t i = 0; i < n2; i++) {
+        const char *k = va_arg(ap, const char *);
+        Value v = va_arg(ap, Value);
+        rc->keys[i] = strdup(k); rc->keylens[i] = (uint32_t)strlen(k);
+        rc->vals[i] = v;                      /* takes the reference */
+    }
+    va_end(ap);
+    return r;
+}
+static void ast_check(Interp *I, const AstNode *e)
+{
+    (void)I; (void)e;   /* quotation is total since 0.0.31; kept as the seam
+                           for any future node kind that cannot be quoted */
+}
+static Value ast_quote(Interp *I, const AstNode *e);
+static Value ast_list(Interp *I, const char *cntkey, AstList l, uint32_t extra, ...)
+{
+    /* {<extra pairs...>, <cntkey> = N, a1 = ..., a2 = ...} */
+    Value r = val_record(extra + 1 + l.count);
+    RecObj *rc = as_rec(r); rc->owns_keys = true;
+    uint32_t k = 0;
+    va_list ap; va_start(ap, extra);
+    for (uint32_t i = 0; i < extra; i++) {
+        const char *key = va_arg(ap, const char *); Value v = va_arg(ap, Value);
+        rc->keys[k] = strdup(key); rc->keylens[k] = (uint32_t)strlen(key); rc->vals[k] = v; k++;
+    }
+    va_end(ap);
+    rc->keys[k] = strdup(cntkey); rc->keylens[k] = (uint32_t)strlen(cntkey);
+    rc->vals[k] = val_int((long long)l.count); k++;
+    for (uint32_t i = 0; i < l.count; i++) {
+        char kb[16]; snprintf(kb, sizeof kb, "a%u", i + 1);
+        rc->keys[k] = strdup(kb); rc->keylens[k] = (uint32_t)strlen(kb);
+        rc->vals[k] = ast_quote(I, l.items[i]); k++;
+    }
+    return r;
+}
+static const char *ast_binop_name(enum TokenKind op)
+{
+    switch (op) {
+    case TOK_PLUS: return "add";   case TOK_MINUS: return "sub";
+    case TOK_STAR: return "mul";   case TOK_SLASH: return "div";
+    case TOK_BACKSLASH: return "ldiv";
+    case TOK_DOT_STAR: return "emul"; case TOK_DOT_SLASH: return "ediv";
+    case TOK_DOT_CARET: return "epow"; case TOK_DOT_BACKSLASH: return "eldiv";
+    case TOK_EQ: return "eq"; case TOK_NE: return "ne";
+    case TOK_LT: return "lt"; case TOK_LE: return "le";
+    case TOK_GT: return "gt"; case TOK_GE: return "ge";
+    case TOK_AND: case TOK_AMP: return "and";
+    case TOK_OR:  case TOK_PIPE: return "or";
+    case TOK_PIPE_GT: return "pipe"; case TOK_TILDE_GT: return "mappipe";
+    case TOK_PIPE_GTGT: return "teepipe";
+    default: return NULL;
+    }
+}
+static Value ast_quote(Interp *I, const AstNode *e)
+{
+    switch (e->kind) {
+    case AST_INT:
+        return ast_rec(I, 2, "op", ast_str("const", 5),
+                       "v", val_int(strtoll(e->as.lit.text, NULL, 10)));
+    case AST_FLOAT:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_float(strtod(e->as.lit.text, NULL)));
+    case AST_IMAG:
+        return ast_rec(I, 2, "op", ast_str("const", 5),
+                       "v", val_complex(0.0, strtod(e->as.lit.text, NULL)));
+    case AST_STRING:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", ast_str(e->as.lit.text, e->as.lit.len));
+    case AST_BOOL:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_bool(e->as.boolean));
+    case AST_NULL:
+        return ast_rec(I, 2, "op", ast_str("const", 5), "v", val_null());
+    case AST_IDENT:
+        return ast_rec(I, 2, "op", ast_str("var", 3), "name", ast_str(e->as.lit.text, e->as.lit.len));
+    case AST_UNARY:
+        if (e->as.unary.op == TOK_MINUS)
+            return ast_rec(I, 3, "op", ast_str("mul", 3),
+                           "l", ast_rec(I, 2, "op", ast_str("const", 5), "v", val_int(-1)),
+                           "r", ast_quote(I, e->as.unary.operand));
+        if (e->as.unary.op == TOK_PLUS)
+            return ast_quote(I, e->as.unary.operand);
+        return ast_rec(I, 2, "op", ast_str(e->as.unary.op == TOK_BANG ? "not" : "bnot", e->as.unary.op == TOK_BANG ? 3 : 4),
+                       "l", ast_quote(I, e->as.unary.operand));
+    case AST_POSTFIX:
+        return ast_rec(I, 2, "op",
+                       e->as.unary.op == TOK_CTRANSPOSE ? ast_str("ctrans", 6) : ast_str("trans", 5),
+                       "l", ast_quote(I, e->as.unary.operand));
+    case AST_BINARY: {
+        if (e->as.binary.op == TOK_CARET) {
+            const AstNode *r = e->as.binary.rhs;
+            if (r->kind == AST_INT || r->kind == AST_FLOAT)   /* symb's shape */
+                return ast_rec(I, 3, "op", ast_str("pow", 3),
+                               "l", ast_quote(I, e->as.binary.lhs),
+                               "n", val_float(r->kind == AST_INT
+                                              ? (double)strtoll(r->as.lit.text, NULL, 10)
+                                              : strtod(r->as.lit.text, NULL)));
+            return ast_rec(I, 3, "op", ast_str("pow", 3),
+                           "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
+        }
+        const char *op = ast_binop_name(e->as.binary.op);
+        if (!op) runtime_error(I, "ast: unquotable binary operator");
+        return ast_rec(I, 3, "op", ast_str(op, (uint32_t)strlen(op)),
+                       "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
+    }
+    case AST_RANGE:
+        if (e->as.range.step)
+            return ast_rec(I, 4, "op", ast_str("range", 5), "start", ast_quote(I, e->as.range.start),
+                           "step", ast_quote(I, e->as.range.step), "stop", ast_quote(I, e->as.range.stop));
+        return ast_rec(I, 3, "op", ast_str("range", 5), "start", ast_quote(I, e->as.range.start),
+                       "stop", ast_quote(I, e->as.range.stop));
+    case AST_CALL:
+        if (e->as.call.callee->kind == AST_IDENT && e->as.call.args.count == 1)
+            return ast_rec(I, 2, "op",   /* symb's single-arg shape */
+                           ast_str(e->as.call.callee->as.lit.text, e->as.call.callee->as.lit.len),
+                           "l", ast_quote(I, e->as.call.args.items[0]));
+        return ast_list(I, "argc", e->as.call.args, 2,
+                        "op", ast_str("call", 4), "f", ast_quote(I, e->as.call.callee));
+    case AST_INDEX:
+        return ast_list(I, "argc", e->as.call.args, 2,
+                        "op", ast_str("index", 5), "l", ast_quote(I, e->as.call.callee));
+    case AST_FIELD:
+        return ast_rec(I, 3, "op", ast_str("field", 5), "l", ast_quote(I, e->as.field.target),
+                       "name", ast_str(e->as.field.name, e->as.field.namelen));
+    case AST_ROW:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("row", 3));
+    case AST_MATRIX:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("matrix", 6));
+    case AST_LAMBDA: {
+        uint32_t np = e->as.lambda.params.count;
+        Value params = val_array(ELT_STRING, 1, np ? np : 1);
+        if (!np) as_arr(params)->cols = 0;
+        for (uint32_t i = 0; i < np; i++) {
+            Value ps = ast_str(e->as.lambda.params.items[i]->as.lit.text,
+                               e->as.lambda.params.items[i]->as.lit.len);
+            arr_set(as_arr(params), i, ps); value_release(ps);
+        }
+        return ast_rec(I, 3, "op", ast_str("fn", 2), "params", params,
+                       "body", ast_quote(I, e->as.lambda.body));
+    }
+    case AST_IF:
+        if (e->as.iff.else_e)
+            return ast_rec(I, 4, "op", ast_str("if", 2), "cond", ast_quote(I, e->as.iff.cond),
+                           "then", ast_quote(I, e->as.iff.then_e), "els", ast_quote(I, e->as.iff.else_e));
+        return ast_rec(I, 3, "op", ast_str("if", 2), "cond", ast_quote(I, e->as.iff.cond),
+                       "then", ast_quote(I, e->as.iff.then_e));
+    case AST_RECORD:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("record", 6));
+    case AST_RECORD_FIELD:
+        return ast_rec(I, 3, "op", ast_str("setf", 4),
+                       "name", ast_str(e->as.recfield.name, e->as.recfield.namelen),
+                       "value", ast_quote(I, e->as.recfield.value));
+    case AST_LET:
+        if (e->as.let.body)
+            return ast_rec(I, 4, "op", ast_str("let", 3), "name", ast_str(e->as.let.name, e->as.let.namelen),
+                           "value", ast_quote(I, e->as.let.value), "body", ast_quote(I, e->as.let.body));
+        return ast_rec(I, 3, "op", ast_str("let", 3), "name", ast_str(e->as.let.name, e->as.let.namelen),
+                       "value", ast_quote(I, e->as.let.value));
+    case AST_ASSIGN:
+        return ast_rec(I, 3, "op", ast_str("assign", 6),
+                       "l", ast_quote(I, e->as.binary.lhs), "r", ast_quote(I, e->as.binary.rhs));
+    case AST_BLOCK: case AST_BLOCK_EXPR:
+        return ast_list(I, "n", e->as.list, 1, "op", ast_str("block", 5));
+    case AST_COLON: return ast_rec(I, 1, "op", ast_str("colon", 5));
+    case AST_END:   return ast_rec(I, 1, "op", ast_str("end", 3));
+    case AST_BREAK: return ast_rec(I, 1, "op", ast_str("break", 5));
+    case AST_CONTINUE: return ast_rec(I, 1, "op", ast_str("continue", 8));
+    case AST_RETURN:
+        if (e->as.unary.operand)
+            return ast_rec(I, 2, "op", ast_str("return", 6), "l", ast_quote(I, e->as.unary.operand));
+        return ast_rec(I, 1, "op", ast_str("return", 6));
+    case AST_WHILE:
+        return ast_rec(I, 3, "op", ast_str("while", 5), "cond", ast_quote(I, e->as.whileloop.cond),
+                       "body", ast_quote(I, e->as.whileloop.body));
+    case AST_FOR:
+        return ast_rec(I, 4, "op", ast_str("for", 3), "var", ast_str(e->as.forloop.var, e->as.forloop.varlen),
+                       "iter", ast_quote(I, e->as.forloop.iter), "body", ast_quote(I, e->as.forloop.body));
+    default:
+        runtime_error(I, "ast: this construct is not quotable yet");
+    }
+}
+static Value bi_ast(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value f = args[0];
+    if (f.kind == VAL_BUILTIN)
+        runtime_error(I, "ast: '%s' is a builtin — no Cozy body to quote", as_blt(f)->name);
+    if (f.kind != VAL_CLOSURE)
+        runtime_error(I, "ast: expected a function, got %s", type_name(f.kind));
+    CloObj *c = as_clo(f);
+    if (!c->chunk->src)
+        runtime_error(I, "ast: no source recorded for this function");
+    char *src = strndup(c->chunk->src, c->chunk->srclen);
+    Arena *a = arena_new();
+    Parser p;
+    parser_init(&p, src, a);
+    AstNode *prog = parser_parse(&p);
+    if (p.had_error) { arena_free(a); free(src); runtime_error(I, "ast: reparse failed"); }
+    /* the program is one statement: the lambda */
+    AstNode *lam = prog->as.list.items[0];
+    if (lam->kind != AST_LAMBDA) { arena_free(a); free(src); runtime_error(I, "ast: not a lambda"); }
+    uint32_t np = lam->as.lambda.params.count;
+    Value params = val_array(ELT_STRING, 1, np ? np : 1);
+    if (!np) as_arr(params)->cols = 0;
+    for (uint32_t i = 0; i < np; i++) {
+        AstNode *pm = lam->as.lambda.params.items[i];
+        Value ps = ast_str(pm->as.lit.text, pm->as.lit.len);
+        arr_set(as_arr(params), i, ps);          /* arr_set retains */
+        value_release(ps);
+    }
+    {   /* validate first (allocation-free), freeing the arena on a raise */
+        jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+        if (setjmp(I->jmp)) {
+            arena_free(a); free(src); value_release(params);
+            memcpy(I->jmp, saved, sizeof(jmp_buf));
+            longjmp(I->jmp, 1);
+        }
+        ast_check(I, lam->as.lambda.body);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+    }
+    Value body = ast_quote(I, lam->as.lambda.body);   /* cannot fail: validated */
+    Value out = ast_rec(I, 2, "params", params, "body", body);
+    arena_free(a); free(src);
+    return out;
+}
+
 /* ---- save("file.cz"): serialize user globals as reloadable source ---- */
 
 static bool ident_ok(const char *s, uint32_t len)
@@ -2025,6 +2259,12 @@ static void save_value(Interp *I, FILE *f, Value v, const char *name)
     case VAL_DUAL:
         fputs("dual(", f); save_double(f, v.as.d.v);
         fputs(", ", f); save_double(f, v.as.d.e); fputc(')', f);
+        return;
+    case VAL_HDUAL:
+        fputs("hdual(", f); save_double(f, v.as.h.v);
+        fputs(", ", f); save_double(f, v.as.h.e1);
+        fputs(", ", f); save_double(f, v.as.h.e2);
+        fputs(", ", f); save_double(f, v.as.h.e12); fputc(')', f);
         return;
     case VAL_STRING: {
         StrObj *s = as_str(v);
@@ -2702,7 +2942,7 @@ static Value bi_readcsv(Interp *I, Value *args, uint32_t n)
     char delim; int64_t skip;
     csv_opts(I, n >= 2 ? args[1] : val_null(), &delim, &skip, "readcsv");
     CsvLines c = csv_read_lines(I, path, "readcsv");
-    static_assert(sizeof(Value) <= 32, "Value copied in setjmp handler");
+    static_assert(sizeof(Value) <= 40, "Value copied in setjmp handler (40: the hyper-dual immediate is four doubles — boxing it would put refcount churn in every arithmetic op, the worse trade; the volatile-memcpy pattern is size-safe)");
     volatile Value out_v = { 0 };                      /* volatile: written after setjmp */
     jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
     if (setjmp(I->jmp)) {
@@ -3500,6 +3740,8 @@ static void who_describe(FILE *out, Value v)        /* compact type + shape/valu
     case VAL_FLOAT:   fprintf(out, "float      = %g", v.as.f); break;
     case VAL_COMPLEX: fprintf(out, "complex    = %g%+gi", v.as.z.re, v.as.z.im); break;
     case VAL_DUAL:    fprintf(out, "dual       = %g%+geps", v.as.d.v, v.as.d.e); break;
+    case VAL_HDUAL:   fprintf(out, "hdual      = %g%+geps1%+geps2%+geps12",
+                              v.as.h.v, v.as.h.e1, v.as.h.e2, v.as.h.e12); break;
     case VAL_STRING:  fprintf(out, "string     (%u chars)", as_str(v)->len); break;
     case VAL_ARRAY: {
         ArrObj *a = as_arr(v);
@@ -4119,7 +4361,7 @@ static Value bi_keep(Interp *I, Value *args, uint32_t n)
         if (kept) {
             g->names[w] = g->names[i]; g->namelens[w] = g->namelens[i];
             g->vals[w] = g->vals[i]; w++;
-        } else value_release(g->vals[i]);
+        } else { value_release(g->vals[i]); free((char *)g->names[i]); }
     }
     g->count = w;
     return val_null();
@@ -4131,7 +4373,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
     if (!g) return val_null();
     if (n == 0) {                                       /* clear everything user-defined */
         for (uint32_t i = g->n_protected; i < g->count; i++)
-            value_release(g->vals[i]);
+            { value_release(g->vals[i]); free((char *)g->names[i]); }
         g->count = g->n_protected;                      /* shadows removed: originals resurface */
         for (size_t gi = 0; gi < g_nlg; gi++) lg_free(&g_lg[gi]);
         g_nlg = 0;                                      /* empty shelves go too */
@@ -4144,7 +4386,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
         bool found = false;
         for (uint32_t i = g->n_protected; i < g->count; i++) {
             if (g->namelens[i] == s->len && memcmp(g->names[i], s->data, s->len) == 0) {
-                value_release(g->vals[i]);
+                value_release(g->vals[i]); free((char *)g->names[i]);
                 g->names[i] = g->names[g->count - 1];   /* swap-remove */
                 g->namelens[i] = g->namelens[g->count - 1];
                 g->vals[i] = g->vals[g->count - 1];
@@ -4163,7 +4405,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
                 for (uint32_t i = g->n_protected; i < g->count; i++)
                     if (g->namelens[i] == g_lg[gi].lens[m] &&
                         !memcmp(g->names[i], g_lg[gi].names[m], g_lg[gi].lens[m])) {
-                        value_release(g->vals[i]);
+                        value_release(g->vals[i]); free((char *)g->names[i]);
                         g->names[i]    = g->names[g->count - 1];
                         g->namelens[i] = g->namelens[g->count - 1];
                         g->vals[i]     = g->vals[g->count - 1];
@@ -4185,7 +4427,8 @@ static size_t value_bytes(Value v)
     switch (v.kind) {
     case VAL_ARRAY: {
         ArrObj *a = as_arr(v);
-        size_t elt = a->elt == ELT_COMPLEX || a->elt == ELT_DUAL ? 16 : a->elt == ELT_BOOL ? 1 : 8;
+        size_t elt = a->elt == ELT_HDUAL ? 32
+                   : a->elt == ELT_COMPLEX || a->elt == ELT_DUAL ? 16 : a->elt == ELT_BOOL ? 1 : 8;
         return sizeof *a + (size_t)a->rows * a->cols * elt;
     }
     case VAL_STRING: return sizeof(StrObj) + as_str(v)->len;
@@ -4345,7 +4588,7 @@ static Cplx *to_cplx(Interp *I, Value v, uint32_t *rows, uint32_t *cols, const c
                       who, who);
     if (!is_array(v)) runtime_error(I, "%s: expected a matrix, got %s", who, type_name(v.kind));
     ArrObj *a = as_arr(v);
-    if (a->elt == ELT_DUAL)
+    if (a->elt == ELT_DUAL || a->elt == ELT_HDUAL)
         runtime_error(I, "%s on dual matrices is not supported — autodiff flows through "
                          "elementwise ops, matmul, and reductions; dualval(A) for the value part", who);
     *rows = a->rows; *cols = a->cols;
@@ -4438,10 +4681,18 @@ static Value bi_det(Interp *I, Value *args, uint32_t n)
     ArrObj *a = as_arr(args[0]);
     uint32_t N = a->rows;
     if (a->cols != N) runtime_error(I, "det: matrix must be square (got %ux%u)", a->rows, a->cols);
-    if (a->elt == ELT_DUAL)
+    if (a->elt == ELT_DUAL || a->elt == ELT_HDUAL)
         runtime_error(I, "det on dual matrices is not supported — dualval(A) for the value part");
     bool real_in = a->elt != ELT_COMPLEX;
     if (N == 0) return val_int(1);
+    if (real_in && cozy_linalg()->det_d) {          /* entry 10: real dgetrf path */
+        double *Md = malloc((size_t)N * N * sizeof *Md);
+        for (size_t k = 0; k < (size_t)N * N; k++) Md[k] = as_double(arr_get(a, k));
+        double dd;
+        cozy_linalg()->det_d(Md, N, &dd);
+        free(Md);
+        return val_float(dd);
+    }
     Cplx *M = malloc((size_t)N * N * sizeof *M);
     for (size_t k = 0; k < (size_t)N * N; k++) M[k] = as_cplx(arr_get(a, k));
     Cplx det;
@@ -4482,7 +4733,8 @@ static Value bi_norm(Interp *I, Value *args, uint32_t n)
     if ((is_array(args[0]) && as_arr(args[0])->elt == ELT_STRING) || args[0].kind == VAL_STRING)
         runtime_error(I, "norm: undefined for strings");
     Value v = args[0];
-    if (v.kind == VAL_DUAL || (is_array(v) && as_arr(v)->elt == ELT_DUAL))
+    if (v.kind == VAL_DUAL || v.kind == VAL_HDUAL ||
+        (is_array(v) && (as_arr(v)->elt == ELT_DUAL || as_arr(v)->elt == ELT_HDUAL)))
         runtime_error(I, "norm on dual is not supported (it would drop the derivative) — "
                          "sqrt(sum(x .* x)) differentiates exactly");
     if (is_num(v)) return val_float(vmag(v));
@@ -4720,7 +4972,17 @@ static Value bi_chol(Interp *I, Value *args, uint32_t n)
     bool ro = arr_real(args[0]);
     if (c != N) { free(A); runtime_error(I, "chol: matrix must be square (got %ux%u)", N, c); }
     Cplx *L = malloc((size_t)(N ? N*N : 1) * sizeof *L);
-    if (cozy_linalg()->chol(A, N, L) != 0)
+    int chrc;
+    if (ro && cozy_linalg()->chol_d) {                  /* entry 10 phase 2: dpotrf */
+        size_t cc = (size_t)(N ? N*N : 1);
+        double *Ad = malloc(cc * sizeof *Ad), *Ld = malloc(cc * sizeof *Ld);
+        for (size_t q = 0; q < (size_t)N*N; q++) Ad[q] = A[q].re;
+        chrc = cozy_linalg()->chol_d(Ad, N, Ld);
+        if (chrc == 0) for (size_t q = 0; q < (size_t)N*N; q++) L[q] = (Cplx){ Ld[q], 0 };
+        free(Ad); free(Ld);
+    } else
+        chrc = cozy_linalg()->chol(A, N, L);
+    if (chrc != 0)
         { free(A); free(L); runtime_error(I, "chol: matrix is not positive definite"); }
     Value Lv = from_cplx(L, N, N, ro);     /* lower-triangular: L * L' = A  (Hermitian for complex) */
     free(A); free(L);
@@ -4753,6 +5015,14 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 
     if (hermitian) {
         double *ev = malloc((N ? N : 1) * sizeof *ev);
+        if (real_in && cozy_linalg()->eig_sym_d) {      /* entry 10 phase 2: dsyev */
+            size_t cc = (size_t)(N ? N*N : 1);
+            double *Ad = malloc(cc * sizeof *Ad), *Vd = malloc(cc * sizeof *Vd);
+            for (size_t k = 0; k < (size_t)N*N; k++) Ad[k] = A[k].re;
+            cozy_linalg()->eig_sym_d(Ad, N, ev, Vd);
+            for (size_t k = 0; k < (size_t)N*N; k++) V[k] = (Cplx){ Vd[k], 0 };
+            free(Ad); free(Vd);
+        } else
         cozy_linalg()->eig_herm(A, N, ev, V);
         for (uint32_t i = 0; i < N; i++) ord[i] = i;
         for (uint32_t i = 1; i < N; i++) {                 /* sort pairs by ascending eigenvalue */
@@ -4856,6 +5126,17 @@ static Value bi_svd(Interp *I, Value *args, uint32_t n)
     Cplx   *U = malloc((size_t)(m  ? m  : 1) * (k ? k : 1) * sizeof *U);
     Cplx   *V = malloc((size_t)(nc ? nc : 1) * (k ? k : 1) * sizeof *V);
     double *s = malloc((k ? k : 1) * sizeof *s);
+    if (ro && cozy_linalg()->svd_d) {                   /* entry 10 phase 2: dgesvd */
+        size_t ca = (size_t)m * nc, cu = (size_t)m * k, cv = (size_t)nc * k;
+        double *Ad = malloc((ca ? ca : 1) * sizeof *Ad);
+        double *Ud = malloc((cu ? cu : 1) * sizeof *Ud);
+        double *Vd = malloc((cv ? cv : 1) * sizeof *Vd);
+        for (size_t q = 0; q < ca; q++) Ad[q] = Araw[q].re;
+        cozy_linalg()->svd_d(Ad, m, nc, Ud, s, Vd);
+        for (size_t q = 0; q < cu; q++) U[q] = (Cplx){ Ud[q], 0 };
+        for (size_t q = 0; q < cv; q++) V[q] = (Cplx){ Vd[q], 0 };
+        free(Ad); free(Ud); free(Vd);
+    } else
     cozy_linalg()->svd(Araw, m, nc, U, s, V);
     free(Araw);
     for (uint32_t i = 1; i < k; i++)              /* same snap rule: s below */
@@ -4903,43 +5184,49 @@ static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0
 /* entire on the reals: real -> real, complex -> complex */
 /* Each kernel's dual case applies the chain rule: f(x + dx eps) =
  * f(x) + dx f'(x) eps, with the derivative expression dexpr in x. */
-#define ENTIRE_UNARY(name, rfn, cfn, dexpr)                                           \
+#define ENTIRE_UNARY(name, rfn, cfn, dexpr, d2expr)                                   \
     static Value sc_##name(Interp *I, Value v) { (void)I;                             \
         if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
         if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
             return val_dual(rfn(x), dx * (dexpr)); }                                  \
+        if (v.kind == VAL_HDUAL) { double x = v.as.h.v;                               \
+            HDual r = hd_chain(v.as.h, rfn(x), (dexpr), (d2expr));                    \
+            return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         return val_float(rfn(as_double(v))); }                                        \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-ENTIRE_UNARY(exp,   exp,   c_expz,   exp(x))
-ENTIRE_UNARY(sin,   sin,   c_sinz,   cos(x))
-ENTIRE_UNARY(cos,   cos,   c_cosz,   -sin(x))
-ENTIRE_UNARY(tan,   tan,   c_tanz,   1.0 / (cos(x) * cos(x)))
-ENTIRE_UNARY(sinh,  sinh,  c_sinhz,  cosh(x))
-ENTIRE_UNARY(cosh,  cosh,  c_coshz,  sinh(x))
-ENTIRE_UNARY(tanh,  tanh,  c_tanhz,  1.0 - tanh(x) * tanh(x))
-ENTIRE_UNARY(atan,  atan,  c_atanz,  1.0 / (1.0 + x * x))
-ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0))
+ENTIRE_UNARY(exp,   exp,   c_expz,   exp(x),  exp(x))
+ENTIRE_UNARY(sin,   sin,   c_sinz,   cos(x),  -sin(x))
+ENTIRE_UNARY(cos,   cos,   c_cosz,   -sin(x), -cos(x))
+ENTIRE_UNARY(tan,   tan,   c_tanz,   1.0 / (cos(x) * cos(x)), 2.0 * tan(x) / (cos(x) * cos(x)))
+ENTIRE_UNARY(sinh,  sinh,  c_sinhz,  cosh(x), sinh(x))
+ENTIRE_UNARY(cosh,  cosh,  c_coshz,  sinh(x), cosh(x))
+ENTIRE_UNARY(tanh,  tanh,  c_tanhz,  1.0 - tanh(x) * tanh(x), -2.0 * tanh(x) * (1.0 - tanh(x) * tanh(x)))
+ENTIRE_UNARY(atan,  atan,  c_atanz,  1.0 / (1.0 + x * x), -2.0 * x / ((1.0 + x * x) * (1.0 + x * x)))
+ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0), -x / pow(x * x + 1.0, 1.5))
 #undef ENTIRE_UNARY
 
 /* tower: real in domain -> real; real out of domain or complex -> complex */
-#define TOWER_UNARY(name, rfn, cfn, indomain, dexpr)                                  \
+#define TOWER_UNARY(name, rfn, cfn, indomain, dexpr, d2expr)                          \
     static Value sc_##name(Interp *I, Value v) {                                      \
         if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
-        if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
+        if (v.kind == VAL_DUAL || v.kind == VAL_HDUAL) {                              \
+            double x = v.kind == VAL_DUAL ? v.as.d.v : v.as.h.v;                      \
             if (!(indomain))                                                          \
                 runtime_error(I, #name ": dual input outside the real domain "        \
                                  "(the result would be complex, and dual and "        \
                                  "complex do not mix)");                              \
-            return val_dual(rfn(x), dx * (dexpr)); }                                  \
+            if (v.kind == VAL_DUAL) return val_dual(rfn(x), v.as.d.e * (dexpr));      \
+            HDual r = hd_chain(v.as.h, rfn(x), (dexpr), (d2expr));                    \
+            return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         double x = as_double(v);                                                      \
         if (indomain) return val_float(rfn(x));                                       \
         Cplx r = cfn((Cplx){ x, 0.0 }); return val_complex(r.re, r.im); }             \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x)
-TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0, 1.0 / sqrt(1.0 - x * x))
-TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0, -1.0 / sqrt(1.0 - x * x))
-TOWER_UNARY(acosh, acosh, c_acoshz, x >= 1.0,              1.0 / sqrt(x * x - 1.0))
-TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x))
+TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x,               -1.0 / (x * x))
+TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0, 1.0 / sqrt(1.0 - x * x),  x / pow(1.0 - x * x, 1.5))
+TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0, -1.0 / sqrt(1.0 - x * x), -x / pow(1.0 - x * x, 1.5))
+TOWER_UNARY(acosh, acosh, c_acoshz, x >= 1.0,              1.0 / sqrt(x * x - 1.0),  -x / pow(x * x - 1.0, 1.5))
+TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x),      2.0 * x / ((1.0 - x * x) * (1.0 - x * x)))
 #undef TOWER_UNARY
 
 /* log base b via the tower-aware natural log */
@@ -4950,6 +5237,11 @@ TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x))
             if (x < 0.0) runtime_error(I, #name ": dual input outside the real domain "\
                                           "(dual and complex do not mix)");           \
             return val_dual(log(x)/l, dx / (x * l)); }                                \
+        if (v.kind == VAL_HDUAL) { double x = v.as.h.v;                               \
+            if (x < 0.0) runtime_error(I, #name ": dual input outside the real domain "\
+                                          "(dual and complex do not mix)");           \
+            HDual r = hd_chain(v.as.h, log(x)/l, 1.0/(x*l), -1.0/(x*x*l));            \
+            return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         double x = as_double(v);                                                      \
         if (x >= 0.0) return val_float(log(x)/l);                                      \
         Cplx r = c_logz((Cplx){ x, 0.0 }); return val_complex(r.re/l, r.im/l); }       \
@@ -4963,6 +5255,7 @@ LOGB_UNARY(log2,   2.0)
     static Value sc_##name(Interp *I, Value v) { (void)I;                             \
         if (v.kind == VAL_COMPLEX) return val_complex(rfn(v.as.z.re), rfn(v.as.z.im)); \
         if (v.kind == VAL_DUAL) return val_dual(rfn(v.as.d.v), 0.0);   /* locally constant */ \
+        if (v.kind == VAL_HDUAL) return val_hdual(rfn(v.as.h.v), 0.0, 0.0, 0.0);      \
         if (v.kind == VAL_INT) return v;                                              \
         return val_float(rfn(as_double(v))); }                                        \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
@@ -4975,18 +5268,23 @@ ROUND_UNARY(trunc, trunc)
 /* real-domain only (error on complex) */
 static double digamma_d(Interp *I, double x);          /* defined with the special functions */
 static const double AD_2_SQRTPI = 1.1283791670955126;  /* 2/sqrt(pi): d/dx erf */
-#define REAL_ONLY(name, rfn, dexpr)                                                   \
+#define REAL_ONLY(name, rfn, dexpr, d2expr)                                           \
     static Value sc_##name(Interp *I, Value v) {                                      \
         if (v.kind == VAL_DUAL) { double x = v.as.d.v, dx = v.as.d.e;                 \
             return val_dual(rfn(x), dx * (dexpr)); }                                  \
+        if (v.kind == VAL_HDUAL) { double x = v.as.h.v;                               \
+            HDual r = hd_chain(v.as.h, rfn(x), (dexpr), (d2expr));                    \
+            return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(rfn(as_double(v))); \
         runtime_error(I, #name ": expected a real number, got %s", type_name(v.kind)); } \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
-REAL_ONLY(cbrt,   cbrt,   1.0 / (3.0 * cbrt(x) * cbrt(x)))
-REAL_ONLY(gamma,  tgamma, tgamma(x) * digamma_d(I, x))
-REAL_ONLY(lgamma, lgamma, digamma_d(I, x))
-REAL_ONLY(erf,    erf,    AD_2_SQRTPI * exp(-x * x))
-REAL_ONLY(erfc,   erfc,   -AD_2_SQRTPI * exp(-x * x))
+#define HD_NO_D2(name) (runtime_error(I, #name ": second derivative needs trigamma, " \
+        "which is not implemented — docket residue"), 0.0)
+REAL_ONLY(cbrt,   cbrt,   1.0 / (3.0 * cbrt(x) * cbrt(x)), -2.0 / (9.0 * x * cbrt(x) * cbrt(x)))
+REAL_ONLY(gamma,  tgamma, tgamma(x) * digamma_d(I, x), HD_NO_D2(gamma))
+REAL_ONLY(lgamma, lgamma, digamma_d(I, x), HD_NO_D2(lgamma))
+REAL_ONLY(erf,    erf,    AD_2_SQRTPI * exp(-x * x), -2.0 * x * AD_2_SQRTPI * exp(-x * x))
+REAL_ONLY(erfc,   erfc,   -AD_2_SQRTPI * exp(-x * x), 2.0 * x * AD_2_SQRTPI * exp(-x * x))
 #undef REAL_ONLY
 
 /* ---- special functions (real domain, elementwise via map_unary/map_binary) ---- */
@@ -5221,6 +5519,8 @@ static Value sc_sign(Interp *I, Value v) { (void)I;
         return m == 0.0 ? val_complex(0, 0) : val_complex(v.as.z.re/m, v.as.z.im/m); }
     if (v.kind == VAL_DUAL) { double x = v.as.d.v;
         return val_dual((double)((x > 0) - (x < 0)), 0.0); }   /* locally constant */
+    if (v.kind == VAL_HDUAL) { double x = v.as.h.v;
+        return val_hdual((double)((x > 0) - (x < 0)), 0, 0, 0); }
     runtime_error(I, "sign: expected a number, got %s", type_name(v.kind)); }
 static Value bi_sign(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_sign); }
 
@@ -5229,16 +5529,19 @@ static Value sc_real(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.re);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
     if (v.kind == VAL_DUAL)                          return v;   /* duals are real-valued */
+    if (v.kind == VAL_HDUAL)                         return v;
     runtime_error(I, "real: expected a number, got %s", type_name(v.kind)); }
 static Value sc_imag(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(v.as.z.im);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return val_float(0.0);
     if (v.kind == VAL_DUAL)                          return val_float(0.0);
+    if (v.kind == VAL_HDUAL)                         return val_float(0.0);
     runtime_error(I, "imag: expected a number, got %s", type_name(v.kind)); }
 static Value sc_conj(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_complex(v.as.z.re, -v.as.z.im);
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT)    return v;
     if (v.kind == VAL_DUAL)                          return v;   /* conj is identity on reals */
+    if (v.kind == VAL_HDUAL)                         return v;
     runtime_error(I, "conj: expected a number, got %s", type_name(v.kind)); }
 static Value sc_angle(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_COMPLEX)                       return val_float(atan2(v.as.z.im, v.as.z.re));
@@ -5276,17 +5579,17 @@ static Value map_binary(Interp *I, Value a, Value b, Value (*f)(Interp *, Value,
 }
 static Value sc_atan2(Interp *I, Value y, Value x) {
     if (y.kind == VAL_COMPLEX || x.kind == VAL_COMPLEX) runtime_error(I, "atan2: expected real numbers");
-    if (y.kind == VAL_DUAL || x.kind == VAL_DUAL)
+    if (y.kind == VAL_DUAL || x.kind == VAL_DUAL || y.kind == VAL_HDUAL || x.kind == VAL_HDUAL)
         runtime_error(I, "atan2 on dual is not supported (it would drop the derivative)");
     return val_float(atan2(as_double(y), as_double(x))); }
 static Value sc_hypot(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "hypot: expected real numbers");
-    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL || a.kind == VAL_HDUAL || b.kind == VAL_HDUAL)
         runtime_error(I, "hypot on dual is not supported (it would drop the derivative)");
     return val_float(hypot(as_double(a), as_double(b))); }
 static Value sc_mod(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "mod: expected real numbers");
-    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL || a.kind == VAL_HDUAL || b.kind == VAL_HDUAL)
         runtime_error(I, "mod on dual is not supported (it would drop the derivative)");
     double x = as_double(a), y = as_double(b);
     double r = (y == 0.0) ? x : x - y * floor(x / y);
@@ -5294,7 +5597,7 @@ static Value sc_mod(Interp *I, Value a, Value b) {
     return val_float(r); }
 static Value sc_rem(Interp *I, Value a, Value b) {
     if (a.kind == VAL_COMPLEX || b.kind == VAL_COMPLEX) runtime_error(I, "rem: expected real numbers");
-    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL)
+    if (a.kind == VAL_DUAL || b.kind == VAL_DUAL || a.kind == VAL_HDUAL || b.kind == VAL_HDUAL)
         runtime_error(I, "rem on dual is not supported (it would drop the derivative)");
     double x = as_double(a), y = as_double(b);
     double r = (y == 0.0) ? nan("") : fmod(x, y);
@@ -5786,6 +6089,7 @@ static bool elt_nonzero(Value e)
     case VAL_FLOAT:   return e.as.f != 0.0;
     case VAL_COMPLEX: return e.as.z.re != 0.0 || e.as.z.im != 0.0;
     case VAL_DUAL:    return e.as.d.v != 0.0;            /* value part, like < */
+    case VAL_HDUAL:   return e.as.h.v != 0.0;
     default:          return false;
     }
 }
@@ -6094,6 +6398,8 @@ static Value sc_isnan(Interp *I, Value v)
     case VAL_FLOAT:   return val_bool(isnan(v.as.f));
     case VAL_COMPLEX: return val_bool(isnan(v.as.z.re) || isnan(v.as.z.im));
     case VAL_DUAL:    return val_bool(isnan(v.as.d.v) || isnan(v.as.d.e));
+    case VAL_HDUAL:   return val_bool(isnan(v.as.h.v) || isnan(v.as.h.e1) ||
+                                      isnan(v.as.h.e2) || isnan(v.as.h.e12));
     default:          return val_bool(false);            /* int, bool: never NaN */
     }
 }
@@ -6104,6 +6410,8 @@ static Value sc_isinf(Interp *I, Value v)
     case VAL_FLOAT:   return val_bool(isinf(v.as.f));
     case VAL_COMPLEX: return val_bool(isinf(v.as.z.re) || isinf(v.as.z.im));
     case VAL_DUAL:    return val_bool(isinf(v.as.d.v) || isinf(v.as.d.e));
+    case VAL_HDUAL:   return val_bool(isinf(v.as.h.v) || isinf(v.as.h.e1) ||
+                                      isinf(v.as.h.e2) || isinf(v.as.h.e12));
     default:          return val_bool(false);
     }
 }
@@ -6114,6 +6422,8 @@ static Value sc_isfinite(Interp *I, Value v)
     case VAL_FLOAT:   return val_bool(isfinite(v.as.f));
     case VAL_COMPLEX: return val_bool(isfinite(v.as.z.re) && isfinite(v.as.z.im));
     case VAL_DUAL:    return val_bool(isfinite(v.as.d.v) && isfinite(v.as.d.e));
+    case VAL_HDUAL:   return val_bool(isfinite(v.as.h.v) && isfinite(v.as.h.e1) &&
+                                      isfinite(v.as.h.e2) && isfinite(v.as.h.e12));
     default:          return val_bool(true);             /* int, bool: always finite */
     }
 }
@@ -6128,6 +6438,7 @@ static double cmp_key(Interp *I, Value v)
     case VAL_FLOAT: return v.as.f;
     case VAL_BOOL:  return v.as.b ? 1.0 : 0.0;
     case VAL_DUAL:  return v.as.d.v;               /* value-part ordering, like < */
+    case VAL_HDUAL: return v.as.h.v;
     default:        runtime_error(I, "min/max: undefined for %s", type_name(v.kind));
     }
 }
@@ -6177,7 +6488,11 @@ EnvObj *globals_new(void)
     def_builtin(e, "svd",     bi_svd,     1, 1);
     def_builtin(e, "exp",     bi_exp,     1, 1);
     def_builtin(e, "log",     bi_log,     1, 1);
+    def_builtin(e, "ast",     bi_ast,     1, 1);
     def_builtin(e, "dual",    bi_dual,    2, 2);
+    def_builtin(e, "hdual",   bi_hdual,   3, 4);
+    def_builtin(e, "hdualval", bi_hdualval, 1, 1);
+    def_builtin(e, "hdual12", bi_hdual12, 1, 1);
     def_builtin(e, "dualval", bi_dualval, 1, 1);
     def_builtin(e, "dualeps", bi_dualeps, 1, 1);
     def_builtin(e, "sin",     bi_sin,     1, 1);

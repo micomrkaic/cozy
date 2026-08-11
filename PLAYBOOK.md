@@ -280,3 +280,14 @@ bundle: --embed-file encodes the payload, so absent strings prove
 nothing. The old law held both ways here: the stale bundle served
 stale docs for ten releases, and the fresh one was proven fresh by
 running dualeps and a constrained maximum inside it.
+
+### Trap: strict _POSIX_C_SOURCE on Darwin hides BSD symbols
+
+serve.c compiled for weeks on Linux and died on the Mac at
+INADDR_LOOPBACK: _POSIX_C_SOURCE asks Darwin's headers for strict
+POSIX, and BSD-heritage names are not POSIX — glibc leaks them anyway,
+Apple does not. The Linux container therefore CANNOT catch this class;
+the owner's Mac deploy is the real acceptance run for any new
+POSIX-adjacent code. Fix order: a guarded fallback #define for eternal
+constants; _DARWIN_C_SOURCE alongside when BSD APIs are genuinely
+needed; never just deleting the strict macro.

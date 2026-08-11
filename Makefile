@@ -16,7 +16,7 @@ STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
 LDFLAGS ?=
-SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c
+SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c serve.c
 HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h
 BIN      = cozy
 LIBS     = -lm $(LINALG_LIBS)
@@ -95,7 +95,7 @@ $(ASANDIR)/%.o: %.c | $(ASANDIR)
 
 -include $(wildcard $(OBJDIR)/*.d) $(wildcard $(ASANDIR)/*.d)
 
-$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/main.o
+$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
 
 # Headless test driver: same VM as `cozy`, but reads stdin line by line and
@@ -122,6 +122,9 @@ test: vmtest $(BIN)
 	@bash tests/run_demo.sh
 	@bash tests/run_io.sh
 	@python3 tests/run_doclint.py
+	@python3 tools/check_release.py
+	@python3 tools/gen_pkg_hints.py --check
+	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
 	@bash tests/run_emacs.sh
 
@@ -134,6 +137,15 @@ test-asan: vmtest-asan
 # works as-is.
 manual:
 	pandoc MANUAL.md -o MANUAL.pdf --pdf-engine=xelatex --toc --toc-depth=2 \
+	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
+
+# All three books. The verdict is the exit code: never pipe these through
+# a filter or silence them — 0.0.18 shipped four releases of stale PDFs
+# behind a > /dev/null (LESSONS: the pandoc that failed in silence).
+pdfs: manual
+	pandoc BOOK.md -o BOOK.pdf --pdf-engine=xelatex --resource-path=.:docs \
+	  --toc --toc-depth=1 -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
+	pandoc PACKAGES.md -o PACKAGES.pdf --pdf-engine=xelatex --toc --toc-depth=1 \
 	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
 
 run:    $(BIN); ./$(BIN)
@@ -175,4 +187,9 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 wasm-ubuntu:
 	NODE_PATH=/usr/share/nodejs $(MAKE) wasm EMCC_C23='-Dnullptr=NULL -Dalignof=_Alignof -Dtypeof=__typeof__ -Dstatic_assert=_Static_assert'
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu
+# The workout: heavier than the rite; run before big releases and after
+# backend work. make stress (tier0) or make BACKEND=openblas stress.
+stress: $(BIN) vmtest-asan
+	bash stress/run.sh
+
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu manual pdfs stress

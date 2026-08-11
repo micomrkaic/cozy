@@ -30,6 +30,7 @@ setTimeout(() => {
   const ed = d.getElementById("edtext");
   ed.value = "let cube = fn x -> x^3\ncube(4)";
   d.getElementById("ed-run").dispatchEvent(new w.MouseEvent("click", { bubbles: true }));
+  setTimeout(() => {   /* eval routing is async since the workbench (0.0.32) */
   if (!w.__evals.length || !w.__evals[0].includes("cube(4)")) fail("editor buffer not evaluated directly");
   if (!d.getElementById("term").textContent.includes("% editor script")) fail("no editor marker in terminal");
   if (!d.getElementById("term").textContent.includes("ok")) fail("module output not shown in terminal");
@@ -46,6 +47,7 @@ setTimeout(() => {
     if (!h.includes("<code>pretty on|off</code>") || h.includes("\\|")) fail("mdToHtml mishandles \\| escapes");
   }
   console.log("page: editor run, terminal echo, focus, and manual interception OK (stub)");
+  }, 50);
   // ---- phase 2: the real bundle through the real page ----
   try {
     const bundle = fs.readFileSync("docs/cozy.js", "utf8");

@@ -3,7 +3,7 @@
 *A book of worked problems — practical computing with a small array
 language.*
 
-![](og-card.png)
+![Cozy by Example](vignettes/title_page.png)
 
 
 This book is written in the tradition of the calculator applications
@@ -46,7 +46,7 @@ Appendix F. Index of builtins
 
 ## 1. Basic calculations
 
-![](vignettes/vin1.png)
+![Basic calculations](vignettes/cozy_01_basic_calculations.png)
 
 The prompt is a calculator first. Three habits from the start: `ans` carries
 the last value you saw into the next expression; `format(n)` sets displayed
@@ -120,7 +120,7 @@ every element. Write the function once; the array case is free.
 
 ## 2. Values and types
 
-![](vignettes/vin2.png)
+![Values and types](vignettes/cozy_02_values_and_types.png)
 
 Everything is a value: numbers, strings, arrays, records, functions —
 anything can sit in a variable, ride a pipe, or live in a record field.
@@ -202,7 +202,7 @@ built in so these facts are one keystroke from checkable.
 
 ## 3. Strings
 
-![](vignettes/vin3.png)
+![Strings](vignettes/cozy_03_strings.png)
 
 A dozen builtins cover practical text: `upper lower trim`, the predicates
 `contains startswith endswith`, `strrep` for replacement, `strsplit` and
@@ -303,7 +303,7 @@ in KNOWN_LIMITATIONS for the successor.
 
 ## 4. Complex numbers
 
-![](vignettes/vin4.png)
+![Complex numbers](vignettes/cozy_04_complex_numbers.png)
 
 Complex values are ordinary numbers here: `3 + 4i` is a literal, and
 `abs`, `angle`, `conj`, `real`, `imag` do what mathematics says.
@@ -381,7 +381,7 @@ as `abs` confirms.
 
 ## 5. Matrices
 
-![](vignettes/vin5.png)
+![Matrices](vignettes/cozy_05_matrices.png)
 
 Arrays with two dimensions in play — the native material of the language.
 This chapter is the mechanics: building, indexing, computing, and
@@ -498,7 +498,7 @@ glance.
 
 ## 6. Reading and writing data
 
-![](vignettes/vin6.png)
+![Reading and writing data](vignettes/cozy_06_reading_and_writing_data.png)
 
 Numbers rarely start life at the prompt. `writecsv`/`readcsv` move plain
 numeric matrices; `readtable` reads a headered CSV into a record of named
@@ -574,7 +574,7 @@ variables back. The standard library never travels; only your names do.
 
 ## 7. Writing your own functions
 
-![](vignettes/vin7.png)
+![Writing your own functions](vignettes/cozy_07_writing_your_own_functions.png)
 
 `fn` makes a function; `let` names it; recursion works; `body` shows the
 source of what you defined.
@@ -632,7 +632,7 @@ from now, you can ask your session what exactly this `bmi` computes.
 
 ## 8. Anonymous functions and pipes
 
-![](vignettes/vin8.png)
+![Anonymous functions and pipes](vignettes/cozy_08_anonymous_functions_and_pipes.png)
 
 The pipe family is the language's syntax for *thought order*: data first,
 then what happens to it. `|>` feeds a value to a function; `~>` maps over
@@ -678,7 +678,7 @@ per employee; `|> sum` closes the week: 4,592.75. One line per idea.
 
 ## 9. Records
 
-![](vignettes/vin9.png)
+![Records](vignettes/cozy_09_records.png)
 
 Records collect named values: `{sku = "M8x40", price = 0.42}`. Fields come
 out with a dot; `fields` lists them; functions return them when one answer
@@ -720,9 +720,39 @@ the fan-out doesn't care who wrote its entries.
 
 ---
 
+**Problem 9.9 — A namespace is a record that grew up.** Pack an API into
+a record and three things come free: a manifest, dynamic access, and
+sibling calls. A fourth thing comes due — the law at the end.
+
+```
+cozy> let stats = {se = fn v -> sqrt(v / 100), z = fn m -> m / stats.se(4.0)}
+{se = <fn/1>, z = <fn/1>}
+cozy> stats.z(0.5)
+2.5
+cozy> getfield(stats, "z")(0.5)
+2.5
+cozy> fields(stats)'
+["se", "z"]
+```
+
+Now the fourth thing. Try `let m = stats; keep("m"); m.z(0.5)` — it dies
+with `undefined name 'stats'`.
+
+**Discussion.** `stats.z` calls `stats.se` through the record's own
+global name — legal because functions resolve globals at *call* time,
+by which point `stats` exists. `getfield` computes the field name at
+runtime; `fields` lists the API. The failing line is the lesson, staged
+deliberately: copying the record to `m` and `keep`ing only `m` looks
+like encapsulation, but `z`'s body still says `stats.se`, resolved at
+call time — and `keep` deleted `stats`. A record namespace hides the
+face, never the body: helpers must survive in the workspace, which is
+why every standard package tag-prefixes its internals (`op_`, `ad_`,
+`sl_`) so one glob spares them. The full authoring convention lives in
+the packages guide.
+
 ## 10. Calculus
 
-![](vignettes/vin10.png)
+![Calculus](vignettes/cozy_10_calculus.png)
 
 `integral` (adaptive Simpson), `fzero` (Brent root-finding), `fminbnd`
 (bounded minimization), and poly.cz's exact polynomial calculus.
@@ -1050,7 +1080,7 @@ centuries of analysis.
 
 ## 11. Linear algebra
 
-![](vignettes/vin11.png)
+![Linear algebra](vignettes/cozy_11_linear_algebra.png)
 
 Matrices are the native tongue: `\` solves systems, `eig`, `lu`, `qr`,
 `svd`, `chol` decompose, and poly.cz's `polyfit` does least squares.
@@ -1141,7 +1171,7 @@ algebra is in the core.
 
 ## 12. Probability, statistics, and data
 
-![](vignettes/vin12.png)
+![Probability and statistics](vignettes/cozy_12_prob_stat.png)
 
 dist.cz supplies the distributions; `writecsv`/`readcsv` move data in and
 out; seeded `rng` makes every simulation a repeatable experiment.
@@ -1226,7 +1256,7 @@ live, on the poor man's Gaussian no less.
 
 ## 13. Plotting
 
-![](vignettes/vin13.png)
+![Plotting](vignettes/cozy_13_plotting.png)
 
 Cozy plots through three backends, chosen by environment: in the
 **browser** the default is SVG — dark-themed, rendered into the Plots pane
@@ -1333,7 +1363,7 @@ working.
 
 ## 14. The Cozy idiom
 
-![](vignettes/vin14.png)
+![The Cozy idiom](vignettes/cozy_14_idiom.png)
 
 The unique syntax — lambdas, `where`, index-bound reductions, and the
 pipe family — was designed to *combine*. This chapter is about the
@@ -1610,7 +1640,7 @@ estimation zoo.
 
 ## Appendix A. Finance (finance.cz)
 
-![](vignettes/vinA.png)
+![Finance](vignettes/cozy_A_finance.png)
 
 **Problem A.1 — The mortgage, end to end.** A 425,000 house, 20% down,
 30 years at 5.75% — payment, lifetime interest, and the effect of 300
@@ -1684,7 +1714,7 @@ begin to trust it on the contracts that have no formula.
 
 ## Appendix B. Astronomy (astro.cz)
 
-![](vignettes/vinB.png)
+![Astronomy](vignettes/cozy_B_astro.png)
 
 **Problem B.1 — A July Saturday in Ljubljana.** Sunrise, sunset, and day
 length at 46.05°N, 14.51°E, UTC+2.
@@ -1721,7 +1751,7 @@ twenty days.
 
 ## Appendix C. Physics (phys.cz)
 
-![](vignettes/vinC.png)
+![Physics](vignettes/cozy_C_physics.png)
 
 **Problem C.1 — Orbital and escape velocity.** Speed for a 400 km circular
 orbit; escape speed from the surface.
@@ -1758,7 +1788,7 @@ found by a microwave antenna.
 
 ## Appendix D. Random matrices (rmt.cz)
 
-![](vignettes/vinD.png)
+![Random matrices](vignettes/cozy_D_random_matrices.png)
 
 **Problem D.1 — Wigner's semicircle, witnessed.** The eigenvalues of a
 400 × 400 GOE matrix.
@@ -1782,7 +1812,7 @@ hardware.
 
 ## Appendix E. Symbolic differentiation (symb.cz)
 
-![](vignettes/vinE.png)
+![Symbolic differentiation](vignettes/cozy_E_symbolic_differentiation.png)
 
 **Problem E.1 — The derivative, symbolically, checked numerically.**
 
@@ -1889,7 +1919,7 @@ integrator — the package and the core, one calculus.
 
 ## Appendix F. Index of builtins
 
-![](vignettes/vinF.png)
+![Index of builtins](vignettes/cozy_F_index.png)
 
 Every builtin and constant, alphabetically — machine-generated from the
 interpreter's own documentation table, so this index cannot drift from the
@@ -1898,179 +1928,8 @@ language.
 <!-- INDEX:BEGIN -->
 | Name | Signature | Description | Area |
 |---|---|---|---|
-| `abs` | `abs(x)` | absolute value, or complex magnitude | math |
-| `acos` | `acos(x)` | arccosine (complex outside [-1, 1]) | trig |
-| `acosh` | `acosh(x)` | inverse hyperbolic cosine (complex below 1) | trig |
-| `all` | `all(mask) \| all(mask, dim)` | true if every element is nonzero/true (overall or along dim) | reductions |
-| `angle` | `angle(z)` | argument atan2(im, re) (elementwise) | complex |
-| `any` | `any(mask) \| any(mask, dim)` | true if any element is nonzero/true (overall or along dim) | reductions |
-| `arg` | `arg(z)` | argument atan2(im, re) (alias for angle) | complex |
-| `asin` | `asin(x)` | arcsine (complex outside [-1, 1]) | trig |
-| `asinh` | `asinh(x)` | inverse hyperbolic sine (complex-aware) | trig |
-| `assert` | `assert(cond) \| assert(cond, tmpl, ...)` | error unless cond is true | core |
-| `atan` | `atan(x)` | arctangent (complex-aware) | trig |
-| `atan2` | `atan2(y, x)` | two-argument arctangent (elementwise) | trig |
-| `atanh` | `atanh(x)` | inverse hyperbolic tangent (complex outside (-1, 1)) | trig |
-| `besselj` | `besselj(n, x)` | Bessel function of the first kind, integer order n | math |
-| `bessely` | `bessely(n, x)` | Bessel function of the second kind, integer order n (x > 0) | math |
-| `beta` | `beta(a, b)` | beta function (a, b > 0, elementwise) | math |
-| `betainc` | `betainc(x, a, b)` | regularized incomplete beta I_x(a, b) (Student-t / F CDFs) | math |
-| `body` | `body(f)` | print the source of a user-defined function | core |
-| `buildinfo` | `buildinfo()` | build introspection -> {backend, version, built}; backend names the linear-algebra kernels | core |
-| `cbrt` | `cbrt(x)` | real cube root | math |
-| `cd` | `cd("dir") \| cd` | change the working directory (persists, unlike !cd); bare cd goes home | files |
-| `ceil` | `ceil(x)` | round toward +infinity (componentwise on complex) | math |
-| `chol` | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) | linear algebra |
-| `clear` | `clear() \| clear("a", ...)` | remove all user variables, or the named ones; clearing a shadow restores the standard-library original | core |
-| `conj` | `conj(z)` | complex conjugate (elementwise) | complex |
-| `contains` | `contains(s, sub)` | true if sub occurs in s | strings |
-| `corr` | `corr(X) \| corr(x, y)` | Pearson correlation matrix of X's columns, or scalar correlation of two vectors | reductions |
-| `cos` | `cos(x)` | cosine (complex-aware, elementwise) | trig |
-| `cosh` | `cosh(x)` | hyperbolic cosine (complex-aware) | trig |
-| `cov` | `cov(X[, w]) \| cov(x, y[, w])` | covariance matrix of X's columns (rows = observations), or scalar cov of two vectors; w as in var | reductions |
-| `cumprod` | `cumprod(A)` | cumulative product along a vector, or down each column | arrays |
-| `cumsum` | `cumsum(A)` | cumulative sum along a vector, or down each column | arrays |
-| `dense` | `dense(S)` | the dense matrix a sparse one represents (the explicit gate in the promotion law) | sparse |
-| `det` | `det(A)` | determinant via LU | linear algebra |
-| `diag` | `diag(x)` | vector -> diagonal matrix; matrix -> its diagonal as a column | arrays |
-| `diff` | `diff(A)` | consecutive differences along a vector, or down each column | arrays |
-| `digamma` | `digamma(x)` | digamma psi(x) = d/dx log gamma(x) | math |
-| `dis` | `dis(f)` | disassemble a function's bytecode (compiler/VM introspection) | core |
-| `dot` | `dot(a, b)` | inner product of two vectors | linear algebra |
-| `dual` | `dual(a, b)` | the dual number a + b*eps with eps^2 = 0 (elementwise; dual(x, seed) seeds a derivative direction) | autodiff |
-| `dualeps` | `dualeps(x)` | the eps (derivative) part of a dual; 0 for a plain number | autodiff |
-| `dualval` | `dualval(x)` | the value part of a dual; a plain number passes through (total, so constant branches differentiate) | autodiff |
-| `e` | `e` | 2.71828..., Euler's number | constant |
-| `eig` | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) | linear algebra |
-| `endswith` | `endswith(s, p)` | true if s ends with p | strings |
-| `eps` | `eps` | machine epsilon for Float (2^-52) | constant |
-| `erf` | `erf(x)` | error function (real, elementwise) | math |
-| `erfc` | `erfc(x)` | complementary error function 1 - erf(x) | math |
-| `error` | `error(msg) \| error(tmpl, ...)` | raise a runtime error (fmt-style template) | core |
-| `eulergamma` | `eulergamma` | 0.57722..., the Euler-Mascheroni constant | constant |
-| `eval` | `eval("code")` | run a string as Cozy code in this session; returns the last value | core |
-| `exit` | `exit \| exit(code)` | end the session (also: quit) | repl |
-| `exp` | `exp(x)` | e raised to the x (complex-aware) | math |
-| `eye` | `eye(n)` | n-by-n identity matrix | arrays |
-| `fields` | `fields(r)` | the record's field names, as a string column | core |
-| `find` | `find(mask)` | 1-based positions of nonzero/true elements (row-major) | arrays |
-| `fliplr` | `fliplr(A)` | reverse column order (flip left-right) | arrays |
-| `flipud` | `flipud(A)` | reverse row order (flip up-down) | arrays |
-| `floor` | `floor(x)` | round toward -infinity (componentwise on complex) | math |
-| `fminbnd` | `fminbnd(f, a, b)` | minimum of f on [a, b] (Brent) -> {x, fx} | solvers |
-| `fmt` | `fmt(tmpl, ...)` | print's template, returned as a string instead of printed | strings |
-| `format` | `format / format(n) / format(mode, digits)` | number display: format(n) sets SIGNIFICANT digits; format("fixed", d) / format("sci", d) / format("auto", d) set the mode and digits explicitly; format() shows the current setting | core |
-| `fzero` | `fzero(f, a, b)` | root of f in [a, b] (Brent; f(a), f(b) must differ in sign) | solvers |
-| `gamma` | `gamma(x)` | gamma function (real, elementwise) | math |
-| `gammainc` | `gammainc(x, a)` | regularized lower incomplete gamma P(a, x) (the chi^2 CDF) | math |
-| `getfield` | `getfield(r, name)` | dynamic field read; error if the record has no such field | core |
-| `help` | `help / help(f)` | help lists every builtin; help(f) describes one | core |
-| `hist` | `hist(y[, nbins][, opts])` | histogram via gnuplot; opts as in plot (yrange to anchor the axis, label for the legend) | plot |
-| `hypot` | `hypot(a, b)` | sqrt(a^2 + b^2) without overflow (elementwise) | math |
-| `imag` | `imag(z)` | imaginary part (elementwise) | complex |
-| `inf` | `inf` | positive infinity (Float) | constant |
-| `input` | `input("prompt")` | read one line from the keyboard as a string (window.prompt in the browser) | files |
-| `integral` | `integral(f, a, b[, tol])` | definite integral (adaptive Simpson, finite limits; default tol 1e-10) | solvers |
-| `inv` | `inv(A)` | matrix inverse (solves A \\ I) | linear algebra |
-| `isfinite` | `isfinite(x)` | elementwise test for a finite value -> logical | test |
-| `isinf` | `isinf(x)` | elementwise test for +/-Inf -> logical | test |
-| `isnan` | `isnan(x)` | elementwise test for NaN -> logical | test |
-| `keep` | `keep("a", "b", ...)` | remove all user variables except the named ones (the complement of clear) | core |
-| `kron` | `kron(A, B)` | Kronecker product: (m x n) kron (p x q) -> (mp x nq) | linear algebra |
-| `lbeta` | `lbeta(a, b)` | log of the beta function | math |
-| `length` | `length(x)` | longest dimension of x (0 if empty) | core |
-| `lgamma` | `lgamma(x)` | log of \|gamma(x)\| (real, elementwise) | math |
-| `linspace` | `linspace(a, b, n)` | row of n points evenly spaced from a to b inclusive | arrays |
-| `ln` | `ln(x)` | natural logarithm (alias for log) | math |
-| `load` | `load("file.cz")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) | core |
-| `log` | `log(x)` | natural logarithm (complex for negatives) | math |
-| `log10` | `log10(x)` | base-10 logarithm (complex for negatives) | math |
-| `log2` | `log2(x)` | base-2 logarithm (complex for negatives) | math |
-| `lower` | `lower(s)` | lowercase (ASCII bytes) | strings |
-| `ls` | `ls \| ls("dir") \| ls("*.cz")` | directory listing as a string array (globs supported) | files |
-| `lu` | `lu(A)` | LU with partial pivoting -> {L, U, p}, so P*A = L*U | linear algebra |
-| `manual` | `manual [doc]` | page rendered documentation: manual, manual book\|packages\|changelog\|lessons\|design\|readme | repl |
-| `map` | `map(f, A)` | apply f to each element of A, returning an array of results | functional |
-| `max` | `max(A) \| max(a, b) \| max(A, [], dim)` | largest element; elementwise max; or max along dim | reductions |
-| `mean` | `mean(A) \| mean(A, dim)` | mean of all elements, or along dim | reductions |
-| `median` | `median(A) \| median(A, dim)` | median of all elements, or along dim | reductions |
-| `mem` | `mem` | print workspace size (variables) and peak process memory | core |
-| `min` | `min(A) \| min(a, b) \| min(A, [], dim)` | smallest element; elementwise min; or min along dim | reductions |
-| `mod` | `mod(a, b)` | modulo, result takes the sign of b (elementwise) | math |
-| `more` | `more on\|off` | page long output through $PAGER | repl |
-| `names` | `names() \| names("vars"\|"funcs")` | your workspace names as a sorted string column (the programmatic who) | core |
-| `nan` | `nan` | not-a-number (Float); nan never equals anything, itself included | constant |
-| `nnz` | `nnz(A)` | the number of stored nonzeros (sparse) or nonzero entries (dense) | sparse |
-| `norm` | `norm(x) \| norm(x, p)` | vector p-norm (p = 1 or 2, default 2); matrix Frobenius norm | linear algebra |
-| `norminv` | `norminv(p)` | standard normal quantile (inverse CDF) | math |
-| `now` | `now` | current local date and time: {y, m, d, h, mi, s} | core |
-| `num` | `num(s)` | parse a string as a number (Int if exact, else Float) | strings |
-| `numel` | `numel(x)` | number of elements (rows*cols) | core |
-| `ones` | `ones(r, c)` | r-by-c matrix of ones | arrays |
-| `pause` | `pause() \| pause("msg")` | wait for the user before continuing (alert in the browser) | files |
-| `phi` | `phi` | 1.61803..., the golden ratio | constant |
-| `pi` | `pi` | 3.14159..., the circle constant | constant |
-| `pick` | `pick(mask, a, b)` | elementwise select: a where the mask is true, else b | arrays |
-| `plot` | `plot(y) \| plot(x, y) \| plot(x, Y, opts)` | line plot via gnuplot; Y columns are series; opts: style string or {title, xlabel, ylabel, style, logx, logy, grid, xrange, yrange, label, label1..labelN} | plot |
-| `pretty` | `pretty on\|off` | aligned multi-line matrix display (default on in the REPL) | repl |
-| `print` | `print(...) \| print(tmpl, ...)` | print values; template fills {} in order; {:[-][w][.p][f\|e\|g]} formats a hole ({{ }} literal) | core |
-| `prod` | `prod(A) \| prod(A, dim)` | product of all elements, or along dim | reductions |
-| `pwd` | `pwd` | the current working directory, as a string | files |
-| `qr` | `qr(A)` | Householder QR -> {Q, R} (real or complex) | linear algebra |
-| `quantile` | `quantile(x, p)` | quantile(s) of the data at probability p (scalar or vector); linear interpolation | reductions |
-| `rand` | `rand() \| rand(n) \| rand(r, c)` | uniform draws on [0, 1) | random |
-| `randi` | `randi(imax[, r, c]) \| randi([lo, hi], ...)` | uniform random integers | random |
-| `randn` | `randn() \| randn(n) \| randn(r, c)` | standard-normal draws | random |
-| `readcsv` | `readcsv(file[, opts])` | numeric CSV -> Float matrix; empty cells are nan; opts: {delim, skip} | files |
-| `readtable` | `readtable(file[, opts])` | CSV with a header -> record of column vectors named from the header | files |
-| `real` | `real(z)` | real part (elementwise) | complex |
-| `rem` | `rem(a, b)` | remainder, result takes the sign of a (elementwise) | math |
-| `repmat` | `repmat(A, m, n)` | tile A into an m-by-n grid of copies | arrays |
-| `reshape` | `reshape(A, r, c)` | reinterpret A's elements as r-by-c (row-major), element count must match | arrays |
-| `rng` | `rng(seed)` | reseed the generator (xoshiro256**); same seed, same stream | random |
-| `round` | `round(x)` | round to nearest (componentwise on complex) | math |
-| `save` | `save("file.cz")` | write all variables and functions as reloadable source (restore with load) | core |
-| `setfield` | `setfield(r, name, v)` | a new record with the field replaced or appended; r is untouched | core |
-| `sign` | `sign(x)` | -1 / 0 / +1 by sign; z/\|z\| for complex | math |
-| `sin` | `sin(x)` | sine (complex-aware, elementwise) | trig |
-| `sinh` | `sinh(x)` | hyperbolic sine (complex-aware) | trig |
-| `size` | `size(x)` | [rows, cols] of x (a scalar is 1x1) | core |
-| `sort` | `sort(A)` | ascending sort: a vector as a whole, a matrix by column | arrays |
-| `sparse` | `sparse(A) / sparse(i, j, v, m, n)` | a sparse (CSR) matrix from a dense one, or from 1-based triplets (duplicates summed) | sparse |
-| `speye` | `speye(n)` | the n-by-n sparse identity | sparse |
-| `sprand` | `sprand(m, n, d)` | a sparse m-by-n matrix with ~d*m*n uniform(0,1) entries at distinct random positions | sparse |
-| `sprandn` | `sprandn(m, n, d)` | like sprand with standard-normal values | sparse |
-| `sqrt` | `sqrt(x)` | square root (complex result for negative reals) | math |
-| `startswith` | `startswith(s, p)` | true if s begins with p | strings |
-| `std` | `std(A) \| std(A, w) \| std(A, w, dim)` | standard deviation (sqrt of var, same normalization) | reductions |
-| `str` | `str(x)` | the display text of any value, as a string | strings |
-| `strfind` | `strfind(s, pat)` | 1-based start positions of every occurrence of pat in s (overlapping), [] if none | strings |
-| `strjoin` | `strjoin(a, sep)` | join a string array with a separator | strings |
-| `strrep` | `strrep(s, old, new)` | replace every occurrence of old with new | strings |
-| `strsplit` | `strsplit(s, sep)` | split a string on a separator, giving a string row vector | strings |
-| `sum` | `sum(A) \| sum(A, dim)` | sum of all elements, or along dim (1 = columns, 2 = rows) | reductions |
-| `svd` | `svd(A)` | thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending) | linear algebra |
-| `system` | `system(cmd)` | run a shell command string; return its exit status | core |
-| `tan` | `tan(x)` | tangent (complex-aware, elementwise) | trig |
-| `tanh` | `tanh(x)` | hyperbolic tangent (complex-aware) | trig |
-| `tic` | `tic` | start the wall-clock timer (monotonic) | core |
-| `toc` | `toc` | seconds elapsed since tic | core |
-| `trace` | `trace(A)` | sum of the diagonal | linear algebra |
-| `trim` | `trim(s)` | strip leading and trailing whitespace | strings |
-| `trunc` | `trunc(x)` | round toward zero | math |
-| `unique` | `unique(A)` | sorted distinct elements; vectors keep orientation, matrices flatten to a row | arrays |
-| `upper` | `upper(s)` | uppercase (ASCII bytes) | strings |
-| `var` | `var(A) \| var(A, w) \| var(A, w, dim)` | variance; w = 0 divides by N-1 (default), w = 1 by N | reductions |
-| `version` | `version` | the interpreter version, as a string | core |
-| `who` | `who \| who("functions", "sorted")` | list the workspace; filter by "records"/"functions"/"vars", add "sorted" for name order | core |
-| `whof` | `whof \| whof("sorted")` | your functions only (shorthand for who("functions")) | core |
-| `whor` | `whor \| whor("sorted")` | your records only (shorthand for who("records")) | core |
-| `whos` | `whos` | the whole workspace, sorted by name (who("sorted")) | core |
-| `whov` | `whov \| whov("sorted")` | your variables only (shorthand for who("vars")) | core |
-| `writecsv` | `writecsv(file, A[, opts])` | matrix -> CSV, full precision (round-trips); opts: {delim} | files |
-| `zeros` | `zeros(r, c)` | r-by-c matrix of zeros | arrays |
 
-*171 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
+*0 names; the same table drives `help`, tab completion, the reference, and the Emacs mode.*
 <!-- INDEX:END -->
 
 ---

@@ -1,0 +1,23 @@
+# Session blocks (charter debt, paid 0.0.28): '.. ' chains a case onto the
+# previous one's session. State that could never be golden-tested before —
+# multi-line lets, loads-then-use, ans, the seeded rng — now can.
+let acc = 10
+=> 10
+.. let acc = acc + 5; acc
+=> 15
+.. acc * 2
+=> 30
+.. ans + acc
+=> 45
+load("packages/autodiff.cz"); 1
+=> 1
+.. let f = fn x -> x ^ 3; d(f)(2)
+=> 12
+.. d(d(f))(2)
+=> !components are already dual
+let θ = [1.0; 2.0]
+=> [1; 2]
+.. θ[1] = 9.0; θ
+=> [9; 2]
+.. sum(θ)
+=> 11

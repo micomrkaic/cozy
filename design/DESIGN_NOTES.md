@@ -108,11 +108,29 @@ Nelder–Mead and a quasi-Newton to start; constrained later or never.
 **Trigger.** The first optimization done by hand-rolled iteration at the
 prompt that deserved a verb.
 
-## 4. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
+## 4. First-class differentiation — 4a SHIPPED 0.0.12; HESSIAN INCREMENT
+SHIPPED 0.0.24 (VAL_HDUAL/ELT_HDUAL hyper-duals — the fixed-size jet the
+Hessian actually needs; hess(f) and minimize_newton/maximize_newton on top;
+Newton solves a PD quadratic in one iteration, golden-pinned. Residue:
+gamma/lgamma refuse hyper-duals pending a trigamma implementation — trigger:
+the first second-derivative-of-gamma need, likely an MLE with gamma-family
+likelihoods. jet(k>2) remains parked: Taylor territory, no named user.)
+## 4-was. First-class differentiation — 4a SHIPPED 0.0.12 (dual scalars + ELT_DUAL
 dense element + autodiff.cz d/grad; complex×dual a recorded rejection with a
 teaching gate; jet(k) parked — dual is its k=1 instantiation, trigger: the
-first Hessian or Taylor-series need). 4b (ast quotation) still parked on its
-own trigger. ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
+first Hessian or Taylor-series need). 4b SHIPPED 0.0.30: ast(f) reparses the
+closure's retained source into a symb-shaped record tree ({op="pow", l,
+n} with numeric exponents, unary minus as mul(-1), single-arg calls as
+{op=name, l}); v1 scope = the symb expression subset, everything else a
+teaching gate. The chartered payoff is a golden: ddx(ast(fn x -> x^2 +
+sin(x)).body) simplifies to 2x + cos(x). The residue trigger FIRED the day it
+shipped (the owner quoted op_dot, whose body uses .*) and was paid at
+0.0.31: quotation is now TOTAL over the expression and statement grammar
+— elementwise ops, comparisons, logic, pipes, calls of any arity (argc +
+a1..aN fields), indexing, fields, ranges, matrices, transposes, if/let/
+assign/blocks/loops/break/return, nested fn — with symb's shapes kept
+where symb has opinions (pow-with-constant carries n; single-arg calls
+are {op=name, l}). ENTRY 3 (optimization) IS NOW UNBLOCKED: grad exists.
 
 **Motivation.** Neutrino's symb.cz proved symbolic differentiation is
 expressible with expression trees as records — but only via constructor
@@ -299,7 +317,20 @@ tame this:
 **Trigger.** The first co-skewness/co-kurtosis workload, or the first
 third-order derivative a session actually needs.
 
-## 7. Namespaces: records are the module system (with one law attached)
+## 7. Namespaces — REVIEWED 0.0.23 (design confirmed; all claims re-verified
+by execution in Cozy: sibling recursion via the record's global name, the
+getfield dynamic door — getfield LANDED at 0.0.6, so "dot is literal-only
+until getfield lands" below is satisfied — who's load groups inherited from
+upstream 2.28 (clutter solved orthogonally, exactly as the baton predicted),
+and the pack-then-prune trap reproduced verbatim: keep() of a record of
+optimizer faces killed the first call on the helpers it hid. RULING, same
+logic as the Neutrino anti-decision: the three instrument packages
+(autodiff, optim, sparselin) are GRANDFATHERED flat — short daily-typed
+faces are the feature, helpers are already tag-prefixed — and the record
+namespace is the recommendation for future large-API packages. The law is
+now written in PACKAGES.md "Writing your own", where authors will read it.)
+
+## 7-old. Namespaces: records are the module system (with one law attached)
 
 **Decision.** Cozy gets no module kind, no import statement, no namespace
 syntax. Packages that want a namespace pack their public API into a
@@ -332,3 +363,66 @@ evolved; migration would churn hundreds of verified transcript lines for
 zero behavioral gain. Cozy-original packages should prefer the record
 namespace from birth, with the helper-prefix convention in the package
 authoring guide from day one.
+
+## 9. The workbench — SHIPPED 0.0.32 (owner's ruling: "we are ready for the
+GUI — it will facilitate econometric testing"). Dual engine, one page: cozy
+--workbench is a ~180-line localhost HTTP server (127.0.0.1 only, no TLS or
+auth — a loopback tool by declared scope) serving docs/ and running POST
+/eval through the native interpreter; the page detects it and routes evals
+there, falling back to the embedded wasm engine on GitHub Pages or file://.
+New panes: Workspace (live who after every eval) and Packages (one-click
+loads), plus native plot polling (COZY_PLOT_TERM=svg; the pane diffs GET
+/plots). The browser is the rendering surface, not necessarily the compute
+engine. v1 excludes debugger, editor completion, data viewer — each waits
+on its own friction.
+
+## 10. Real-typed LAPACK fast path (trigger FIRED by the owner: inv() is
+slightly slower than Octave under OpenBLAS). Cause, confirmed in the
+architecture: the tier-1 funnels ALL matrices through the six COMPLEX
+routines (zgetrf/zgetri/zgesv/...), so real matrices pay ~2x memory
+traffic and 2-4x flops versus Octave's dgetrf/dgetri dispatch. Design:
+when elt == FLOAT, dispatch to real routines (dgesv/dgetrf/dgetri first —
+inv and mldivide are the hot pair — then dsyev/dgeev/dgesvd), sharing the
+existing invariance conventions; goldens are already backend-invariant so
+the change is measured by the stress battery plus benchmarks, not new
+goldens. PHASE 1
+SHIPPED 0.0.36 (owner's ruling: real data on real routines — faster AND
+more accurate): solve_d/det_d seam entries; OpenBLAS dispatches dgesv/
+dgetrf when both operands are real (covers \, /, inv, det, negative
+matrix powers via the one mldivide funnel); tier0 provides parity
+wrappers. Measured on inv(700): 0.051s real vs 0.097s complex — 1.9x,
+the predicted flop ratio — and the result is exactly real by
+construction, no snap involved. PHASE 2 SHIPPED
+0.0.37 (owner: "now do phase 2"): eig_sym_d/svd_d/chol_d seam entries;
+OpenBLAS runs dsyev/dgesvd/dpotrf on real inputs; tier0 parity wrappers.
+The real kernels do the O(n^3) work, then results convert INTO the
+existing complex buffers so all downstream shaping (eigenvalue sort,
+phase anchor, snap, demotion) stays single-path — no new divergence
+class. Measured under OpenBLAS at n=400: symmetric eig 3.5x, svd 3.1x;
+residuals at machine precision. REMAINING residue: real nonsymmetric
+eig stays complex-funneled until dgeev's paired-column eigenvector
+format earns its unpacking (trigger: a profiled real nonsymmetric eig
+hot path).
+
+## 11. Session arena retention — SHIPPED 0.0.38 (owner: "do entry 11 now").
+Two coordinated changes: (1) the env OWNS its binding names — strndup at
+define, freed at env_free/env_clear/clear/keep's five drop sites — so a
+let no longer pins its line's source; (2) the compiler sets
+I->line_borrows_src when compiling anything whose runtime values point
+into source (lambdas via chunk->src; record literals AND the fan-out
+desugar's OP_RECORD, whose keys are non-owning) and all four session
+hosts (repl, vmtest, wasm, workbench server) retain arena+src only when
+flagged. Found-by-goldens: the session-block suite caught the env-name
+borrow instantly (use-after-free on 'acc'), and the BOOK caught the
+fan-out record emission the AST-level flag missed — the lattice working
+exactly as designed. Peak RSS over 2000 closure-free evals: 110 MB ->
+2.6 MB; the stress plateau bound is now ENFORCING.
+
+## 11-was. Session arena retention (trigger FIRED by the stress suite on its
+first run: peak RSS 8.6 -> 112.7 MB over 2000 closure-free evals). Every
+line's parse arena + source is retained for closure-source lifetime,
+unconditionally. Design: free the arena/src when the compiled line created
+no closure (cheap flag from the compiler), or refcount chunks so retention
+follows references; the workbench server shares the fix. Acceptance: the
+stress long-session tier's plateau bound flips from reporting to
+enforcing.

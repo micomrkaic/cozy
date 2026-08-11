@@ -177,8 +177,12 @@
     <button id="tab-plots" class="on">Plots</button>
     <button id="tab-editor">Editor</button>
     <button id="tab-docs">Docs</button>
+    <button id="tab-ws">Workspace</button>
+    <button id="tab-pkgs">Packages</button>
   </div>
   <div id="plots"><div class="placeholder">plot(...) and hist(...) render here as SVG.</div></div>
+  <div id="workspace" style="display:none; flex:1; overflow-y:auto; padding:14px;"><pre id="ws-pre" style="margin:0; font-size:13px; line-height:1.5; color:var(--fg); white-space:pre-wrap;">(run something — the workspace appears after each eval)</pre></div>
+  <div id="pkgs" style="display:none; flex:1; overflow-y:auto; padding:14px;"></div>
   <div id="docs">
     <div id="docbar">
       <select id="doc-pick">
@@ -286,6 +290,7 @@
     };
     M._cozy_init();
     window.COZY = M;
+    window.evalWasm = evalLine;      /* the workbench router lives outside this IIFE */
     M.cozyPlot = function (fname) {
       try {
         var svg = new TextDecoder().decode(M.FS.readFile(fname));
@@ -334,7 +339,8 @@
       history.push(line);
       histpos = history.length;
       try {
-        writeResult(evalLine(line));
+        evalAny(line).then(function (r) { writeResult(r); afterEval(); scroll(); })
+                     .catch(function (e) { writeLine('err', '  internal error: ' + e.message); scroll(); });
       } catch (e) {
         writeLine('err', '  internal error: ' + e.message);
       }
@@ -391,7 +397,7 @@
     runBuffer: function (text) {
       writeLine('dim', '% editor script:');
       try {
-        writeResult(evalLine(text));
+        evalAny(text).then(function (r) { writeResult(r); afterEval(); scroll(); });
       } catch (e) {
         writeLine('err', '  internal error: ' + e.message);
       }
@@ -404,19 +410,125 @@
   var known = new Set();
   var tabP = document.getElementById('tab-plots'), tabE = document.getElementById('tab-editor'),
       tabD = document.getElementById('tab-docs');
-  function showPane(which) {                     /* 'plots' | 'editor' | 'docs' */
-    document.getElementById('plots').style.display  = which === 'plots'  ? 'block' : 'none';
-    document.getElementById('editor').style.display = which === 'editor' ? 'flex'  : 'none';
-    document.getElementById('docs').style.display   = which === 'docs'   ? 'flex'  : 'none';
+  function showPane(which) {          /* 'plots' | 'editor' | 'docs' | 'ws' | 'pkgs' */
+    document.getElementById('plots').style.display     = which === 'plots'  ? 'block' : 'none';
+    document.getElementById('editor').style.display    = which === 'editor' ? 'flex'  : 'none';
+    document.getElementById('docs').style.display      = which === 'docs'   ? 'flex'  : 'none';
+    document.getElementById('workspace').style.display = which === 'ws'     ? 'block' : 'none';
+    document.getElementById('pkgs').style.display      = which === 'pkgs'   ? 'block' : 'none';
     tabP.classList.toggle('on', which === 'plots');
     tabE.classList.toggle('on', which === 'editor');
     tabD.classList.toggle('on', which === 'docs');
+    document.getElementById('tab-ws').classList.toggle('on', which === 'ws');
+    document.getElementById('tab-pkgs').classList.toggle('on', which === 'pkgs');
     if (which === 'editor') edtext.focus();
   }
   function showTab(edon) { showPane(edon ? 'editor' : 'plots'); }   /* legacy callers */
   tabP.addEventListener('click', function () { showPane('plots'); });
   tabE.addEventListener('click', function () { showPane('editor'); });
   tabD.addEventListener('click', function () { showPane('docs'); loadDoc(); });
+  document.getElementById('tab-ws').addEventListener('click', function () { showPane('ws'); refreshWorkspace(); });
+  document.getElementById('tab-pkgs').addEventListener('click', function () { showPane('pkgs'); });
+
+  /* ---- workbench (design entry 9): dual engine + panes ---- */
+  var NATIVE = false, knownPlots = {};
+  function evalAny(s) {   /* one router: native server if present, else wasm */
+    if (NATIVE)
+      return fetch('/eval', { method: 'POST', body: s }).then(function (r) { return r.text(); })
+             .then(function (txt) { return txt.replace(/\n$/, ''); });
+    return Promise.resolve(window.evalWasm(s));
+  }
+  function refreshWorkspace() {
+    evalAny('who').then(function (txt) {
+      document.getElementById('ws-pre').textContent = txt.trim() ? txt : '(empty workspace)';
+      updatePkgChecks(txt);
+    }).catch(function () {});
+  }
+  function refreshPlotsNative() {
+    if (!NATIVE) return;
+    fetch('/plots').then(function (r) { return r.text(); }).then(function (txt) {
+      txt.split('\n').forEach(function (f) {
+        if (!f || knownPlots[f]) return;
+        knownPlots[f] = true;
+        fetch('/' + f).then(function (r) { return r.text(); }).then(function (svg) {
+          var box = document.getElementById('plots');
+          if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
+          box.insertAdjacentHTML('afterbegin', svg);
+          showPane('plots');
+        });
+      });
+    }).catch(function () {});
+  }
+  function afterEval() { refreshWorkspace(); refreshPlotsNative(); }
+  var PKGS = ['astro','autodiff','demo','dist','finance','optim','phys','poly','rmt','scatter','sparselin','symb'];
+  var pkgChecks = {};
+  (function buildPkgs() {
+    var box = document.getElementById('pkgs');
+    var hint = document.createElement('div');
+    hint.textContent = 'Tick to load, untick to unload (clear the package\u2019s names). State follows the workspace, however a package was loaded.';
+    hint.style.cssText = 'font-size:12px; color:#99a3b3; padding:2px 4px 10px;';
+    box.appendChild(hint);
+    PKGS.forEach(function (p) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; font-size:13px;';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.dataset.pkg = p;
+      pkgChecks[p] = cb;
+      var name = document.createElement('span');
+      name.textContent = 'packages/' + p + '.cz';
+      cb.addEventListener('change', function () {
+        var line = cb.checked ? 'load("packages/' + p + '.cz"); 1' : 'clear("' + p + '")';
+        window.nuTerm.writeLine('echo', 'cozy> ' + (cb.checked ? 'load("packages/' + p + '.cz")' : 'clear("' + p + '")'));
+        evalAny(line).then(function () {
+          window.nuTerm.writeLine('dim', cb.checked ? '  loaded packages/' + p + '.cz'
+                                                    : '  cleared packages/' + p + '.cz');
+          afterEval(); window.nuTerm.scroll();
+        }).catch(function (e) {
+          cb.checked = !cb.checked;   /* revert on failure */
+          window.nuTerm.writeLine('err', '  ' + e.message); window.nuTerm.scroll();
+        });
+      });
+      row.appendChild(cb); row.appendChild(name); box.appendChild(row);
+    });
+  })();
+  function updatePkgChecks(whoText) {
+    PKGS.forEach(function (p) {
+      pkgChecks[p].checked = whoText.indexOf('packages/' + p + '.cz') !== -1;
+    });
+  }
+  try {   /* native engine detection: jsdom/file:// lack fetch or the server */
+    if (typeof fetch === 'function')
+      fetch('/native-ping').then(function (r) { return r.text(); }).then(function (tx) {
+        if (tx.indexOf('cozy') === 0) {
+          NATIVE = true;
+          var parts = tx.trim().split(/\s+/);   /* "cozy <version> <backend>" */
+          var desc = parts.length >= 3 ? 'v' + parts[1] + ' \u00b7 ' + parts[2] + ' backend'
+                                       : 'local cozy process';
+          /* REWRITE the banner's version line in place: one truth, the
+           * computing engine's. Poll until the wasm boot has printed it. */
+          var tries = 0;
+          (function fixBanner() {
+            var lines = document.querySelectorAll('#term div');
+            var done = false;
+            for (var i = 0; i < lines.length; i++) {
+              var tc = lines[i].textContent;
+              if (tc.indexOf('(wasm, built') !== -1) {
+                lines[i].textContent = tc.replace(/\(wasm, built[^)]*\)/,
+                    '\u00b7 ' + (parts.length >= 3 ? parts[2] : 'native') +
+                    ' backend \u00b7 native engine');
+                lines[i].className = 'banner-warm';
+                done = true;
+              }
+              if (tc.indexOf('standard packages are preloaded') !== -1)
+                lines[i].textContent = 'Packages load on demand: the Packages tab or load("packages/dist.cz").';
+            }
+            if (!done && ++tries < 60) { setTimeout(fixBanner, 150); return; }
+            window.nuTerm.scroll();
+            refreshWorkspace();
+          })();
+        }
+      }).catch(function () {});
+  } catch (e) {}
 
   /* ---- markdown -> HTML: the same subset the C renderer handles ---- */
   function mdToHtml(src) {

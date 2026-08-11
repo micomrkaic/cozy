@@ -381,3 +381,21 @@ reporting 172 where the reference said 171 — two truths from one
 table). Both generators now use the identical full-row pattern. The
 class: two parsers of one source of truth will disagree exactly when
 it matters; share the pattern or generate one from the other.
+
+### The pandoc that failed in silence (Cozy 0.0.22)
+
+The 0.0.18 changelog claimed "all three PDFs rebuilt." They were not:
+lmodern.sty had been removed as collateral of the emscripten apt
+surgery, every pandoc run failed — and the failures were invisible,
+because the commands ran behind > /dev/null with && chains, and the
+verification was ls on file SIZES, which matched because the files were
+the untouched Aug-8 originals. Four releases shipped Neutrino-titled
+PDFs under a changelog entry saying otherwise. Found at 0.0.22 only
+because a pipe repeated the sin in miniature — `pandoc | grep -c
+Warning` returned a friendly 0 while pandoc exited 43 — and the mtime
+finally told the truth. Two laws, both already in the book, both
+violated by the operator: THE VERDICT IS THE EXIT CODE (grep-that-hid-
+the-verdict, second occurrence, this time self-inflicted), and no claim
+ships unexecuted — "rebuilt" is a claim, and mtime is its cheapest
+witness. Mechanized: make pdfs, run bare, exit code visible; and the
+audit habit — after any "regenerated X" step, stat X.

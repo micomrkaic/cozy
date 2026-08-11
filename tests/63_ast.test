@@ -1,0 +1,43 @@
+# ast(f) quotation (design entry 4b, the charter's last capability item):
+# a closure's body as a symb-style record tree. v1 = the symb expression
+# subset; everything else gates with a teaching error.
+ast(fn x -> x^2 + 1).body.op
+=> "add"
+ast(fn x -> x^2 + 1).params
+=> ["x"]
+ast(fn x -> x^2).body.n
+=> 2
+ast(fn x -> sin(x)).body.op
+=> "sin"
+ast(fn x -> -x).body.l.v
+=> -1
+ast(fn a, b -> a * b).params
+=> ["a", "b"]
+ast(fn x -> x^2 + 3 * sin(x)).body.r.l.v
+=> 3
+ast(sin)
+=> !'sin' is a builtin
+ast(fn x -> x^x).body.r.op
+=> "var"
+load("packages/symb.cz"); show(simp(ddx(ast(fn x -> x^2 + sin(x)).body)))
+=> "((2 * x) + cos(x))"
+load("packages/optim.cz"); ast(op_dot).body.op
+=> "sum"
+.. ast(op_dot).body.l.op
+=> "emul"
+.. ast(op_bt).body.op
+=> "block"
+.. ast(minimize_con).params
+=> ["f", "x0", "cons"]
+ast(fn x -> x[2]).body.op
+=> "index"
+ast(fn x -> x').body.op
+=> "ctrans"
+ast(fn x, y -> atan2(y, x)).body.argc
+=> 2
+ast(fn x -> [x; 1]).body.op
+=> "matrix"
+ast(fn x -> if x > 0 then x else -x end).body.cond.op
+=> "gt"
+ast(fn x -> x |> sum).body.op
+=> "pipe"
