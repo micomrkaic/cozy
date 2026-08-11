@@ -449,3 +449,24 @@ heartbeat during idle — so Accelerate's pool never parks. Trigger: the
 experiments; not another blind lever. The 0.0.47 worker and 0.0.48
 dispatch entry stay (harmless, and the dispatch door is the correct
 context regardless).
+
+## 13. Default parameter values — PARKED (owner: "add the entry", 0.0.53).
+The asymmetry: builtins have arity ranges (median(A) | median(A, dim));
+user closures are fixed-arity, which has bitten once in 53 releases
+(demo() vs demo(k), resolved by a better zero-arg interactive design).
+The minimal extension closing it: fn x, tol = 1e-8 -> ... — defaults on
+trailing parameters give closures the same min-to-max arity builtins
+enjoy. Additive syntax (previously illegal shape, per the charter's
+inheritance contract); moderate cost: parser accepts = expr after a
+parameter, the closure carries an arity range plus default thunks or
+values, calls below max arity fill from defaults. Design questions to
+settle at implementation: evaluate defaults at definition (value
+semantics, consistent with value-capture upvalues) or at call (Python's
+scar says definition-time, but definition-time capture of MUTABLE state
+is a non-issue here — values are immutable); defaults referencing
+earlier parameters (fn a, b = a -> ...) — probably yes, evaluated
+left-to-right at call. NOT in scope: full variadics — nothing has asked.
+TRIGGER: friction transcripts — a package API sprouting an awkward name
+family (f / f_tol / f_tol_maxit) or callers passing null placeholders
+where one optional would do. One demo() incident, already better-
+solved, does not fire it.

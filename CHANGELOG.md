@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.0.54 — docket entry 13: default parameter values, parked
+
+### Design
+- **Entry 13 added to the docket** (owner's ruling after the arity
+  discussion): default parameter values — fn x, tol = 1e-8 -> ... —
+  as the minimal extension closing the closure/builtin arity
+  asymmetry. Additive syntax under the inheritance contract; design
+  questions (definition- vs call-time evaluation, earlier-parameter
+  references) recorded in the entry; variadics explicitly out of
+  scope. Trigger written: friction transcripts — an API sprouting an
+  awkward name family or null-placeholder calls. Docket-only release
+  so the entry survives the session; the repository is the only
+  memory the project has.
+
 ## 0.0.53 — demo() answers bare
 
 ### Fixed
