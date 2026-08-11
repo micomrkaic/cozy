@@ -439,3 +439,13 @@ no closure (cheap flag from the compiler), or refcount chunks so retention
 follows references; the workbench server shares the fix. Acceptance: the
 stress long-session tier's plateau bound flips from reporting to
 enforcing.
+
+## 12. Workbench warm compute thread — PARKED. If the owner's experiments
+(VECLIB_MAXIMUM_THREADS=1 both surfaces; a tight eval loop in the
+workbench) implicate cold-start, the design: one dedicated compute
+thread created at server startup at USER_INTERACTIVE QoS, fed evals
+through a condition variable, optionally kept warm with a micro-gemm
+heartbeat during idle — so Accelerate's pool never parks. Trigger: the
+experiments; not another blind lever. The 0.0.47 worker and 0.0.48
+dispatch entry stay (harmless, and the dispatch door is the correct
+context regardless).

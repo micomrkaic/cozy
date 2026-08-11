@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.0.49 — the hunt closes with a measurement, not a guess
+
+### Documented
+- **The workbench BLAS gap is now a documented platform cost, not an
+  open bug**: the owner's instrumented sessions show a roughly fixed
+  12-19 ms per-call overhead on Apple Silicon, AMORTIZING with size
+  (2.1x at gemm n=1000, 1.18x at n=2000) — which falsifies the
+  core-class and thread-count theories outright (both predict constant
+  ratios) and survives both QoS levers (per-thread attribute, 0.0.47;
+  dispatch-context entry, 0.0.48). Best remaining hypothesis is
+  cold-start of Accelerate's parked pool between commands; the two
+  discriminating experiments are recorded in KNOWN_LIMITATIONS, and a
+  persistent warm compute thread is parked as docket entry 12 with
+  those experiments as its trigger — per the house stop-rule: after
+  two falsified levers, measurement and a written trigger beat a third
+  guess. The terminal is the benchmarking surface.
+
 ## 0.0.48 — the eval enters through the front door of GCD
 
 ### Changed

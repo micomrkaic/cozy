@@ -148,3 +148,23 @@ long sessions and the workbench server. The fix (docket entry 11): free
 the arena when compilation produced no closure, or refcount chunks so
 retention follows actual references. The stress suite's long-session tier
 reports the growth and will enforce a plateau once the fix lands.
+
+## Workbench BLAS calls on Apple Silicon carry ~12-19 ms of per-call overhead
+
+Measured by the owner across three instrumented sessions (0.0.46-48),
+same binary, tic/toc inside the process so HTTP is excluded: workbench
+gemm/inv trail the terminal REPL by a roughly FIXED 12-19 ms per call —
+2.1x at gemm n=1000, 1.18x at n=2000, amortizing with size. The ratio's
+size-dependence rules out core-class relegation and thread-count caps
+(both predict constant ratios); an explicit per-thread QoS attribute
+(0.0.47) and entry via dispatch_sync_f on the USER_INTERACTIVE queue
+(0.0.48) each changed nothing. Best remaining hypothesis: cold-start —
+Accelerate's pool threads park during the idle seconds between commands
+and the wake/ramp cost is paid per call in a daemon-shaped process.
+Discriminating experiments (owner-side): VECLIB_MAXIMUM_THREADS=1 on
+both surfaces (convergence implicates the pool); a tight back-to-back
+eval loop in the workbench (gap collapsing implicates cold-start).
+Status: DOCUMENTED COST. The terminal is the benchmarking surface; the
+workbench's value is the panes around a session that remains hundreds
+of times faster than the boxed era. A persistent warm compute thread is
+parked in the docket with these experiments as its trigger.
