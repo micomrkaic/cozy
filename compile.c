@@ -288,6 +288,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
                     chunk_emit(c, OP_GET_AT, L);
                     chunk_emit(c, OP_CALL, L); chunk_emit(c, 1, L);
                 }
+                I->line_borrows_src = true;   /* fan-out records borrow keys too */
                 chunk_emit(c, OP_RECORD, L); chunk_emit_u16(c, (uint16_t)cnt, L);
                 for (uint32_t k = 0; k < cnt; k++) {
                     AstNode *f = rhs->as.list.items[k];
@@ -568,6 +569,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         break;
 
     case AST_RECORD: {
+        I->line_borrows_src = true;   /* record keys are non-owning src pointers */
         uint32_t cnt = n->as.list.count;
         for (uint32_t k = 0; k < cnt; k++)
             compile_node(I, cc, n->as.list.items[k]->as.recfield.value);
@@ -590,6 +592,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
 static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
                            const char *selfname, uint32_t selflen)
 {
+    I->line_borrows_src = true;   /* closures keep chunk->src alive (entry 11) */
     Chunk *proto = malloc(sizeof *proto);
     if (!proto) abort();
     chunk_init(proto);

@@ -128,7 +128,17 @@ compiled.
   and construction from parallel name/value arrays — the same reflection
   family as ast(f).
 
-## Sessions retain every line's parse arena (found by the stress suite, 0.0.35)
+## Sessions retain every line's parse arena — RESOLVED 0.0.38 (entry 11)
+
+Fixed: the compiler flags lines whose compiled output borrows source
+pointers (closures via chunk->src; record literals and fan-out records via
+non-owning keys), and sessions retain arena+src only for those; the env
+now OWNS its binding names (copied at define, freed at every drop site),
+so plain lets no longer pin their line. Measured: 2000 closure-free evals
+peak at 2.6 MB where they peaked at 110 MB. The stress plateau bound is
+enforcing. Historical entry below, kept for the record.
+
+## (historical) Sessions retain every line's parse arena (found 0.0.35)
 
 Closures point into their chunk's source, so the REPL retains each line's
 arena and source for the life of the session — unconditionally, including

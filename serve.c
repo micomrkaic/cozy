@@ -110,11 +110,12 @@ static void do_eval(int fd, Interp *I, EnvObj *globals, char *line)
         fprintf(cap, "  parse error at %u:%u: %s\n", p.err_tok.line, p.err_tok.col, p.err_msg);
         arena_free(a); free(src);
     } else {
-        skeep_push(a, src);
         Value r = vm_eval_program(I, prog, globals, /*echo=*/true);
         if (I->had_error)
             fprintf(cap, "  error at %u:%u: %s\n", I->cur_line, I->cur_col, I->err);
         value_release(r);
+        if (I->line_borrows_src) skeep_push(a, src);
+        else { arena_free(a); free(src); }
     }
     fclose(cap);
     value_set_out(NULL);

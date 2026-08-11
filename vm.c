@@ -528,6 +528,7 @@ Value vm_eval_program(Interp *I, AstNode *block, EnvObj *globals, bool echo)
 {
     I->globals   = globals;
     I->had_error = false;
+    I->line_borrows_src = false;      /* compiler sets it; sessions consult it */
 
     AstNode  *single = block;
     AstNode **items  = &single;

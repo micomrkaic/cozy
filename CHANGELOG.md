@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.38 — entry 11: sessions stop hoarding their history
+
+### Fixed
+- **Session arena retention** (the stress suite's day-one catch, owner-
+  scheduled): sessions retained every line's parse arena and source
+  unconditionally — ~50 KB per eval, 110 MB peak over a 2000-eval
+  session. Two coordinated changes: the environment now OWNS its
+  binding names (copied at define, freed at all five drop sites), so a
+  plain let no longer pins its line; and the compiler flags lines whose
+  compiled output genuinely borrows source pointers — lambdas (via
+  chunk->src), record literals, and the fan-out desugar's record
+  emission (non-owning keys, a site the AST-level flag missed and the
+  BOOK's verified transcripts caught) — with all four session hosts
+  (REPL, vmtest, wasm, the workbench server) retaining arena+src only
+  when flagged. Measured: 2000 closure-free evals now peak at 2.6 MB.
+  The stress suite's plateau bound flips from reporting to ENFORCING —
+  the acceptance criterion entry 11 wrote for itself.
+- The lattice earned this one twice over: the 0.0.28 session-block
+  goldens caught the env-name use-after-free within seconds of the
+  first attempt, and the book harness caught the fan-out gap.
+
 ## 0.0.37 — real routines, phase 2: eig, svd, chol
 
 ### Changed

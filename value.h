@@ -92,7 +92,8 @@ struct EnvObj {
     EnvObj      *parent;     /* owned ref (nullptr at global) */
     uint32_t     count, cap;
     uint32_t     n_protected;  /* slots below this: standard library (see env_define) */
-    const char **names;      /* non-owning slices */
+    const char **names;      /* OWNED copies since entry 11 (bindings outlive
+                                the defining line's source buffer) */
     uint32_t    *namelens;
     Value       *vals;       /* owned refs */
 };

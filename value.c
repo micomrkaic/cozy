@@ -343,7 +343,8 @@ EnvObj *env_new(EnvObj *parent)
 
 static void env_free(EnvObj *e)
 {
-    for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
+    for (uint32_t i = 0; i < e->count; i++)
+        { value_release(e->vals[i]); free((char *)e->names[i]); }
     free(e->names); free(e->namelens); free(e->vals);
     env_release(e->parent);
     free(e);
@@ -368,7 +369,9 @@ void env_define(EnvObj *e, const char *name, uint32_t len, Value v)
         e->vals     = realloc(e->vals,     e->cap * sizeof *e->vals);
         if (!e->names || !e->namelens || !e->vals) abort();
     }
-    e->names[e->count]    = name;
+    e->names[e->count]    = strndup(name, len);   /* env OWNS names (entry 11):
+                                       bindings must outlive the line's source */
+    if (!e->names[e->count]) abort();
     e->namelens[e->count] = len;
     e->vals[e->count]     = value_retain(v);
     e->count++;
@@ -404,7 +407,8 @@ bool env_assign(EnvObj *e, const char *name, uint32_t len, Value v)
  * count is zeroed so the later env_free does not double-release. */
 void env_clear(EnvObj *e)
 {
-    for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
+    for (uint32_t i = 0; i < e->count; i++)
+        { value_release(e->vals[i]); free((char *)e->names[i]); }
     e->count = 0;
 }
 

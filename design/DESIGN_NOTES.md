@@ -404,7 +404,21 @@ eig stays complex-funneled until dgeev's paired-column eigenvector
 format earns its unpacking (trigger: a profiled real nonsymmetric eig
 hot path).
 
-## 11. Session arena retention (trigger FIRED by the stress suite on its
+## 11. Session arena retention — SHIPPED 0.0.38 (owner: "do entry 11 now").
+Two coordinated changes: (1) the env OWNS its binding names — strndup at
+define, freed at env_free/env_clear/clear/keep's five drop sites — so a
+let no longer pins its line's source; (2) the compiler sets
+I->line_borrows_src when compiling anything whose runtime values point
+into source (lambdas via chunk->src; record literals AND the fan-out
+desugar's OP_RECORD, whose keys are non-owning) and all four session
+hosts (repl, vmtest, wasm, workbench server) retain arena+src only when
+flagged. Found-by-goldens: the session-block suite caught the env-name
+borrow instantly (use-after-free on 'acc'), and the BOOK caught the
+fan-out record emission the AST-level flag missed — the lattice working
+exactly as designed. Peak RSS over 2000 closure-free evals: 110 MB ->
+2.6 MB; the stress plateau bound is now ENFORCING.
+
+## 11-was. Session arena retention (trigger FIRED by the stress suite on its
 first run: peak RSS 8.6 -> 112.7 MB over 2000 closure-free evals). Every
 line's parse arena + source is retained for closure-source lifetime,
 unconditionally. Design: free the arena/src when the compiled line created

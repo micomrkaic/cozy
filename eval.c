@@ -4359,7 +4359,7 @@ static Value bi_keep(Interp *I, Value *args, uint32_t n)
         if (kept) {
             g->names[w] = g->names[i]; g->namelens[w] = g->namelens[i];
             g->vals[w] = g->vals[i]; w++;
-        } else value_release(g->vals[i]);
+        } else { value_release(g->vals[i]); free((char *)g->names[i]); }
     }
     g->count = w;
     return val_null();
@@ -4371,7 +4371,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
     if (!g) return val_null();
     if (n == 0) {                                       /* clear everything user-defined */
         for (uint32_t i = g->n_protected; i < g->count; i++)
-            value_release(g->vals[i]);
+            { value_release(g->vals[i]); free((char *)g->names[i]); }
         g->count = g->n_protected;                      /* shadows removed: originals resurface */
         for (size_t gi = 0; gi < g_nlg; gi++) lg_free(&g_lg[gi]);
         g_nlg = 0;                                      /* empty shelves go too */
@@ -4384,7 +4384,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
         bool found = false;
         for (uint32_t i = g->n_protected; i < g->count; i++) {
             if (g->namelens[i] == s->len && memcmp(g->names[i], s->data, s->len) == 0) {
-                value_release(g->vals[i]);
+                value_release(g->vals[i]); free((char *)g->names[i]);
                 g->names[i] = g->names[g->count - 1];   /* swap-remove */
                 g->namelens[i] = g->namelens[g->count - 1];
                 g->vals[i] = g->vals[g->count - 1];
@@ -4403,7 +4403,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
                 for (uint32_t i = g->n_protected; i < g->count; i++)
                     if (g->namelens[i] == g_lg[gi].lens[m] &&
                         !memcmp(g->names[i], g_lg[gi].names[m], g_lg[gi].lens[m])) {
-                        value_release(g->vals[i]);
+                        value_release(g->vals[i]); free((char *)g->names[i]);
                         g->names[i]    = g->names[g->count - 1];
                         g->namelens[i] = g->namelens[g->count - 1];
                         g->vals[i]     = g->vals[g->count - 1];

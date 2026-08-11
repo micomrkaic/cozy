@@ -62,10 +62,11 @@ int main(void)
             arena_free(a); free(src);
             continue;
         }
-        keep_push(&keep, a, src);
         Value r = vm_eval_program(&I, prog, globals, /*echo=*/true);
         if (I.had_error)
             fprintf(stderr, "  error at %u:%u: %s\n", I.cur_line, I.cur_col, I.err);
+        if (I.line_borrows_src) keep_push(&keep, a, src);
+        else { arena_free(a); free(src); }
         value_release(r);
     }
 

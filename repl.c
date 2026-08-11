@@ -550,8 +550,6 @@ int repl_run(void)
 #ifdef HAVE_READLINE
         history_add_trimmed(acc);
 #endif
-        keep_push(&keep, a, acc);               /* arena + source now owned by the session */
-
         char  *cap = nullptr; size_t capsz = 0; FILE *ms = nullptr;
         bool   paging = g_more && isatty(fileno(stdout));
         if (paging) {
@@ -571,7 +569,10 @@ int repl_run(void)
             free(cap);
         }
 
-        acc = nullptr; acclen = 0; cont = false; /* ownership transferred to keep */
+        if (I.line_borrows_src)                  /* entry 11: retain only borrowers */
+            keep_push(&keep, a, acc);
+        else { arena_free(a); free(acc); }
+        acc = nullptr; acclen = 0; cont = false;
     }
 
 #ifdef HAVE_READLINE

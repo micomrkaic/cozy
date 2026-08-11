@@ -32,12 +32,6 @@ import re, sys
 peaks = [float(m) for m in re.findall(r'peak (\d+(?:\.\d+)?) MB', open('/tmp/mem.txt').read())]
 early, late = peaks[100], peaks[-1]
 print(f"  peak RSS: eval 100 = {early} MB  eval 2000 = {late} MB")
-# WAIVED, documented: sessions retain every line's parse arena (closure
-# source lifetime), so RSS grows ~50KB/eval — docket entry 11, KNOWN_
-# LIMITATIONS. This tier REPORTS until the fix lands, then enforces:
-# sys.exit(0 if late < early + 30 else 1)
-print("  (growth is the known arena-retention cost — docket entry 11; "
-      "tier reports, does not yet enforce)")
-sys.exit(0)
+sys.exit(0 if late < early + 30 else 1)   # entry 11 landed: bound ENFORCED
 PY
 echo "stress: all tiers green"
