@@ -17,6 +17,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include "arena.h"
+#include "version.h"
+#include "linalg.h"
 #include "parser.h"
 #include "eval.h"
 #include "vm.h"
@@ -148,8 +150,12 @@ int cozy_workbench(int port)
         ssize_t n = read(c, req, sizeof req - 1);
         if (n <= 0) { close(c); continue; }
         req[n] = 0;
-        if (!strncmp(req, "GET /native-ping", 16))
-            respond(c, "200 OK", "text/plain", "cozy\n", 5);
+        if (!strncmp(req, "GET /native-ping", 16)) {
+            char pb[128];
+            int pl = snprintf(pb, sizeof pb, "cozy %s %s\n",
+                              COZY_VERSION, cozy_linalg()->name);
+            respond(c, "200 OK", "text/plain", pb, (size_t)pl);
+        }
         else if (!strncmp(req, "GET /plots", 10))
             list_plots(c);
         else if (!strncmp(req, "POST /eval", 10)) {

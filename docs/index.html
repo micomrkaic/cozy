@@ -501,8 +501,13 @@
       fetch('/native-ping').then(function (r) { return r.text(); }).then(function (tx) {
         if (tx.indexOf('cozy') === 0) {
           NATIVE = true;
-          writeLine('dim', '  native engine detected: evals run in the local cozy process');
-          scroll();
+          var parts = tx.trim().split(/\s+/);   /* "cozy <version> <backend>" */
+          var desc = parts.length >= 3 ? 'v' + parts[1] + ' \u00b7 ' + parts[2] + ' backend'
+                                       : 'local cozy process';
+          window.nuTerm.writeLine('banner-warm', '  native engine: ' + desc +
+                                  ' \u2014 evals run in the local cozy process, not wasm');
+          window.nuTerm.scroll();
+          refreshWorkspace();
         }
       }).catch(function () {});
   } catch (e) {}

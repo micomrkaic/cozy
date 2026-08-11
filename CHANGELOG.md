@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.0.39 — the workbench names its engine
+
+### Fixed
+- **The workbench terminal claimed "(wasm)" while evals ran natively**
+  (owner's catch): the banner belongs to the wasm module that boots the
+  page, and the native-detection line neither named the backend nor
+  stood out. /native-ping now reports "cozy <version> <backend>", and
+  on detection the page prints, in the banner's warm accent: "native
+  engine: v0.0.39 · openblas backend — evals run in the local cozy
+  process, not wasm", plus an immediate workspace refresh. The wasm
+  banner above it remains truthful about what booted the page; the
+  engine line states what computes.
+
 ## 0.0.38 — entry 11: sessions stop hoarding their history
 
 ### Fixed
