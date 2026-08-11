@@ -321,7 +321,7 @@ final expression, and `let` bindings are local to the block:
 cozy> (let x = 3; let y = 4; sqrt(x*x + y*y))
 5
 cozy> (let q = 7; q); q
-error: undefined name 'q'          # block locals do not leak
+error: undefined name 'q'          % block locals do not leak
 ```
 
 This is the natural shape for a multi-step function body.

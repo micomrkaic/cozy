@@ -1,5 +1,39 @@
 # Cozy changelog
 
+## 0.0.50 — five problems from the working econometrician
+
+### Added (BOOK chapter 15, Problems 15.5-15.9, owner's brief:
+### "maximal Cozy idiom"; every transcript captured by execution)
+- **15.5 Life-cycle consumption**: five-period savings under a
+  present-value budget — utility in sigma notation, one equality,
+  maximize_con; the Euler equation (growth = βR to four digits) falls
+  out rather than being imposed. Discussion carries a precedence
+  lesson learned live: sigma's body extends through trailing additive
+  terms, so (sum[...] ...) - W needs its parentheses — the first
+  draft "converged" to a budget five times wealth.
+- **15.6 Minimum variance**: the allocation solved numerically and
+  checked against the closed form w* = Σ⁻¹1/1'Σ⁻¹1 to 1e-5.
+- **15.7 GMM**: endogenous regressor generated, overidentified linear
+  IV estimated in two steps, Hansen J ≈ 1.12 correctly unrejected.
+  Design lesson from a gate: dual gradients cannot pass \, so the
+  weight matrix inverts once OUTSIDE the objective — precompute what
+  the parameter doesn't touch; autodiff flows through matmul.
+- **15.8 Taylor by quotation**: ast quotes the typed sin, ddx
+  differentiates the tree k times, show + eval read the derivative
+  back at 0 — EXACT coefficients (1, -1/6, 1/120, -1/5040) — and a
+  four-series ascii plot shows T1/T3/T7 against sin.
+- **15.9 Probit by Newton**: the likelihood as the textbook writes it
+  (sigma over observations, Φ from dist.cz), minimize_newton in five
+  iterations for 600 observations, standard errors from the EXACT
+  observed information inv(hess(-ℓ)) — no derivative differenced.
+
+### Fixed
+- **The transcript verifier's '#' annotation rule ate plot glyphs**:
+  15.8's four-series plot uses '#' for its fourth series, and the
+  verifier stripped \s+#.* from expected lines. Annotations now use
+  %, symmetric on both sides (help() prints its own % examples), so
+  it is a normalization rather than an expected-side rewrite.
+
 ## 0.0.49 — the hunt closes with a measurement, not a guess
 
 ### Documented

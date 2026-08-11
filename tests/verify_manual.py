@@ -36,10 +36,15 @@ for b in blocks:
     ei = 0
     for k, (inp, exp) in enumerate(entries):
         total += 1
-        def norm_ws(t):                    # symmetric: rstrip lines, strip block
-            return '\n'.join(l.rstrip() for l in t.split('\n')).strip()
+        def norm_ws(t):                    # symmetric: rstrip lines, strip block,
+            # and drop % annotations from BOTH sides (help() prints its own,
+            # and transcripts may add asides; symmetry keeps it a
+            # normalization, not an expected-side rewrite)
+            return '\n'.join(re.sub(r'\s+%(?!=).*$', '', l).rstrip()
+                              for l in t.split('\n')).strip()
         got = norm_ws(parts[k]).strip('"').strip() if k < len(parts) else '<missing>'
-        exp_clean = norm_ws('\n'.join(re.sub(r'\s+#.*$', '', l) for l in exp.split('\n')))
+        exp_clean = norm_ws(exp)   # '#' annotations died at 0.0.50: they ate
+        # the '#' series glyphs of 4-series ascii plots (Problem 15.8)
         if exp_clean.startswith('error:'):
             got = (re.sub(r'^\s*(?:parse )?error at \d+:\d+: ', 'error: ', err_lines[ei])
                    if ei < len(err_lines) else got)
