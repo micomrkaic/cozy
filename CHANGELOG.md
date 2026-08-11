@@ -1,5 +1,20 @@
 # Cozy changelog
 
+## 0.0.48 — the eval enters through the front door of GCD
+
+### Changed
+- **Workbench evals on Darwin now enter through dispatch_sync_f on the
+  USER_INTERACTIVE global queue** (plain C, no blocks runtime),
+  replacing the 0.0.47 pthread worker: the owner's measurements show
+  the 1.5x BLAS gap survives an explicit per-thread QoS attribute, and
+  Accelerate parallelizes via GCD — whose pool QoS follows the
+  DISPATCH context, the one lever not yet pulled. Falsifiable as
+  before: workbench inv/gemm should match the terminal. If this lever
+  also fails to move it, the remaining hypothesis is thread-COUNT
+  policy, discriminated by VECLIB_MAXIMUM_THREADS=1 on both surfaces
+  (documented in the changelog as the next experiment), and the gap
+  becomes a documented platform cost rather than a bug hunt.
+
 ## 0.0.47 — matmul joins the fast world (entry 10, phase 3)
 
 ### Fixed
