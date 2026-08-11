@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.0.41 — one banner, one truth
+
+### Fixed
+- **The workbench banner's version line now states the computing
+  engine, not the booting module** (owner's third catch, and the right
+  ruling: rewriting beats appending). When the native server is
+  detected, the page rewrites "0.0.41 (wasm, built ...)" IN PLACE to
+  "0.0.41 · openblas backend · native engine" in the warm accent, and
+  the "packages are preloaded" line becomes the mode-neutral truth.
+  On GitHub Pages / file:// nothing rewrites and the wasm line stands
+  correctly. The two appended clarification lines from 0.0.39/0.0.40
+  are gone — the banner itself is now honest.
+
 ## 0.0.40 — the engine line lands where eyes land
 
 ### Fixed
