@@ -137,6 +137,17 @@ static void do_eval(int fd, Interp *I, EnvObj *globals, char *line)
     free(out);
 }
 
+#ifdef __APPLE__
+struct EvReqFwd { int fd; Interp *I; EnvObj *g; char *body; };
+void *serve_eval_thread(void *p)
+{
+    struct EvReqFwd *e = p;
+    do_eval(e->fd, e->I, e->g, e->body);
+    return NULL;
+}
+#include <pthread.h>
+#endif
+
 int cozy_workbench(int port)
 {
 #ifdef __APPLE__
@@ -180,7 +191,27 @@ int cozy_workbench(int port)
             list_plots(c);
         else if (!strncmp(req, "POST /eval", 10)) {
             char *body = strstr(req, "\r\n\r\n");
+#ifdef __APPLE__
+            /* Run each eval on a worker thread with EXPLICIT interactive
+             * QoS: A*A parity between surfaces proved the interpreter is
+             * scheduled fine, so the residual inv() gap is Accelerate's
+             * pool inheriting a lesser QoS from this serving thread. A
+             * fresh thread with a stated attribute is the strongest
+             * request the API can make. */
+            struct EvReq { int fd; Interp *I; EnvObj *g; char *body; } er =
+                { c, &I, globals, body ? body + 4 : "" };
+            pthread_attr_t at; pthread_attr_init(&at);
+            pthread_attr_set_qos_class_np(&at, QOS_CLASS_USER_INTERACTIVE, 0);
+            pthread_t th;
+            void *(*fn)(void *) = (void *(*)(void *))0;
+            extern void *serve_eval_thread(void *);
+            fn = serve_eval_thread;
+            if (pthread_create(&th, &at, fn, &er) == 0) pthread_join(th, NULL);
+            else do_eval(c, &I, globals, er.body);
+            pthread_attr_destroy(&at);
+#else
             do_eval(c, &I, globals, body ? body + 4 : "");
+#endif
         } else if (!strncmp(req, "GET ", 4)) {
             char *sp = strchr(req + 4, ' ');
             if (sp) *sp = 0;

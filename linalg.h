@@ -57,6 +57,12 @@ typedef struct LinalgKernels {
     int (*svd_d)(const double *A, uint32_t m, uint32_t n,
                  double *U, double *s, double *V);                    /* thin, row-major */
     int (*chol_d)(const double *A, uint32_t n, double *L);            /* lower, row-major */
+    /* gemm (entry 10 phase 3, owner's 12-second A*A): C = A(m x k) * B(k x n),
+     * all row-major. NULL means no BLAS path; eval falls back to typed loops. */
+    int (*gemm_d)(const double *A, const double *B, double *C,
+                  uint32_t m, uint32_t k, uint32_t n);
+    int (*gemm_z)(const Cplx *A, const Cplx *B, Cplx *C,
+                  uint32_t m, uint32_t k, uint32_t n);
 
     /* Determinant of A (n×n); A is destroyed. Result in *out (0 for a
      * singular matrix). Returns 0. n >= 1 (n == 0 is eval.c's case). */

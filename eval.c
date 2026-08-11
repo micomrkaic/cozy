@@ -470,6 +470,11 @@ static Value elementwise_logical(Interp *I, enum TokenKind op, Value a, Value b)
     return out;
 }
 
+static int64_t as_int_raw(const ArrObj *a, size_t q)
+{
+    if (a->elt == ELT_INT)  return ((const int64_t *)a->data)[q];
+    return ((const unsigned char *)a->data)[q] ? 1 : 0;   /* ELT_BOOL */
+}
 static Value matmul(Interp *I, Value a, Value b)
 {
     ArrObj *x = as_arr(a), *y = as_arr(b);
@@ -478,6 +483,71 @@ static Value matmul(Interp *I, Value a, Value b)
                       x->rows, x->cols, y->rows, y->cols);
     uint32_t m = x->rows, k = x->cols, nn = y->cols;
     size_t cells = (size_t)m * nn;
+    /* entry 10 phase 3 (the owner's 12-second A*A): the boxed loop below
+     * runs one refcounted scalar_arith per multiply — typed paths first.
+     * dual/hyper-dual (and anything odd) keep the boxed loop for its
+     * chain rules; int stays int with the documented wrap semantics. */
+    bool xa_num = x->elt == ELT_BOOL || x->elt == ELT_INT || x->elt == ELT_FLOAT;
+    bool ya_num = y->elt == ELT_BOOL || y->elt == ELT_INT || y->elt == ELT_FLOAT;
+    bool xa_int = x->elt == ELT_BOOL || x->elt == ELT_INT;
+    bool ya_int = y->elt == ELT_BOOL || y->elt == ELT_INT;
+    if (xa_int && ya_int) {                          /* exact, wrap-on-overflow */
+        Value out = val_array(ELT_INT, m, nn);
+        int64_t *C = (int64_t *)as_arr(out)->data;
+        for (uint32_t i = 0; i < m; i++)
+            for (uint32_t j = 0; j < nn; j++) {
+                uint64_t acc = 0;                    /* unsigned: defined wrap */
+                for (uint32_t t = 0; t < k; t++)
+                    acc += (uint64_t)as_int_raw(x, (size_t)i*k + t)
+                         * (uint64_t)as_int_raw(y, (size_t)t*nn + j);
+                C[(size_t)i*nn + j] = (int64_t)acc;
+            }
+        return out;
+    }
+    if (xa_num && ya_num) {                          /* real: doubles, gemm if present */
+        double *Ad = malloc((((size_t)m * k) != 0 ? (size_t)m * k : 1) * sizeof *Ad);
+        double *Bd = malloc((((size_t)k * nn) != 0 ? (size_t)k * nn : 1) * sizeof *Bd);
+        Value out = val_array(ELT_FLOAT, m, nn);
+        double *C = (double *)as_arr(out)->data;
+        if ((!Ad || !Bd)) abort();
+        for (size_t q = 0; q < (size_t)m * k; q++)  Ad[q] = as_double(arr_get(x, q));
+        for (size_t q = 0; q < (size_t)k * nn; q++) Bd[q] = as_double(arr_get(y, q));
+        if (cozy_linalg()->gemm_d)
+            cozy_linalg()->gemm_d(Ad, Bd, C, m, k, nn);
+        else
+            for (uint32_t i = 0; i < m; i++)
+                for (uint32_t j = 0; j < nn; j++) {
+                    double acc = 0.0;
+                    for (uint32_t t = 0; t < k; t++)
+                        acc += Ad[(size_t)i*k + t] * Bd[(size_t)t*nn + j];
+                    C[(size_t)i*nn + j] = acc;
+                }
+        free(Ad); free(Bd);
+        return out;
+    }
+    if ((xa_num || x->elt == ELT_COMPLEX) && (ya_num || y->elt == ELT_COMPLEX)) {
+        Cplx *Az = malloc((((size_t)m * k) != 0 ? (size_t)m * k : 1) * sizeof *Az);
+        Cplx *Bz = malloc((((size_t)k * nn) != 0 ? (size_t)k * nn : 1) * sizeof *Bz);
+        Value out = val_array(ELT_COMPLEX, m, nn);
+        Cplx *C = (Cplx *)as_arr(out)->data;
+        if (!Az || !Bz) abort();
+        for (size_t q = 0; q < (size_t)m * k; q++)  Az[q] = as_cplx(arr_get(x, q));
+        for (size_t q = 0; q < (size_t)k * nn; q++) Bz[q] = as_cplx(arr_get(y, q));
+        if (cozy_linalg()->gemm_z)
+            cozy_linalg()->gemm_z(Az, Bz, C, m, k, nn);
+        else
+            for (uint32_t i = 0; i < m; i++)
+                for (uint32_t j = 0; j < nn; j++) {
+                    Cplx acc = { 0, 0 };
+                    for (uint32_t t = 0; t < k; t++) {
+                        Cplx p = c_mul(Az[(size_t)i*k + t], Bz[(size_t)t*nn + j]);
+                        acc.re += p.re; acc.im += p.im;
+                    }
+                    C[(size_t)i*nn + j] = acc;
+                }
+        free(Az); free(Bz);
+        return out;
+    }
     Value *tmp = cells ? malloc(cells * sizeof *tmp) : nullptr;
     for (uint32_t i = 0; i < m; i++)
         for (uint32_t j = 0; j < nn; j++) {
@@ -5257,7 +5327,10 @@ LOGB_UNARY(log2,   2.0)
         if (v.kind == VAL_DUAL) return val_dual(rfn(v.as.d.v), 0.0);   /* locally constant */ \
         if (v.kind == VAL_HDUAL) return val_hdual(rfn(v.as.h.v), 0.0, 0.0, 0.0);      \
         if (v.kind == VAL_INT) return v;                                              \
-        return val_float(rfn(as_double(v))); }                                        \
+        double r0 = rfn(as_double(v));                                                \
+        return val_float(r0 == 0.0 ? 0.0 : r0); }   /* canonical zero: gemm can
+            leave -1e-17 where the boxed loop left +0, and round(-eps) must
+            not print -0 (the 05_decomp golden that caught this) */                                        \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
 ROUND_UNARY(floor, floor)
 ROUND_UNARY(ceil,  ceil)

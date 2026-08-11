@@ -1,5 +1,28 @@
 # Cozy changelog
 
+## 0.0.47 — matmul joins the fast world (entry 10, phase 3)
+
+### Fixed
+- **Matrix multiply ran the boxed interpreter loop — 12 seconds for
+  A*A at n=1000** (the owner's profiling experiment found it: A*A was
+  equally slow on both surfaces while inv flew, exonerating the
+  scheduler and indicting the operator itself). Typed paths now:
+  int*int stays exact int64 with the documented wrap; real goes
+  through double buffers to dgemm (or a raw-double loop on tier0 —
+  8x by de-boxing alone); complex to zgemm; dual/hyper-dual keep the
+  boxed loop, whose scalar chain rules are the point. gemm rides the
+  seam via the C^T = B^T A^T row-major identity, zero copies.
+  Measured: OpenBLAS A*A(1000) 12.1s -> 0.045s (267x); tier0 1.49s.
+- **One golden repaired on principle**: dgemm leaves -1e-17 where the
+  boxed sum left +0, and round(-eps) printed -0 — the rounding family
+  now canonicalizes its zero. Goldens define the language; -0 from
+  round defines nothing.
+- **Workbench inv gap, next instrument**: A*A parity across surfaces
+  proved process scheduling innocent; each /eval now runs on a worker
+  thread with explicit QOS_CLASS_USER_INTERACTIVE on Darwin, the
+  strongest request the API offers for Accelerate's pool. Falsifiable
+  on the owner's Mac as before.
+
 ## 0.0.46 — the Darwin rule, applied to its author
 
 ### Fixed

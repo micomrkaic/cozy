@@ -399,7 +399,20 @@ The real kernels do the O(n^3) work, then results convert INTO the
 existing complex buffers so all downstream shaping (eigenvalue sort,
 phase anchor, snap, demotion) stays single-path — no new divergence
 class. Measured under OpenBLAS at n=400: symmetric eig 3.5x, svd 3.1x;
-residuals at machine precision. REMAINING residue: real nonsymmetric
+residuals at machine precision. PHASE 3 SHIPPED
+0.0.47 (the owner's profiling found A*A at 12 SECONDS — matrix multiply
+had never left the boxed interpreter loop, one refcounted scalar_arith
+per multiply): gemm_d/gemm_z seam entries (row-major via the
+C^T = B^T A^T transpose identity, zero copies); typed fallback loops so
+even tier0 gains 8x (12.1s -> 1.49s); int matmul stays exact int64 with
+documented wrap; dual/hyper-dual keep the boxed loop for chain rules.
+OpenBLAS measured: A*A(1000) 12.1s -> 0.045s, 267x. One golden repaired
+on principle: dgemm leaves -1e-17 where the boxed sum left +0, so the
+rounding family now canonicalizes its zero (round(-eps) must not print
+-0). ALSO: per-eval worker threads with explicit QOS_CLASS_USER_
+INTERACTIVE on Darwin (A*A parity across surfaces proved the residual
+workbench inv gap is Accelerate's pool QoS, not process scheduling).
+REMAINING residue: real nonsymmetric
 eig stays complex-funneled until dgeev's paired-column eigenvector
 format earns its unpacking (trigger: a profiled real nonsymmetric eig
 hot path).

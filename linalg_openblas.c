@@ -274,6 +274,35 @@ static int ob_chol_d(const double *A, uint32_t n, double *L)
     return info != 0;
 }
 
+extern void dgemm_(const char *ta, const char *tb, const int *m, const int *n,
+                   const int *k, const double *alpha, const double *a, const int *lda,
+                   const double *b, const int *ldb, const double *beta, double *c, const int *ldc);
+extern void zgemm_(const char *ta, const char *tb, const int *m, const int *n,
+                   const int *k, const void *alpha, const void *a, const int *lda,
+                   const void *b, const int *ldb, const void *beta, void *c, const int *ldc);
+/* Row-major without copies: C_rm = A_rm * B_rm is C^T = B^T * A^T in
+ * column-major, and a row-major array IS its transpose read column-major. */
+static int ob_gemm_d(const double *A, const double *B, double *C,
+                     uint32_t m, uint32_t k, uint32_t n)
+{
+    if (!m || !n) return 0;
+    int M = (int)n, N = (int)m, K = (int)k, lda = (int)n, ldb = (int)(k ? k : 1), ldc = (int)n;
+    double one = 1.0, zero = 0.0;
+    if (!k) { for (size_t q = 0; q < (size_t)m * n; q++) C[q] = 0.0; return 0; }
+    dgemm_("N", "N", &M, &N, &K, &one, B, &lda, A, &ldb, &zero, C, &ldc);
+    return 0;
+}
+static int ob_gemm_z(const Cplx *A, const Cplx *B, Cplx *C,
+                     uint32_t m, uint32_t k, uint32_t n)
+{
+    if (!m || !n) return 0;
+    int M = (int)n, N = (int)m, K = (int)k, lda = (int)n, ldb = (int)(k ? k : 1), ldc = (int)n;
+    Cplx one = { 1.0, 0.0 }, zero = { 0.0, 0.0 };
+    if (!k) { for (size_t q = 0; q < (size_t)m * n; q++) C[q] = (Cplx){ 0, 0 }; return 0; }
+    zgemm_("N", "N", &M, &N, &K, &one, B, &lda, A, &ldb, &zero, C, &ldc);
+    return 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
@@ -282,6 +311,8 @@ static const LinalgKernels openblas = {
     .eig_sym_d = ob_eig_sym_d,
     .svd_d    = ob_svd_d,
     .chol_d   = ob_chol_d,
+    .gemm_d   = ob_gemm_d,
+    .gemm_z   = ob_gemm_z,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,
