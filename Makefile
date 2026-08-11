@@ -124,6 +124,7 @@ test: vmtest $(BIN)
 	@python3 tests/run_doclint.py
 	@python3 tools/check_release.py
 	@python3 tools/gen_pkg_hints.py --check
+	@python3 tools/gen_demo.py --check
 	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
 	@bash tests/run_emacs.sh

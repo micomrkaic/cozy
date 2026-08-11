@@ -1,5 +1,28 @@
 # Cozy changelog
 
+## 0.0.52 — the demo becomes the book, mechanically
+
+### Changed (owner's ruling: same structure, same examples, forever)
+- **packages/demo.cz is now GENERATED from BOOK.md** by
+  tools/gen_demo.py: book chapters are demo sections, problems are
+  replayable steps. demo() lists the sections; demo(k) plays section
+  k one problem at a time, Enter advancing; demo(0) plays everything
+  (64 problems), which is what the suite runs headless. Every line
+  shown is a transcript input from the book, executed live by eval —
+  the "what you read is what runs" principle of the old demo, raised
+  one level: now the BOOK is what you read.
+- **The sync is a law with teeth**: gen_demo.py --check is wired into
+  make test, so the demo cannot drift from the book — editing the
+  book regenerates the demo; hand-editing the demo fails the suite.
+- Session-state hygiene the replay taught: the demo maintains ans
+  (eval does not) and resets format(6) at problem boundaries (book
+  transcripts are fresh sessions; the demo is one long one); the two
+  workspace-surgery problems (clear/keep) stay book-only by rule,
+  since replaying them would destroy the demo itself.
+- The old hand-written demo opened with a NEUTRINO banner — six
+  releases of identity work missed a string inside a package. Hand-
+  maintained parallels rot; generated ones cannot. PLAYBOOK entry.
+
 ## 0.0.51 — the documentation audit
 
 ### Fixed (owner's audit: "make sure nothing is stale — be thorough")
