@@ -184,7 +184,7 @@ digits too — so Greek reads naturally: `let α = 0.05`, `let θ = [1; 2]`,
 visually identical characters in different Unicode normalizations are
 different names (type your α one way). Keywords stay ASCII.
 
-Cozy has eleven value kinds. The scalar kinds:
+Cozy has twelve value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
 |---|---|---|
@@ -193,6 +193,7 @@ Cozy has eleven value kinds. The scalar kinds:
 | `Bool` | `true`, `false` | distinct from numbers: `1 == true` is an error |
 | `Complex` | `2i`, `1 + 3i`, `2.5i` | double re/im pair |
 | `Dual` | `dual(2, 3)`, prints `2+3eps` | value + derivative pair, `eps^2 = 0`; see the dual numbers section |
+| `HDual` | `hdual(3, 1, 1)`, prints `3+1eps1+1eps2+0eps12` | hyper-dual: two nilpotent directions whose product survives, so one pass carries an exact second derivative in the `eps12` slot; `hdual12` reads it — the engine under `hess` and `minimize_newton` |
 | `String` | `"hello"` | byte strings: `+` concatenates, comparisons are lexicographic, `s[i]`/`s[a:b]` index bytes (see the Strings section) |
 | `Null` | `null` | the "no value" value; a suppressed or valueless statement yields it |
 
@@ -756,7 +757,11 @@ cozy> geo.hyp([3, 4])
 as reloadable source; restore it with `load("ws.cz")`. The file is plain
 Cozy, so it is readable and editable. Functions that capture variables
 (closures made by other functions) cannot be serialized and refuse with a
-clear message; a failed save leaves no file behind. `body(f)` prints the
+clear message; a failed save leaves no file behind. `body(f)` prints a
+function's retained source, and `ast(f)` goes one further — the body as a
+walkable record tree ({op, l, r, ...}, symb-compatible), which is how the
+book's Taylor problem differentiates `sin` symbolically seven times.
+`body(f)` prints the
 source of a user-defined function:
 
 ```

@@ -291,3 +291,15 @@ the owner's Mac deploy is the real acceptance run for any new
 POSIX-adjacent code. Fix order: a guarded fallback #define for eternal
 constants; _DARWIN_C_SOURCE alongside when BSD APIs are genuinely
 needed; never just deleting the strict macro.
+
+### The PDFs are release artifacts: rebuild them in the rite
+
+The books' PDFs went stale for 28 releases (0.0.22 -> 0.0.50) because
+`make pdfs` lives outside `make test` (TeX is environment-dependent, so
+a suite gate would rot into a dead guard) and the operator's release
+sequence forgot it. The owner caught it by READING the PDF. Discipline,
+not machinery: every release that touches MANUAL.md, BOOK.md, or
+PACKAGES.md runs `make pdfs`, then the audit habit — stat all three,
+and pdftotext-grep one marker of the new content. The wasm bundle and
+the PDFs are the two derived artifacts with no automatic staleness
+check; both burned us once; both are now named here.

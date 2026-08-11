@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.51 — the documentation audit
+
+### Fixed (owner's audit: "make sure nothing is stale — be thorough")
+- **All three PDFs were 28 releases stale** (mtime Aug 9, era 0.0.22):
+  make pdfs lives outside the suite by necessity (TeX), and the
+  release sequence forgot it — rebuilt, and verified by EXTRACTION:
+  BOOK.pdf contains Problems 15.5-15.9 (pdftotext-grepped), MANUAL.pdf
+  the new type row, vignettes still embedded (pdfimages: 21). The
+  discipline is now a PLAYBOOK entry naming both no-automatic-check
+  derived artifacts (PDFs, wasm bundle).
+- **The manual said "eleven value kinds" and omitted HDual from the
+  type table** — stale since 0.0.24. Now twelve, with an HDual row
+  (literals, print form, and what it is: two nilpotent directions
+  whose product carries an exact second derivative — the engine under
+  hess and minimize_newton).
+- **ast(f) had a table row but no prose**: it now stands beside
+  body(f) in the reflection paragraph, with the Taylor problem as its
+  showcase pointer.
+- Swept for other stale claims (kind counts, kernel counts, builtin
+  counts, package counts) across MANUAL/BOOK/PACKAGES/READMEs: clean.
+
 ## 0.0.50 — five problems from the working econometrician
 
 ### Added (BOOK chapter 15, Problems 15.5-15.9, owner's brief:
