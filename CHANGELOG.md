@@ -1,5 +1,23 @@
 # Cozy changelog
 
+## 0.0.44 — versions that agree with themselves
+
+### Fixed, and owned
+- **The workbench banner showed 0.0.41 on a 0.0.43 install** (owner's
+  catch): the leading version belonged to the WASM BUNDLE, which the
+  0.0.42 and 0.0.43 hotfix rites shipped STALE — the wasm-rebuild step
+  was skipped twice while rushing Mac fixes, exactly the "stale bundle
+  serves stale docs" law the rite exists to enforce. Owned in the
+  ledger; the bundle is rebuilt at every bump again. The banner rewrite
+  now takes the version from the native ping wholesale, so even a
+  future skew shows the COMPUTING engine's number.
+- **The workbench's slower inv() was a stale server process**: 0.047s
+  at n=1000 is the complex-funnel signature — a pre-0.0.36 cozy
+  --workbench still running from days earlier. The server's startup
+  line now prints its version and backend (replacing a placeholder
+  that literally said "this binary's backend"), so a stale server
+  identifies itself in one glance at the terminal that started it.
+
 ## 0.0.43 — clang reads what gcc forgives
 
 ### Fixed

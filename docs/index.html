@@ -513,9 +513,11 @@
             for (var i = 0; i < lines.length; i++) {
               var tc = lines[i].textContent;
               if (tc.indexOf('(wasm, built') !== -1) {
-                lines[i].textContent = tc.replace(/\(wasm, built[^)]*\)/,
-                    '\u00b7 ' + (parts.length >= 3 ? parts[2] : 'native') +
-                    ' backend \u00b7 native engine');
+                /* the NATIVE engine's version, not the wasm bundle's — the
+                 * two can differ when only the binary was hotfixed */
+                lines[i].textContent = 'v' + (parts.length >= 2 ? parts[1] : '?') +
+                    ' \u00b7 ' + (parts.length >= 3 ? parts[2] : 'native') +
+                    ' backend \u00b7 native engine';
                 lines[i].className = 'banner-warm';
                 done = true;
               }

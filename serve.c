@@ -146,8 +146,8 @@ int cozy_workbench(int port)
     if (bind(s, (struct sockaddr *)&addr, sizeof addr) != 0 || listen(s, 4) != 0) {
         fprintf(stderr, "workbench: cannot bind 127.0.0.1:%d\n", port); return 1;
     }
-    printf("cozy workbench: http://localhost:%d  (native engine: %s; Ctrl-C stops)\n",
-           port, "this binary's backend");
+    printf("cozy workbench: http://localhost:%d  (native engine v%s | %s backend; Ctrl-C stops)\n",
+           port, COZY_VERSION, cozy_linalg()->name);
     for (;;) {
         int c = accept(s, NULL, NULL);
         if (c < 0) continue;
