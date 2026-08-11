@@ -57,9 +57,8 @@ w('% The demo and the book of examples are the same examples by construction:\n'
 w('% every line below is a transcript input from the book, replayed live.\n')
 w('% make test regenerates and diffs this file (the sync is a suite check).\n')
 w('%\n')
-w('%   demo()    list the sections (book chapters)\n')
-w('%   demo(k)   play section k, one problem at a time (Enter advances)\n')
-w('%   demo(0)   play everything (the suite runs this headless)\n\n')
+w('%   demo()    the interactive tour: menu, pick a section, Enter advances\n')
+w('%   (a at the menu plays everything; the suite pipes that path headless)\n\n')
 w('let praw = fn t -> print(strrep(strrep(t, "{", "{{"), "}", "}}"))\n')
 w('let isnil = fn v -> str(v) == "null"\n')
 w('let ans = null\n')
@@ -90,16 +89,20 @@ for si, (title, probs) in enumerate(sections, 1):
     w(f'  praw({cz_str(label)});\n')
 w('  print("");\n  print("  demo(0) plays everything.");\n  null)\n\n')
 
-w('let demo = fn k -> (\n')
-cond = 'if k == 0 then ('
+w('let demo = fn -> (\n')
+w('  let going = true;\n')
+w('  while going do\n')
+w('    demo_menu();\n')
+w('    let s = trim(input("  section (number, a = all, q = quit): "));\n')
+w('    if s == "q" | s == "" then (going = false)\n')
+w('    elseif s == "a" then (')
 for si in range(1, len(sections) + 1):
-    cond += f'demo_sec{si}(); '
-cond += 'null)\n'
-w('  ' + cond)
+    w(f'demo_sec{si}(); ')
+w('print(""); print("  Tour complete — the book has the prose."); going = false)\n')
 for si in range(1, len(sections) + 1):
-    w(f'  elseif k == {si} then demo_sec{si}()\n')
-w('  else demo_menu() end;\n')
-w('  print("");\n  print("  Tour complete — the book has the prose; type demo() for the menu.");\n  null)\n\n')
+    w(f'    elseif s == "{si}" then demo_sec{si}()\n')
+w('    else praw("  (unrecognized: " + s + ")") end\n')
+w('  end; null)\n\n')
 w('demo_menu()\n')
 text = out.getvalue()
 

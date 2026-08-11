@@ -1,5 +1,17 @@
 # Cozy changelog
 
+## 0.0.53 — demo() answers bare
+
+### Fixed
+- **demo() with no argument errored** (owner's catch): Cozy closures
+  have fixed arity, and demo was fn(k). Redesigned better than the
+  original: demo is now a ZERO-argument interactive loop — the menu
+  prints, input() reads the section choice, the section plays with
+  Enter advancing between problems, and control returns to the menu
+  (a plays everything, q or Enter quits). Bare demo autocalls too.
+  The suite pipes the a path headless; the generator emits the whole
+  interface, so the book remains the single source.
+
 ## 0.0.52 — the demo becomes the book, mechanically
 
 ### Changed (owner's ruling: same structure, same examples, forever)
