@@ -504,10 +504,16 @@
           var parts = tx.trim().split(/\s+/);   /* "cozy <version> <backend>" */
           var desc = parts.length >= 3 ? 'v' + parts[1] + ' \u00b7 ' + parts[2] + ' backend'
                                        : 'local cozy process';
-          window.nuTerm.writeLine('banner-warm', '  native engine: ' + desc +
-                                  ' \u2014 evals run in the local cozy process, not wasm');
-          window.nuTerm.scroll();
-          refreshWorkspace();
+          /* the wasm banner arrives AFTER detection (module boot is slow);
+           * wait for it so the engine line lands BELOW the splash, visible */
+          (function announce() {
+            if (!window.COZY) { setTimeout(announce, 150); return; }
+            window.nuTerm.writeLine('banner-warm', '  native engine: ' + desc +
+                                    ' \u2014 evals run in the local cozy process, not wasm');
+            window.nuTerm.writeLine('dim', '  (packages are not preloaded here \u2014 the Packages tab or load(...) brings them in)');
+            window.nuTerm.scroll();
+            refreshWorkspace();
+          })();
         }
       }).catch(function () {});
   } catch (e) {}

@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.0.40 — the engine line lands where eyes land
+
+### Fixed
+- **The native-engine announcement printed before the wasm banner** and
+  was buried above the splash (owner's second catch: timings proved
+  native OpenBLAS was computing while the visible banner still said
+  wasm). Native detection resolves in milliseconds; the wasm module
+  boots slower and writes its banner afterward. The announcement now
+  waits for the terminal to boot, so it lands directly BELOW the
+  splash in the warm accent — plus one honest clarification for native
+  mode: packages are not preloaded there; the Packages tab or load(...)
+  brings them in.
+
 ## 0.0.39 — the workbench names its engine
 
 ### Fixed
