@@ -1,5 +1,31 @@
 # Cozy changelog
 
+## 0.0.46 — the Darwin rule, applied to its author
+
+### Fixed
+- **The QoS call failed to compile on macOS**: pthread_set_qos_class_
+  self_np is an Apple extension, and strict _POSIX_C_SOURCE hides it —
+  the exact class the 0.0.42 playbook trap documents, whose own remedy
+  list ("_DARWIN_C_SOURCE alongside when BSD APIs are genuinely
+  needed") the author then failed to apply one release later. serve.c
+  now defines _DARWIN_C_SOURCE under __APPLE__ beside the strict
+  macro; Linux unchanged, and the INADDR_LOOPBACK fallback stays
+  (harmless, and it guards non-Darwin strict platforms too).
+
+## 0.0.45 — the workbench claims a performance core
+
+### Fixed
+- **Workbench evals ran ~1.5x slower than the terminal on Apple
+  Silicon, same binary, same backend** (owner's measurement: 0.042s vs
+  0.028s for inv(1000), with tic/toc inside the process so HTTP is
+  exonerated — and 0.042 is NOT the complex-funnel signature, so the
+  real-dispatch fix stands). Cause: a process blocked on accept() reads
+  as background work to the macOS scheduler and is relegated to
+  efficiency cores. The server now declares QOS_CLASS_USER_INTERACTIVE
+  on Darwin at startup; Linux is untouched. Untestable in this
+  container — the owner's Mac remains the acceptance layer, third
+  lesson in that ledger from one week of deploys.
+
 ## 0.0.44 — versions that agree with themselves
 
 ### Fixed, and owned

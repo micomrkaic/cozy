@@ -1,4 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+#define _DARWIN_C_SOURCE 1   /* re-expose Apple extensions (the QoS API) that
+    strict POSIX hides — the playbook's own Darwin rule, applied this time */
+#endif
 /* serve.c — cozy --workbench: the workbench's native engine (design entry 9).
  * A deliberately tiny localhost HTTP server: serves docs/ (the same page
  * GitHub Pages serves), answers POST /eval by running the line through THIS
@@ -15,6 +19,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 #include <unistd.h>
 #ifndef INADDR_LOOPBACK
 #define INADDR_LOOPBACK ((uint32_t)0x7f000001)   /* Darwin under strict
@@ -132,6 +139,14 @@ static void do_eval(int fd, Interp *I, EnvObj *globals, char *line)
 
 int cozy_workbench(int port)
 {
+#ifdef __APPLE__
+    /* A socket-blocked daemon reads as background work to the macOS
+     * scheduler and gets relegated to efficiency cores — the owner
+     * measured inv(1000) at 0.042s in the workbench vs 0.028s in the
+     * terminal, SAME binary. Declare interactive QoS so evals run on
+     * performance cores like the REPL does. */
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#endif
     signal(SIGPIPE, SIG_IGN);
     setenv("COZY_PLOT_TERM", "svg", 1);          /* plots land as plot_N.svg for the pane */
     Interp I; interp_init(&I);
