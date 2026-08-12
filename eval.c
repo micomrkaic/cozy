@@ -2515,6 +2515,9 @@ static Value bi_names(Interp *I, Value *args, uint32_t n)
 /* input("prompt"): print the prompt, read one line from the keyboard,
  * return it as a string (newline stripped). In the browser this is
  * window.prompt. */
+bool cozy_stdin_ok = true;   /* the workbench server clears this: a one-shot
+    HTTP eval must never block on the SERVER's stdin (owner's demo() hang) */
+
 static Value bi_input(Interp *I, Value *args, uint32_t n)
 {
     const char *prompt = ""; uint32_t plen = 0;
@@ -2522,6 +2525,8 @@ static Value bi_input(Interp *I, Value *args, uint32_t n)
         if (args[0].kind != VAL_STRING) runtime_error(I, "input: expected a prompt string");
         StrObj *s0 = as_str(args[0]); prompt = s0->data; plen = s0->len;
     }
+    extern bool cozy_stdin_ok;
+    if (!cozy_stdin_ok) return val_string("", 0);   /* workbench: never block */
 #ifdef __EMSCRIPTEN__
     char cp[256];
     snprintf(cp, sizeof cp, "%.*s", (int)plen, prompt);
@@ -2556,6 +2561,8 @@ static Value bi_pause(Interp *I, Value *args, uint32_t n)
     if (n == 1 && args[0].kind == VAL_STRING) {
         StrObj *s0 = as_str(args[0]); msg = s0->data; mlen = s0->len;
     }
+    extern bool cozy_stdin_ok;
+    if (!cozy_stdin_ok) return val_null();          /* workbench: never block */
 #ifdef __EMSCRIPTEN__
     /* Real waiting in the browser: wasm_api streams pending output to the
      * page (so the terminal paints), then Asyncify-yields until the page's

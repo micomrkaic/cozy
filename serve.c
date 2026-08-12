@@ -110,11 +110,42 @@ static void list_plots(int fd)
     respond(fd, "200 OK", "text/plain", body, bl);
 }
 
+/* Frontend command sugar, mirroring repl.c's match_command family so the
+ * workbench terminal speaks the same commands as the REPL (owner's catch:
+ * `pretty on` parsed as an error here while working in the terminal).
+ * Returns true if the line was a command (reply already written to cap). */
+static bool serve_command(FILE *cap, const char *line)
+{
+    const char *q = line;
+    while (*q == ' ' || *q == '\t') q++;
+    if (!strncmp(q, "pretty", 6) && (q[6] == '\0' || q[6] == ' ')) {
+        const char *arg = q + 6; while (*arg == ' ') arg++;
+        size_t al = strcspn(arg, " \t\r\n");
+        if (!strncmp(arg, "on", al) && al == 2)       value_set_multiline(true);
+        else if (!strncmp(arg, "off", al) && al == 3) value_set_multiline(false);
+        else { fprintf(cap, "pretty is %s\n", value_multiline() ? "on" : "off"); return true; }
+        return true;
+    }
+    if (!strncmp(q, "manual", 6) && (q[6] == '\0' || q[6] == ' ')) {
+        fprintf(cap, "the manual lives in the Docs tab up top\n"); return true;
+    }
+    if (!strncmp(q, "more", 4) && (q[4] == '\0' || q[4] == ' ')) {
+        fprintf(cap, "more is the terminal pager; the browser scrolls\n"); return true;
+    }
+    return false;
+}
+
 static void do_eval(int fd, Interp *I, EnvObj *globals, char *line)
 {
     char *out = NULL; size_t outlen = 0;
     FILE *cap = open_memstream(&out, &outlen);
     value_set_out(cap);
+    if (serve_command(cap, line)) {                 /* frontend commands first */
+        fclose(cap); value_set_out(stdout);
+        respond(fd, "200 OK", "text/plain", out ? out : "", outlen);
+        free(out);
+        return;
+    }
     char *src = strdup(line);
     Arena *a = arena_new();
     Parser p;
@@ -149,6 +180,8 @@ static void serve_eval_dispatch(void *p)
 
 int cozy_workbench(int port)
 {
+    extern bool cozy_stdin_ok;
+    cozy_stdin_ok = false;      /* HTTP evals must never block on our stdin */
 #ifdef __APPLE__
     /* A socket-blocked daemon reads as background work to the macOS
      * scheduler and gets relegated to efficiency cores — the owner

@@ -85,10 +85,36 @@ w('  print("");\n  print("  The Cozy tour — the book of examples, live.");\n')
 w('  print("  The demo and the book contain the same examples by construction.");\n')
 w('  print("");\n')
 for si, (title, probs) in enumerate(sections, 1):
-    label = f"  demo({si})  {title}  ({len(probs)} problem" + ("s" if len(probs) != 1 else "") + ")"
+    label = f"  demo{si}  {title}  ({len(probs)} problem" + ("s" if len(probs) != 1 else "") + ")"
     w(f'  praw({cz_str(label)});\n')
-w('  print("");\n  print("  demo(0) plays everything.");\n  null)\n\n')
+w('  print("");\n')
+w('  print("  Type a section name (demo15), then next to step through its problems.");\n')
+w('  print("  In the terminal REPL, demo() runs the guided tour instead.");\n  null)\n\n')
 
+# workbench-native stepping: demoK starts a section (plays its first
+# problem); next advances one problem per call — one eval per click.
+w('let demo_seclens = [' + ', '.join(str(len(p)) for _, p in sections) + ']\n')
+w('let demo_cursec = 0\nlet demo_curprob = 0\n')
+w('let demo_playprob = fn s2, k2 -> (\n')
+for si, (_, probs) in enumerate(sections, 1):
+    for pi, (pid, ptitle, lines) in enumerate(probs, 1):
+        w(f'  if s2 == {si} & k2 == {pi} then (dhead({cz_str(pid + " — " + ptitle)});\n')
+        for l in lines:
+            w(f'    dshow({cz_str(l)});\n')
+        w('    null) end;\n')
+w('  null)\n\n')
+w('let next = fn -> (\n')
+w('  if demo_cursec == 0 then print("  no section running — demo15 (etc.) starts one")\n')
+w('  elseif demo_curprob >= demo_seclens[demo_cursec] then '
+  '(print("  section finished — pick another (demo1..demo' + str(len(sections)) + ')"); demo_cursec = 0)\n')
+w('  else (demo_curprob = demo_curprob + 1; demo_playprob(demo_cursec, demo_curprob);\n')
+w('    if demo_curprob < demo_seclens[demo_cursec] then '
+  'print("        [ next for the next problem ]") '
+  'else (print("        [ section finished — demo1..demo' + str(len(sections)) + ' for another ]"); demo_cursec = 0) end)\n')
+w('  end; null)\n\n')
+for si in range(1, len(sections) + 1):
+    w(f'let demo{si} = fn -> (demo_cursec = {si}; demo_curprob = 0; next())\n')
+w('\n')
 w('let demo = fn -> (\n')
 w('  let going = true;\n')
 w('  while going do\n')

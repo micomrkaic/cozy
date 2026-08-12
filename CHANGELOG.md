@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.55 — the workbench speaks demo and pretty
+
+### Fixed (owner's workbench session, three findings)
+- **The workbench now steps the demo natively**: demo1..demo15 start a
+  section (autocallable — type the word), and next plays one problem
+  per eval — click-through, literally, one HTTP round-trip per step.
+  The menu now advertises this real interface instead of the dead
+  demo(k) form left over from the redesign. The generator emits the
+  whole stepper, so the book remains the single source; the REPL's
+  guided demo() tour is unchanged.
+- **input() and pause() can no longer hang the workbench**: a one-shot
+  HTTP eval reading the SERVER's stdin would block the server (and the
+  browser) forever — under --workbench they now return immediately
+  ("" and null). This is what made interactive demo() unusable there;
+  the stepper needs neither.
+- **pretty on works in the workbench** ("pretty on|off" is REPL
+  frontend command sugar, absent from the server): serve.c gains a
+  command layer mirroring repl.c's — pretty toggles the shared
+  value-layer flag, and manual/more answer with pointers to their
+  browser-native equivalents (the Docs tab; the scrollbar).
+
 ## 0.0.54 — docket entry 13: default parameter values, parked
 
 ### Design
