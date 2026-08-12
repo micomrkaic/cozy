@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.0.56 — the demo interface, settled
+
+### Fixed (owner's ruling after three releases of churn — owned)
+- **One interface, both surfaces, one gesture**: demo() runs the
+  guided tour (menu, pick a number, plain Enter advances via pause) —
+  unchanged in the REPL since 0.0.53. In the workbench, where evals
+  are one-shot HTTP and pause cannot block, the PAGE now maps a bare
+  Enter to a step whenever a problem is waiting (armed by the
+  "[ Enter for the next problem ]" marker) — so the gesture is
+  identical: hit Enter, the next problem plays. demo3 (etc.) still
+  jumps straight into a section on either surface; the menu text now
+  says exactly this and nothing else. The interface churn across
+  0.0.53-55 (demo(k) removed, next introduced, labels lagging) is
+  owned in this entry; the lesson is the screen-is-the-spec principle
+  applied to interaction: the gesture the user already knows (Enter
+  advances, as in pause) beats any new word.
+
 ## 0.0.55 — the workbench speaks demo and pretty
 
 ### Fixed (owner's workbench session, three findings)

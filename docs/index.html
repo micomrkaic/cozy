@@ -225,6 +225,7 @@
   }
   function writeRaw(node) { term.appendChild(node); scroll(); }
   function writeLine(cls, text) {
+    if (text && text.indexOf('[ Enter for the next problem ]') !== -1) window.__demoStep = true;
     var d = document.createElement('div');
     d.appendChild(el(cls, text));
     term.appendChild(d); scroll();
@@ -352,6 +353,9 @@
     if (e.key === 'Enter') {
       var line = input.value;
       input.value = '';
+      /* demo stepping: when a problem is waiting, a bare Enter advances —
+       * same gesture as the REPL's pause (owner's ruling: just hit Enter) */
+      if (line === '' && window.__demoStep) { window.__demoStep = false; run('next'); return; }
       run(line);
     } else if (e.key === 'ArrowUp') {
       if (histpos > 0) { histpos--; input.value = history[histpos]; moveCaretEnd(); }

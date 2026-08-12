@@ -88,8 +88,8 @@ for si, (title, probs) in enumerate(sections, 1):
     label = f"  demo{si}  {title}  ({len(probs)} problem" + ("s" if len(probs) != 1 else "") + ")"
     w(f'  praw({cz_str(label)});\n')
 w('  print("");\n')
-w('  print("  Type a section name (demo15), then next to step through its problems.");\n')
-w('  print("  In the terminal REPL, demo() runs the guided tour instead.");\n  null)\n\n')
+w('  print("  demo() starts the guided tour: pick a number, Enter advances.");\n')
+w('  print("  Or jump straight in: demo3 (etc.) starts a section; Enter steps.");\n  null)\n\n')
 
 # workbench-native stepping: demoK starts a section (plays its first
 # problem); next advances one problem per call — one eval per click.
@@ -109,8 +109,8 @@ w('  elseif demo_curprob >= demo_seclens[demo_cursec] then '
   '(print("  section finished — pick another (demo1..demo' + str(len(sections)) + ')"); demo_cursec = 0)\n')
 w('  else (demo_curprob = demo_curprob + 1; demo_playprob(demo_cursec, demo_curprob);\n')
 w('    if demo_curprob < demo_seclens[demo_cursec] then '
-  'print("        [ next for the next problem ]") '
-  'else (print("        [ section finished — demo1..demo' + str(len(sections)) + ' for another ]"); demo_cursec = 0) end)\n')
+  'print("        [ Enter for the next problem ]") '
+  'else (print("        [ section finished — demo for the menu ]"); demo_cursec = 0) end)\n')
 w('  end; null)\n\n')
 for si in range(1, len(sections) + 1):
     w(f'let demo{si} = fn -> (demo_cursec = {si}; demo_curprob = 0; next())\n')

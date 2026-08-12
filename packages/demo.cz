@@ -646,8 +646,8 @@ let demo_menu = fn -> (
   praw("  demo14  14. The Cozy idiom  (5 problems)");
   praw("  demo15  15. The Cozy instruments  (9 problems)");
   print("");
-  print("  Type a section name (demo15), then next to step through its problems.");
-  print("  In the terminal REPL, demo() runs the guided tour instead.");
+  print("  demo() starts the guided tour: pick a number, Enter advances.");
+  print("  Or jump straight in: demo3 (etc.) starts a section; Enter steps.");
   null)
 
 let demo_seclens = [4, 3, 5, 3, 4, 2, 3, 2, 3, 10, 4, 4, 3, 5, 9]
@@ -1212,7 +1212,7 @@ let next = fn -> (
   if demo_cursec == 0 then print("  no section running — demo15 (etc.) starts one")
   elseif demo_curprob >= demo_seclens[demo_cursec] then (print("  section finished — pick another (demo1..demo15)"); demo_cursec = 0)
   else (demo_curprob = demo_curprob + 1; demo_playprob(demo_cursec, demo_curprob);
-    if demo_curprob < demo_seclens[demo_cursec] then print("        [ next for the next problem ]") else (print("        [ section finished — demo1..demo15 for another ]"); demo_cursec = 0) end)
+    if demo_curprob < demo_seclens[demo_cursec] then print("        [ Enter for the next problem ]") else (print("        [ section finished — demo for the menu ]"); demo_cursec = 0) end)
   end; null)
 
 let demo1 = fn -> (demo_cursec = 1; demo_curprob = 0; next())
