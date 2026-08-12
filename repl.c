@@ -525,7 +525,20 @@ int repl_run(void)
         acc = append_line(acc, &acclen, line);
         free(line);
 
-        if (is_blank(acc)) { free(acc); acc = nullptr; acclen = 0; cont = false; continue; }
+        if (is_blank(acc)) {
+            /* the demo's stepping gesture: when a section is mid-tour
+             * (globals hold demo_cursec > 0), a bare Enter advances one
+             * problem — the same mapping the workbench page applies, so
+             * "[ Enter for the next problem ]" is true on both surfaces */
+            Value dcv;
+            bool stepping = env_lookup(I.globals, "demo_cursec", 11, &dcv) &&
+                            dcv.kind == VAL_INT && dcv.as.i > 0;
+            if (stepping) {
+                value_release(dcv);
+                free(acc);
+                acc = strdup("next"); acclen = 4;
+            } else { free(acc); acc = nullptr; acclen = 0; cont = false; continue; }
+        }
 
         Arena *a = arena_new();
         Parser p;

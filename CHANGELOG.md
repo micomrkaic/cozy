@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.0.58 — Enter advances, everywhere, under test
+
+### Fixed (owner's third demo report — the instability ends here)
+- **Plain Enter now advances the stepper in the terminal REPL too**:
+  the menu promised "Enter steps" but only the workbench page mapped
+  it; the REPL ignored blank lines. The REPL now sends next on a bare
+  Enter whenever a section is mid-tour (globals hold demo_cursec > 0)
+  — the same mapping the page applies, so the marker line is true on
+  both surfaces.
+- **The guided tour's menu prompt says what Enter does** ("q or Enter
+  quits") — pressing Enter at the menu quit silently before, reading
+  as breakage. An attempted "Enter re-shows the menu" variant is dead:
+  it infinite-loops at EOF (input() returns "" forever) and cost one
+  timed-out test run to learn.
+- **The interaction paths are now suite-tested through the real REPL
+  binary**: run_demo.sh drives Enter-stepping (demo9 + three blank
+  lines -> three problems) and the guided tour (demo() -> 9 -> q)
+  end to end, with timeouts. Three releases of interface churn came
+  from changing behavior without a test on the behavior; the gestures
+  themselves are now goldens.
+
 ## 0.0.57 — Problem 9.3, at last
 
 ### Fixed

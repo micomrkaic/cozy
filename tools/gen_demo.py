@@ -88,8 +88,9 @@ for si, (title, probs) in enumerate(sections, 1):
     label = f"  demo{si}  {title}  ({len(probs)} problem" + ("s" if len(probs) != 1 else "") + ")"
     w(f'  praw({cz_str(label)});\n')
 w('  print("");\n')
-w('  print("  demo() starts the guided tour: pick a number, Enter advances.");\n')
-w('  print("  Or jump straight in: demo3 (etc.) starts a section; Enter steps.");\n  null)\n\n')
+w('  print("  demo() starts the guided tour: pick a section by number at the");\n')
+w('  print("  prompt, and plain Enter advances between problems (q quits).");\n')
+w('  print("  Or jump straight in: demo9 (etc.) starts a section; Enter steps.");\n  null)\n\n')
 
 # workbench-native stepping: demoK starts a section (plays its first
 # problem); next advances one problem per call — one eval per click.
@@ -119,7 +120,7 @@ w('let demo = fn -> (\n')
 w('  let going = true;\n')
 w('  while going do\n')
 w('    demo_menu();\n')
-w('    let s = trim(input("  section (number, a = all, q = quit): "));\n')
+w('    let s = trim(input("  section (number; a = all; q or Enter quits): "));\n')
 w('    if s == "q" | s == "" then (going = false)\n')
 w('    elseif s == "a" then (')
 for si in range(1, len(sections) + 1):

@@ -646,8 +646,9 @@ let demo_menu = fn -> (
   praw("  demo14  14. The Cozy idiom  (5 problems)");
   praw("  demo15  15. The Cozy instruments  (9 problems)");
   print("");
-  print("  demo() starts the guided tour: pick a number, Enter advances.");
-  print("  Or jump straight in: demo3 (etc.) starts a section; Enter steps.");
+  print("  demo() starts the guided tour: pick a section by number at the");
+  print("  prompt, and plain Enter advances between problems (q quits).");
+  print("  Or jump straight in: demo9 (etc.) starts a section; Enter steps.");
   null)
 
 let demo_seclens = [4, 3, 5, 3, 4, 2, 3, 2, 3, 10, 4, 4, 3, 5, 9]
@@ -1235,7 +1236,7 @@ let demo = fn -> (
   let going = true;
   while going do
     demo_menu();
-    let s = trim(input("  section (number, a = all, q = quit): "));
+    let s = trim(input("  section (number; a = all; q or Enter quits): "));
     if s == "q" | s == "" then (going = false)
     elseif s == "a" then (demo_sec1(); demo_sec2(); demo_sec3(); demo_sec4(); demo_sec5(); demo_sec6(); demo_sec7(); demo_sec8(); demo_sec9(); demo_sec10(); demo_sec11(); demo_sec12(); demo_sec13(); demo_sec14(); demo_sec15(); print(""); print("  Tour complete — the book has the prose."); going = false)
     elseif s == "1" then demo_sec1()
