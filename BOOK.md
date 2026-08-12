@@ -720,7 +720,7 @@ the fan-out doesn't care who wrote its entries.
 
 ---
 
-**Problem 9.9 — A namespace is a record that grew up.** Pack an API into
+**Problem 9.3 — A namespace is a record that grew up.** Pack an API into
 a record and three things come free: a manifest, dynamic access, and
 sibling calls. A fourth thing comes due — the law at the end.
 

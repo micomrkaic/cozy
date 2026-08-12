@@ -247,7 +247,7 @@ let demo_sec9 = fn -> (
   dshow("let report = sample |> {n = length, mu = mean, sd = std, q90 = fn v -> quantile(v, 0.9)}");
   dshow("report.q90");
   dwait();
-  dhead("9.9 — A namespace is a record that grew up");
+  dhead("9.3 — A namespace is a record that grew up");
   dshow("let stats = {se = fn v -> sqrt(v / 100), z = fn m -> m / stats.se(4.0)}");
   dshow("stats.z(0.5)");
   dshow("getfield(stats, \"z\")(0.5)");
@@ -853,7 +853,7 @@ let demo_playprob = fn s2, k2 -> (
     dshow("let report = sample |> {n = length, mu = mean, sd = std, q90 = fn v -> quantile(v, 0.9)}");
     dshow("report.q90");
     null) end;
-  if s2 == 9 & k2 == 3 then (dhead("9.9 — A namespace is a record that grew up");
+  if s2 == 9 & k2 == 3 then (dhead("9.3 — A namespace is a record that grew up");
     dshow("let stats = {se = fn v -> sqrt(v / 100), z = fn m -> m / stats.se(4.0)}");
     dshow("stats.z(0.5)");
     dshow("getfield(stats, \"z\")(0.5)");

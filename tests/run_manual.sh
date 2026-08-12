@@ -24,3 +24,18 @@ python3 tools/gen_package_tables.py --check || exit 1
 # structural lint: no duplicated problem numbers in any book
 dups=$(grep -oE '\*\*Problem [0-9]+\.[0-9]+' BOOK.md | sort | uniq -d)
 if [ -n "$dups" ]; then echo "BOOK.md: duplicated problem numbers: $dups"; exit 1; fi
+# ...and numbering is consecutive from 1 within each chapter (gaps are the
+# 9.9 bug: an inserted problem numbered by vibes; the demo replays the books,
+# so the books' numbering is user-facing twice over)
+python3 - <<'PYLINT'
+import re, sys
+book = open('BOOK.md').read()
+chap, probs = None, {}
+for m in re.finditer(r'^## (\d+)\. |^\*\*Problem (\d+\.\d+)', book, re.M):
+    if m.group(1): chap = int(m.group(1))
+    else: probs.setdefault(chap, []).append(int(m.group(2).split('.')[1]))
+bad = [c for c, ns in probs.items() if ns != list(range(1, len(ns) + 1))]
+if bad:
+    print("BOOK.md: non-consecutive problem numbering in chapter(s):", bad); sys.exit(1)
+PYLINT
+if [ $? -ne 0 ]; then exit 1; fi

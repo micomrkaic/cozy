@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.0.57 — Problem 9.3, at last
+
+### Fixed
+- **Chapter 9's problems ran 9.1, 9.2, 9.9** (owner spotted it in the
+  demo, which faithfully replays the book): the namespace problem was
+  misnumbered at insertion in 0.0.27 — the same insertion-bug family
+  as the historical two-10.6s incident, which taught the
+  duplicate-numbers lint but not a GAP lint. Renumbered to 9.3
+  (headers only; transcripts untouched), the full-book audit found no
+  other chapter affected, and run_manual.sh now also requires
+  consecutive numbering from 1 within each chapter — the demo replays
+  the books, so their numbering is user-facing twice over. PDFs
+  rebuilt per the 0.0.51 discipline.
+
 ## 0.0.56 — the demo interface, settled
 
 ### Fixed (owner's ruling after three releases of churn — owned)
