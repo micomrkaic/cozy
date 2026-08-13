@@ -4,7 +4,7 @@
 # ("tier0" here, "accelerate"/"openblas" under tier 1) and NEVER the build
 # timestamp (fails at midnight). The record shape and the version cross-check
 # are the same on every tier forever.
-length(fields(buildinfo())) == 3
+length(fields(buildinfo())) == 4
 => true
 fields(buildinfo())[1] == "backend"
 => true

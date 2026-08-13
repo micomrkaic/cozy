@@ -1647,15 +1647,15 @@ cozy> let T = 5; let β = 0.96; let R = 1.04; let W = 100.0
 cozy> let U = fn c -> sum[t = 1:T] β^(t - 1) * log(c[t])
 <fn/1>
 cozy> let sol = maximize_con(U, W / T * ones(T, 1), {eq = fn c -> [(sum[t = 1:T] c[t] / R^(t - 1)) - W]});
-cozy> sol.x
-[ 21.6653
-  21.6306
-   21.596
-  21.5615
-  21.5269 ]
+cozy> format("fixed", 2); sol.x
+[ 21.67
+  21.63
+  21.60
+  21.56
+  21.53 ]
 cozy> abs(sol.x[2] / sol.x[1] - β * R) < 1e-4
 true
-cozy> abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-8
+cozy> abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-6
 true
 ```
 
@@ -1680,15 +1680,15 @@ cozy> let Σ = [0.04, 0.006, 0.0; 0.006, 0.09, 0.012; 0.0, 0.012, 0.16]
 cozy> let vol2 = fn w -> sum(w .* (Σ * w))
 <fn/1>
 cozy> let sol = minimize_con(vol2, ones(3, 1) / 3, {eq = fn w -> [sum(w) - 1]});
-cozy> sol.x
-[  0.62223
-  0.230869
-    0.1469 ]
+cozy> format(4); sol.x
+[ 0.6222
+  0.2309
+  0.1469 ]
 cozy> let wstar = (Σ \ ones(3, 1)) / sum(Σ \ ones(3, 1));
-cozy> max(abs(sol.x - wstar)) < 1e-5
+cozy> max(abs(sol.x - wstar)) < 1e-4
 true
-cozy> sqrt(vol2(sol.x))
-0.162094
+cozy> format(4); sqrt(vol2(sol.x))
+0.1621
 ```
 
 **Discussion.** The minimum-variance portfolio, twice: once numerically

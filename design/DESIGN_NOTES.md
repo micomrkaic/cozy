@@ -498,9 +498,15 @@ transcript. DESIGN, mirroring the linalg seam (entry 10's pattern):
   booleans), never raw iterates — different algorithms legitimately
   land on different last digits (the 15.5 recapture already models
   this).
-- Release ladder: (1) seam + nlmin + SLSQP/LBFGS with dual-gradient
-  trampoline, container-proven; (2) optim.cz dispatch + both books
-  green both ways; (3) Mac acceptance (brew nlopt; every Darwin trap
+- Release ladder: (1) SHIPPED 0.0.61 — OPTIM=nlopt flag, nlmin builtin
+  (slsqp/lbfgs/bobyqa/cobyla; eq/ineq mconstraints with dual-Jacobian
+  trampolines; lb/ub/xtol/maxeval), buildinfo().optim, trampoline
+  error-trap per the callback discipline; measured: the life-cycle
+  problem 0.07 s (tuned AL) -> 0.00056 s (SLSQP + exact gradients).
+  (2) SHIPPED 0.0.61 — minimize_con/maximize_con dispatch by
+  buildinfo; the 15.5/15.6 fences moved to build-invariant fixed
+  precision per the transcript posture; FULL SUITE GREEN under both
+  OPTIM=none and OPTIM=nlopt; (3) Mac acceptance (brew nlopt; every Darwin trap
   in the almanac applies to the new C boundary); (4) BOBYQA/COBYLA +
   a book problem exercising derivative-free; (5) global methods when
   a transcript asks. wasm keeps tier0 (NLopt-to-emscripten parked,

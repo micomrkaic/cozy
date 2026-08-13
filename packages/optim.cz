@@ -113,7 +113,7 @@ let maximize_box = fn f, x0, lb, ub -> (
 # the same autodiff machinery drives the constrained case.
 let op_has = fn c, name -> any(fields(c) == name)
 
-let minimize_con = fn f, x0, cons -> (
+let minimize_con_al = fn f, x0, cons -> (
   let heq = if op_has(cons, "eq") then cons.eq else fn x -> zeros(1, 1) end;
   let gin = if op_has(cons, "ineq") then cons.ineq else fn x -> zeros(1, 1) - 1 end;
   let lam = 0.0 * heq(1.0 * x0);
@@ -147,6 +147,20 @@ let minimize_con = fn f, x0, cons -> (
   end;
   {x = x, fx = f(x), iters = iters, converged = converged}
 )
+
+% professional backend (docket 14): with OPTIM=nlopt, constrained
+% minimization runs SLSQP fed by exact dual gradients; the augmented
+% Lagrangian above remains the tier0 path (and all wasm builds).
+let minimize_con_nl = fn f, x0, cons -> (
+  let opts = {alg = "slsqp"};
+  let opts = if op_has(cons, "eq") then setfield(opts, "eq", cons.eq) else opts end;
+  let opts = if op_has(cons, "ineq") then setfield(opts, "ineq", cons.ineq) else opts end;
+  nlmin(f, x0, opts)
+)
+
+let minimize_con = fn f, x0, cons -> (
+  if buildinfo().optim == "nlopt" then minimize_con_nl(f, x0, cons)
+  else minimize_con_al(f, x0, cons) end)
 
 let maximize_con = fn f, x0, cons -> (
   let r = minimize_con(fn x -> -f(x), x0, cons);

@@ -2738,6 +2738,8 @@ Value call_value(Interp *I, Value callee, Value *args, uint32_t n);
 static double want_real(Interp *I, Value v, const char *who);   /* defined in the special-functions section */
 static Value record2(const char *k1, Value v1, const char *k2, Value v2);
 static Value record3(const char *k1, Value v1, const char *k2, Value v2, const char *k3, Value v3);
+static Value record4(const char *k1, Value v1, const char *k2, Value v2,
+                     const char *k3, Value v3, const char *k4, Value v4);
 
 /* Evaluate a user function at x; require a real scalar back. */
 static double call_f1(Interp *I, Value f, double x, const char *who)
@@ -4260,10 +4262,27 @@ static Value bi_buildinfo(Interp *I, Value *args, uint32_t n)
 {
     (void)I; (void)args; (void)n;
     const char *b = cozy_linalg()->name;
-    return record3("backend", val_string(b, (uint32_t)strlen(b)),
+#ifdef COZY_NLOPT
+    const char *o = "nlopt";
+#else
+    const char *o = "none";
+#endif
+    return record4("backend", val_string(b, (uint32_t)strlen(b)),
                    "version", val_string(COZY_VERSION, (uint32_t)strlen(COZY_VERSION)),
-                   "built",   val_string(COZY_BUILT, (uint32_t)strlen(COZY_BUILT)));
+                   "built",   val_string(COZY_BUILT, (uint32_t)strlen(COZY_BUILT)),
+                   "optim",   val_string(o, (uint32_t)strlen(o)));
 }
+
+#ifdef COZY_NLOPT
+#include "optim_nlopt.inc"
+#else
+static Value bi_nlmin(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    runtime_error(I, "nlmin: this build has no optimization backend — "
+                     "rebuild with OPTIM=nlopt (see the manual's backends section)");
+}
+#endif
 
 /* now(): the current local date and time as {y, m, d, h, mi, s}. */
 static Value bi_now(Interp *I, Value *args, uint32_t n)
@@ -4699,6 +4718,16 @@ static Value record3(const char *k1, Value v1, const char *k2, Value v2, const c
     o->keys[0] = k1; o->keylens[0] = (uint32_t)strlen(k1); o->vals[0] = v1;
     o->keys[1] = k2; o->keylens[1] = (uint32_t)strlen(k2); o->vals[1] = v2;
     o->keys[2] = k3; o->keylens[2] = (uint32_t)strlen(k3); o->vals[2] = v3;
+    return r;
+}
+static Value record4(const char *k1, Value v1, const char *k2, Value v2,
+                     const char *k3, Value v3, const char *k4, Value v4)
+{
+    Value r = val_record(4); RecObj *o = as_rec(r);
+    o->keys[0] = k1; o->keylens[0] = (uint32_t)strlen(k1); o->vals[0] = v1;
+    o->keys[1] = k2; o->keylens[1] = (uint32_t)strlen(k2); o->vals[1] = v2;
+    o->keys[2] = k3; o->keylens[2] = (uint32_t)strlen(k3); o->vals[2] = v3;
+    o->keys[3] = k4; o->keylens[3] = (uint32_t)strlen(k4); o->vals[3] = v4;
     return r;
 }
 static double vmag(Value v)
@@ -6698,6 +6727,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "whor",  bi_whor,  0, 1);
     def_builtin(e, "whos",  bi_whos,  0, 0);
     def_builtin(e, "version", bi_version, 0, 0);
+    def_builtin(e, "nlmin",      bi_nlmin,      2, 3);
     def_builtin(e, "buildinfo", bi_buildinfo, 0, 0);
     def_builtin(e, "now",   bi_now,   0, 0);
     def_builtin(e, "help",  bi_help,  0, 1);

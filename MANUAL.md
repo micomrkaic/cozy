@@ -1028,7 +1028,7 @@ so this page never goes stale.)
 
 ```
 cozy> fields(buildinfo())
-["backend"; "version"; "built"]
+["backend"; "version"; "built"; "optim"]
 cozy> let b = buildinfo();
 cozy> b.version == version()
 true
@@ -1417,6 +1417,12 @@ cozy> clear("scatter"); who
 | Signature | Description |
 |---|---|
 | `map(f, A)` | apply f to each element of A, returning an array of results |
+
+### optimization
+
+| Signature | Description |
+|---|---|
+| `nlmin(f, x0, opts?)` | professional minimization (NLopt; exact dual gradients); opts: {alg = "slsqp"\|"lbfgs"\|"bobyqa"\|"cobyla", eq, ineq, lb, ub, xtol, maxeval} |
 
 ## 18. Grammar summary
 

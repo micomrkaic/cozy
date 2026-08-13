@@ -168,6 +168,7 @@
     "more"
     "names"
     "nan"
+    "nlmin"
     "nnz"
     "norm"
     "norminv"

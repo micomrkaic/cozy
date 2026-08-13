@@ -144,6 +144,8 @@ static const struct { const char *name, *pkg; } pkg_hints[] = {
     { "minimize_box", "packages/optim.cz" },
     { "maximize_box", "packages/optim.cz" },
     { "op_has", "packages/optim.cz" },
+    { "minimize_con_al", "packages/optim.cz" },
+    { "minimize_con_nl", "packages/optim.cz" },
     { "minimize_con", "packages/optim.cz" },
     { "maximize_con", "packages/optim.cz" },
     { "minimize_newton", "packages/optim.cz" },

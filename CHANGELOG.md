@@ -1,5 +1,30 @@
 # Cozy changelog
 
+## 0.0.61 — NLopt behind the seam (entry 14, steps 1-2)
+
+### Added
+- **OPTIM=nlopt build backend and the nlmin builtin**: SLSQP, L-BFGS,
+  BOBYQA, COBYLA over one options record ({alg, eq, ineq, lb, ub,
+  xtol, maxeval}), with Cozy's EXACT dual-number derivatives feeding
+  the gradient algorithms — objective gradients and constraint
+  Jacobians alike come from dual passes through the user's closures;
+  no finite differences anywhere. The callback discipline from the
+  docket entry is implemented: a runtime error in user code is
+  trapped in the trampoline, force-stops NLopt cleanly, and re-raises
+  after its frames unwind. buildinfo() gains the optim field.
+- **minimize_con/maximize_con dispatch to SLSQP** when built with
+  OPTIM=nlopt; the augmented Lagrangian remains the tier0 path and
+  what wasm ships. Measured on the book's life-cycle problem:
+  14631 iters unconverged (0.0.58) -> 0.07 s (0.0.59's tuned AL) ->
+  0.00056 s with SLSQP + exact gradients. minimize_newton is NOT
+  dispatched: exact hyper-dual Newton is Cozy's own jewel.
+- **The suite is green under BOTH builds** — the 15.5/15.6 fences
+  moved to build-invariant fixed precision per the transcript posture
+  (pin invariants, not iterate tails); nlmin documented in the TSV
+  (help, reference, emacs mode regenerate); buildinfo golden and
+  manual transcript updated for the fourth field.
+- Mac: brew install nlopt, then make BACKEND=accelerate OPTIM=nlopt.
+
 ## 0.0.60 — entry 14: the optimization backend seam, chartered
 
 ### Design

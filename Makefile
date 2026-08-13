@@ -19,7 +19,7 @@ LDFLAGS ?=
 SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c serve.c
 HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h
 BIN      = cozy
-LIBS     = -lm $(LINALG_LIBS)
+LIBS     = -lm $(LINALG_LIBS) $(OPTIM_LIBS)
 
 # On macOS, Homebrew's readline lives under the brew prefix rather than the
 # default search path; add it so the probe and link can find it. Empty on Linux
@@ -76,6 +76,13 @@ else ifeq ($(BACKEND),accelerate)
 else
   $(error unknown BACKEND '$(BACKEND)' — available: tier0, openblas, accelerate)
 endif
+OPTIM ?= none
+ifeq ($(OPTIM),nlopt)
+  CFLAGS += -DCOZY_NLOPT
+  OPTIM_LIBS = -lnlopt -lm
+else
+  OPTIM_LIBS =
+endif
 CORE     = lexer arena ast parser value eval chunk compile vm sparse $(LINALG)
 CORE_O   = $(CORE:%=$(OBJDIR)/%.o)
 ASAN_O   = $(CORE:%=$(ASANDIR)/%.o) $(ASANDIR)/vmtest.o
@@ -102,10 +109,10 @@ $(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
 # echoes each result (no readline), so piping a script in gives one result per
 # line. Handy for batch/regression testing and ASan runs.
 vmtest: $(CORE_O) $(OBJDIR)/vmtest.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ -lm $(LINALG_LIBS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
 
 vmtest-asan: $(ASAN_O)
-	$(CC) $(ASANFLAGS) $^ -lm $(LINALG_LIBS) -o $@
+	$(CC) $(ASANFLAGS) $^ -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
 
 # Regression suite: golden-output tests in tests/*.test (see tests/run.sh),
 # plus bytecode-disassembly goldens in tests/dis/ (see tests/run_dis.sh).
