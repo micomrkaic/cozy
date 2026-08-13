@@ -1,5 +1,15 @@
 # Cozy changelog
 
+## 0.0.62 — the missing header names its package
+
+### Fixed
+- **OPTIM=nlopt without the library died at a bare fatal error**
+  (owner's Debian build; the apt package is libnlopt-dev, which
+  nobody guesses from "nlopt"): the Makefile now probes for nlopt.h
+  before compiling and fails with the install command for both
+  Debian/Ubuntu and Homebrew. The trap-almanac class: a build flag's
+  failure message must name its remedy.
+
 ## 0.0.61 — NLopt behind the seam (entry 14, steps 1-2)
 
 ### Added

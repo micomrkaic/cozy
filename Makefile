@@ -78,6 +78,10 @@ else
 endif
 OPTIM ?= none
 ifeq ($(OPTIM),nlopt)
+  ifeq ($(shell echo '#include <nlopt.h>' | $(CC) -E -xc - >/dev/null 2>&1 && echo yes),)
+    $(error OPTIM=nlopt: nlopt.h not found — install the NLopt dev package \
+      (Debian/Ubuntu: sudo apt install libnlopt-dev; macOS: brew install nlopt))
+  endif
   CFLAGS += -DCOZY_NLOPT
   OPTIM_LIBS = -lnlopt -lm
 else
