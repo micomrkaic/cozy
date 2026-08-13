@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.4 — the binder reads as mathematics
+
+### Added (ledger arc 4)
+- **minimize[x = x0] f(x)** — the charter's own sketch of capability
+  3's surface, live: for minimize, maximize, and nlmin the
+  index-bound notation desugars to name(fn x -> body, x0). Every
+  other callable keeps sigma's reduction meaning; the optimizer
+  phrases previously always arity-erred, so the redirect changes the
+  meaning of zero working programs (the chain-release tradition).
+  Goldens cover both readings side by side; the manual states the
+  rule. Entry 13 (default parameters) is queued as the next session's
+  opening task — a language-core change owed a fresh context's full
+  care.
+
 ## 0.1.3 — dgeev, and the first build-conditional transcript
 
 ### Added (ledger arcs 1-2, owner's overrides recorded as overrides)

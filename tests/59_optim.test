@@ -32,3 +32,9 @@ load("packages/optim.cz"); let m = minimize_con(fn x -> sum((x - [2.0; 2.0]) .* 
 => true
 load("packages/optim.cz"); minimize(fn x -> sum(x .* x), [3.0; 4.0]).iters
 => 1
+load("packages/optim.cz"); (minimize[x = [0.0; 0.0]] (x[1] - 3)^2 + (x[2] + 1)^2).x
+[3; -1]
+load("packages/optim.cz"); (maximize[x = [0.0]] -(x[1] - 2)^2).x[1]
+2
+load("packages/optim.cz"); sum[k = 1:10] k^2
+385

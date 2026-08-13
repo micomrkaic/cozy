@@ -517,3 +517,13 @@ transcript. DESIGN, mirroring the linalg seam (entry 10's pattern):
   a book problem exercising derivative-free; (5) global methods when
   a transcript asks. wasm keeps tier0 (NLopt-to-emscripten parked,
   same posture as LAPACK-to-wasm).
+
+## Binder syntax — SHIPPED 0.1.4 (owner's arc 4). minimize[x = x0] E,
+maximize[...], nlmin[...] desugar to name(fn x -> E, x0); previously
+such phrases always arity-erred at runtime, so the redirect is
+additive. All other callables keep the sigma reduction meaning.
+Entry 13 (default parameters) is the ledger's remaining
+implementation item: a language-core change (parser, closure arity
+range, call-fill) deserving a fresh session's full fuzz-and-rite
+care — first task of the next working session, per the owner's
+sequencing.

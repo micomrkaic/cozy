@@ -1033,6 +1033,13 @@ package dispatch to SLSQP automatically when `buildinfo().optim` says
 `"nlopt"`; without the backend they run the pure augmented-Lagrangian
 path, which is also what the browser build ships. `minimize_newton`
 never dispatches: exact hyper-dual Newton is native Cozy either way.
+
+The optimizers also have a binder surface, the index-bound notation
+generalized from sigma: `minimize[x = x0] f(x)` reads as mathematics and
+desugars to `minimize(fn x -> f(x), x0)` — likewise `maximize` and
+`nlmin`. For every other callable, `f[k = R] E` keeps its reduction
+meaning; the optimizer names are special-cased because a minimization
+binds a starting point, not a range.
 (The transcript below shows only the record's
 shape: the backend name varies by build and the timestamp by the minute,
 so this page never goes stale.)

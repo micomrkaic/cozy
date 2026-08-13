@@ -729,6 +729,26 @@ static AstNode *parse_led(Parser *p, AstNode *left, int lbp)
                     lam->as.lambda.body   = body;
                     lam->as.lambda.src    = t.start;
                     lam->as.lambda.srclen = (uint32_t)(p->cur.start - t.start);
+                    /* Binder syntax (charter capability 3's surface, docket
+                     * arc 4): for the optimizer names, f[x = x0] E means
+                     * f(fn x -> E, x0) — a minimization over x from x0, not
+                     * a reduction. Previously such a phrase always
+                     * arity-erred at runtime, so the redirect is additive. */
+                    if (left->kind == AST_IDENT) {
+                        uint32_t ll = left->as.lit.len;
+                        const char *ln = left->as.lit.text;
+                        if ((ll == 8 && !memcmp(ln, "minimize", 8)) ||
+                            (ll == 8 && !memcmp(ln, "maximize", 8)) ||
+                            (ll == 5 && !memcmp(ln, "nlmin", 5))) {
+                            AstNode *call = node(p, AST_CALL, t);
+                            call->as.call.callee = left;
+                            Vec cargs = VEC_INIT;
+                            vec_push(p, &cargs, lam);
+                            vec_push(p, &cargs, range);
+                            call->as.call.args = vec_seal(p, &cargs);
+                            return call;
+                        }
+                    }
                     AstNode *mapped = node(p, AST_BINARY, t);
                     mapped->as.binary.op  = TOK_TILDE_GT;
                     mapped->as.binary.lhs = range;
