@@ -1,5 +1,37 @@
 # Cozy changelog
 
+## 0.1.0 — the four capabilities, real
+
+This is a milestone, not a diff. The charter named four founding
+capabilities; as of this version all four are implemented, tested, and
+in daily-driver shape:
+
+- **Sparse matrices** — a first-class sparse kind with legible
+  sparsity, explicit dense/sparse crossings, and iterative solvers
+  that never densify (Problem 15.1 is the demo).
+- **External LAPACK** — build-time backends (tier0, OpenBLAS,
+  Accelerate); real inputs run real routines: solve, det, symmetric
+  eig, svd, chol, and gemm, with measured speedups from 3x to 267x
+  and one result-shaping path shared by every backend.
+- **First-class differentiation** — dual and hyper-dual numbers as
+  value kinds (exact gradients and Hessians through user code), and
+  total ast(f) quotation for symbolic work in packages.
+- **Optimization** — OPTIM=nlopt links NLopt behind a seam: nlmin
+  (SLSQP, L-BFGS, BOBYQA, COBYLA) fed exact dual derivatives, with
+  the optim package dispatching automatically and the pure augmented
+  Lagrangian retained as tier0 and the browser story.
+
+Acceptance at the milestone: 1107 goldens, 429 book transcripts, the
+demo replaying all 64 problems, ASan/UBSan clean, the suite green
+under both OPTIM=none and OPTIM=nlopt on two Linux machines. The one
+open formality — the MacBook's accelerate+nlopt run — is recorded in
+the charter baton and lands when the owner and the machine are in the
+same city.
+
+Also in this release: the manual's backends section documents
+OPTIM=nlopt and the dispatch behavior; the charter carries the 0.1.0
+baton.
+
 ## 0.0.62 — the missing header names its package
 
 ### Fixed

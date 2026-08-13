@@ -167,3 +167,20 @@ buildinfo's goldens are deliberately structure-only — the conformance
 suite is the backend-equivalence harness, so no golden may ever pin a
 backend name. The wasm bundle still carries 0.0.4 (no emcc in the
 session container); rebuild on an emcc machine before the pages deploy.
+
+## Baton — 2026-08-13, v0.1.0
+
+The four founding capabilities are real: sparse (sparselin, cg at
+scale), external LAPACK (entry 10 phases 1-3; solve/det/eig_sym/svd/
+chol/gemm on real fast paths, both platforms), first-class
+differentiation (duals, hyper-duals, total ast(f) quotation), and
+optimization (entry 14: OPTIM=nlopt, nlmin with exact dual gradients,
+optim.cz dispatching; the AL retained as tier0 and the wasm story).
+Acceptance: full suite green under tier0 and openblas+nlopt on two
+Linux machines (container + owner's Debian). ONE OPEN FORMALITY:
+make BACKEND=accelerate OPTIM=nlopt test on the owner's MacBook
+(in Alexandria at the milestone; the owner in Duluth GA) — record its
+verdict in LESSONS when the reunion happens. Version counter: 0.1.x
+for the remaining ladder steps (a derivative-free book problem once
+transcripts can be build-conditional, global methods on a transcript);
+0.2.0 at the next capability boundary the docket defines.

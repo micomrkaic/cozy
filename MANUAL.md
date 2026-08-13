@@ -1022,6 +1022,17 @@ the difference visible. Build with `make BACKEND=openblas` for LAPACK-backed ker
 (`eig(rand(300))` measured ~158x faster than the hand-rolled tier0);
 `make` alone keeps the zero-dependency tier0. Either way the language is
 identical — the conformance suite passes byte-for-byte under both.
+
+Optimization has the same shape of choice, orthogonal to the linear
+algebra: `make OPTIM=nlopt` (Debian/Ubuntu: `libnlopt-dev`; macOS: `brew
+install nlopt`) links NLopt and enables the `nlmin` builtin — SLSQP,
+L-BFGS, BOBYQA, and COBYLA behind one options record, with gradients and
+constraint Jacobians supplied EXACTLY by Cozy's dual numbers rather than
+finite differences. `minimize_con` and `maximize_con` in the optim
+package dispatch to SLSQP automatically when `buildinfo().optim` says
+`"nlopt"`; without the backend they run the pure augmented-Lagrangian
+path, which is also what the browser build ships. `minimize_newton`
+never dispatches: exact hyper-dual Newton is native Cozy either way.
 (The transcript below shows only the record's
 shape: the backend name varies by build and the timestamp by the minute,
 so this page never goes stale.)
