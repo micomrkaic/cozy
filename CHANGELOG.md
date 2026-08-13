@@ -1,5 +1,21 @@
 # Cozy changelog
 
+## 0.1.3 — dgeev, and the first build-conditional transcript
+
+### Added (ledger arcs 1-2, owner's overrides recorded as overrides)
+- **Real nonsymmetric eig runs dgeev** (entry 10's last residue): the
+  paired-column eigenvector format is unpacked (conjugate pairs from
+  Re/Im column pairs) into the existing complex buffers, so the
+  sort/phase-anchor/snap downstream stays single-path. 1.16x at n=400
+  — eigenwork dominates, unlike the d-family's big wins — with
+  reconstruction at 3.6e-14 and zero golden casualties.
+- **Build-conditional transcripts, and Problem 15.10**: a fence tagged
+  cozy-nlopt verifies only on builds carrying the backend and is
+  SKIPPED WITH AN ANNOUNCEMENT elsewhere — never silently. The demo
+  leaves such fences book-only. First use: least absolute deviations
+  by BOBYQA — an objective with a kink at every data point, minimized
+  without a derivative, landing on the sample median to 1e-3.
+
 ## 0.1.2 — deploy stops deploying with its predecessor
 
 ### Fixed

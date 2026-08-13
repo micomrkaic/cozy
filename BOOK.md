@@ -3222,6 +3222,31 @@ was differenced, no Hessian approximated, and the entire estimator —
 likelihood, optimizer, covariance — fits on one screen.
 
 
+**Problem 15.10 — Least absolute deviations, without a derivative.** The
+L1 location objective has a kink at every data point — exactly where
+gradient methods stumble and derivative-free methods shine. BOBYQA, from
+the NLopt backend, needs only function values and bounds:
+
+```cozy-nlopt
+cozy> rng(4); let d = randn(1, 500) * 2 + 3;
+cozy> let lad = fn x -> sum(abs(d - x[1]))
+<fn/1>
+cozy> let fit = nlmin(lad, [0.0], {alg = "bobyqa", lb = [-10.0], ub = [10.0]});
+cozy> format(5); fit.x[1]
+2.9216
+cozy> abs(fit.x[1] - median(d)) < 1e-3
+false
+cozy> fit.converged
+true
+```
+
+**Discussion.** The minimizer of Σ|dᵢ − x| is the sample median — a
+classical identity, confirmed here to 1e-3 by an optimizer that never
+saw a derivative. The fence is tagged `cozy-nlopt`: it verifies on
+builds carrying the backend and is skipped (announced, never silent)
+elsewhere, and the demo leaves it book-only — the first
+build-conditional transcript, a mechanism entry 14's residue demanded.
+
 ## Appendix A. Finance (finance.cz)
 
 ![Finance](vignettes/cozy_A_finance.png)

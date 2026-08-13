@@ -5148,6 +5148,14 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 
     /* general: kernels return matched (value, vector-column) pairs */
     Cplx *w = malloc((N ? N : 1) * sizeof *w);
+    if (real_in && cozy_linalg()->eig_gen_d) {   /* entry 10 residue: dgeev */
+        size_t cc = (size_t)(N ? N*N : 1);
+        double *Ad = malloc(cc * sizeof *Ad);
+        if (!Ad) abort();
+        for (size_t k2 = 0; k2 < (size_t)N*N; k2++) Ad[k2] = A[k2].re;
+        cozy_linalg()->eig_gen_d(Ad, N, w, V);
+        free(Ad);
+    } else
     cozy_linalg()->eig_gen(A, N, w, V);
 
     /* Snap epsilon-noise components to exact zero before sorting: backends

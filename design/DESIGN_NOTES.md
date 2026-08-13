@@ -412,7 +412,13 @@ rounding family now canonicalizes its zero (round(-eps) must not print
 -0). ALSO: per-eval worker threads with explicit QOS_CLASS_USER_
 INTERACTIVE on Darwin (A*A parity across surfaces proved the residual
 workbench inv gap is Accelerate's pool QoS, not process scheduling).
-REMAINING residue: real nonsymmetric
+RESIDUE CLOSED 0.1.3
+(owner's override, "we need this for non-economists"): eig_gen_d via
+dgeev with the paired-column unpacking (wi>0 marks a conjugate pair;
+columns j, j+1 carry Re/Im), converting into the existing complex
+buffers so the sort/anchor/snap downstream stays single-path. 1.16x at
+n=400 (eigenwork dominates), residual 3.6e-14, zero golden casualties.
+Formerly: real nonsymmetric
 eig stays complex-funneled until dgeev's paired-column eigenvector
 format earns its unpacking (trigger: a profiled real nonsymmetric eig
 hot path).

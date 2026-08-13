@@ -17,7 +17,8 @@ book = open('BOOK.md').read()
 # ---- parse: chapters -> problems -> input lines ----------------------------
 chap_re = re.compile(r'^## (\d+)\. (.+?)\s*$', re.M)
 prob_re = re.compile(r'^\*\*Problem (\d+\.\d+) — (.+?)\.?\*\*', re.M)
-fence_re = re.compile(r'```[a-z]*\n(.*?)```', re.S)
+# nlopt-tagged fences stay book-only: the demo must play on every build
+fence_re = re.compile(r'```(?!cozy-nlopt)[a-z-]*\n(.*?)```', re.S)
 
 chapters = []           # (num, title, start, end)
 marks = list(chap_re.finditer(book))

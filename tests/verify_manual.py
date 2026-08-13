@@ -6,9 +6,19 @@ import re, subprocess, sys, os
 os.chdir(os.path.join(os.path.dirname(__file__), '..'))
 doc = sys.argv[1] if len(sys.argv) > 1 else 'MANUAL.md'
 text = open(doc).read()
-blocks = re.findall(r'```[a-z]*\n(.*?)```', text, re.S)
+blocks = re.findall(r'```([a-z-]*)\n(.*?)```', text, re.S)
+# build-conditional transcripts (entry 14 residue): a fence tagged
+# cozy-nlopt verifies only when the binary carries the backend; on other
+# builds it is skipped, counted, and announced — never silently ignored.
+import subprocess as _sp
+_bi = _sp.run(['./vmtest'], input='buildinfo().optim\n', capture_output=True, text=True)
+HAVE_NLOPT = '"nlopt"' in _bi.stdout
+skipped = 0
 ok = bad = total = 0
-for b in blocks:
+for tag, b in blocks:
+    if tag == 'cozy-nlopt' and not HAVE_NLOPT:
+        skipped += 1
+        continue
     lines = b.rstrip('\n').split('\n')
     entries, i = [], 0
     while i < len(lines):
@@ -61,5 +71,6 @@ for b in blocks:
         else:
             bad += 1
             print(f"MANUAL MISMATCH: {inp}\n  manual : {exp_clean!r}\n  actual : {got!r}")
-print(f"{doc}: {ok} of {total} transcript examples verified")
+note = f" ({skipped} nlopt-only block(s) skipped: this build has no backend)" if skipped else ""
+print(f"{doc}: {ok} of {total} transcript examples verified{note}")
 sys.exit(1 if bad else 0)

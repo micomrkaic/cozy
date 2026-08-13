@@ -303,6 +303,46 @@ static int ob_gemm_z(const Cplx *A, const Cplx *B, Cplx *C,
     return 0;
 }
 
+extern void dgeev_(const char *jl, const char *jr, const int *n, double *a,
+                   const int *lda, double *wr, double *wi, double *vl, const int *ldvl,
+                   double *vr, const int *ldvr, double *work, const int *lwork, int *info);
+
+/* dgeev's paired-column format, unpacked: for a conjugate pair
+ * (wi[j] > 0), columns j and j+1 of VR hold Re(v) and Im(v); the pair's
+ * eigenvectors are v and conj(v). Real eigenvalues use one real column. */
+static int ob_eig_gen_d(const double *A, uint32_t n, Cplx *w, Cplx *V)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, lwork = -1;
+    double *a = to_cm_d(A, n, n);
+    double *wr = malloc(n * sizeof *wr), *wi = malloc(n * sizeof *wi);
+    double *vr = malloc((size_t)n * n * sizeof *vr);
+    double wkq;
+    dgeev_("N", "V", &N, a, &N, wr, wi, NULL, &N, vr, &N, &wkq, &lwork, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dgeev_("N", "V", &N, a, &N, wr, wi, NULL, &N, vr, &N, work, &lwork, &info);
+    if (info == 0) {
+        for (uint32_t j = 0; j < n; j++) w[j] = (Cplx){ wr[j], wi[j] };
+        for (uint32_t j = 0; j < n; ) {
+            if (wi[j] > 0.0 && j + 1 < n) {              /* conjugate pair */
+                for (uint32_t i = 0; i < n; i++) {
+                    double re = vr[i + (size_t)N * j], im = vr[i + (size_t)N * (j + 1)];
+                    V[(size_t)i * n + j]     = (Cplx){ re,  im };
+                    V[(size_t)i * n + j + 1] = (Cplx){ re, -im };
+                }
+                j += 2;
+            } else {
+                for (uint32_t i = 0; i < n; i++)
+                    V[(size_t)i * n + j] = (Cplx){ vr[i + (size_t)N * j], 0.0 };
+                j += 1;
+            }
+        }
+    }
+    free(a); free(wr); free(wi); free(vr); free(work);
+    return info != 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
@@ -313,6 +353,7 @@ static const LinalgKernels openblas = {
     .chol_d   = ob_chol_d,
     .gemm_d   = ob_gemm_d,
     .gemm_z   = ob_gemm_z,
+    .eig_gen_d = ob_eig_gen_d,
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,

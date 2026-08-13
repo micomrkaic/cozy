@@ -63,6 +63,9 @@ typedef struct LinalgKernels {
                   uint32_t m, uint32_t k, uint32_t n);
     int (*gemm_z)(const Cplx *A, const Cplx *B, Cplx *C,
                   uint32_t m, uint32_t k, uint32_t n);
+    /* entry 10 residue (owner's override, for non-economists): real
+     * NONSYMMETRIC eig via dgeev; NULL falls back to the complex funnel */
+    int (*eig_gen_d)(const double *A, uint32_t n, Cplx *w, Cplx *V);
 
     /* Determinant of A (n×n); A is destroyed. Result in *out (0 for a
      * singular matrix). Returns 0. n >= 1 (n == 0 is eval.c's case). */
