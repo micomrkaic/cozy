@@ -118,7 +118,7 @@ let minimize_con = fn f, x0, cons -> (
   let gin = if op_has(cons, "ineq") then cons.ineq else fn x -> zeros(1, 1) - 1 end;
   let lam = 0.0 * heq(1.0 * x0);
   let mu = 0.0 * gin(1.0 * x0);
-  let rho = 10.0;
+  let rho = 100.0;
   let x = 1.0 * x0;
   let outer = 0;
   let converged = false;
@@ -126,6 +126,7 @@ let minimize_con = fn f, x0, cons -> (
   while !converged & (outer < 30) do
     let L = fn z -> f(z) + op_dot(lam, heq(z)) + rho / 2 * op_dot(heq(z), heq(z))
                   + 1 / (2 * rho) * (op_dot(max(0 * mu, mu + rho * gin(z)), max(0 * mu, mu + rho * gin(z))) - op_dot(mu, mu));
+    let xprev = 1.0 * x;
     let r = minimize(L, x);
     x = r.x;
     iters = iters + r.iters;
@@ -135,7 +136,13 @@ let minimize_con = fn f, x0, cons -> (
     lam = lam + rho * h;
     mu = max(0 * mu, mu + rho * gv);
     outer = outer + 1;
-    if viol <= 1e-7 & r.converged then (converged = true)
+    % converged when the constraints hold and either the inner solver is
+    % satisfied or the iterate has stopped moving between outer rounds —
+    % under large rho the inner gradient test can be unreachable at the
+    % exact answer, and without the stall test the loop burns its full
+    % budget standing still (the book's life-cycle problem, 14631 iters)
+    if viol <= 1e-7 & (r.converged | op_norm(x - xprev) <= 1e-10 * (1 + op_norm(x)))
+      then (converged = true)
     else (rho = rho * 2) end
   end;
   {x = x, fx = f(x), iters = iters, converged = converged}

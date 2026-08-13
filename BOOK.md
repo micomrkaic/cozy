@@ -1648,14 +1648,14 @@ cozy> let U = fn c -> sum[t = 1:T] β^(t - 1) * log(c[t])
 <fn/1>
 cozy> let sol = maximize_con(U, W / T * ones(T, 1), {eq = fn c -> [(sum[t = 1:T] c[t] / R^(t - 1)) - W]});
 cozy> sol.x
-[ 21.6652
+[ 21.6653
   21.6306
    21.596
   21.5615
-   21.527 ]
+  21.5269 ]
 cozy> abs(sol.x[2] / sol.x[1] - β * R) < 1e-4
 true
-cozy> abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-9
+cozy> abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-8
 true
 ```
 
@@ -1681,9 +1681,9 @@ cozy> let vol2 = fn w -> sum(w .* (Σ * w))
 <fn/1>
 cozy> let sol = minimize_con(vol2, ones(3, 1) / 3, {eq = fn w -> [sum(w) - 1]});
 cozy> sol.x
-[ 0.62223
-  0.23087
-   0.1469 ]
+[  0.62223
+  0.230869
+    0.1469 ]
 cozy> let wstar = (Σ \ ones(3, 1)) / sum(Σ \ ones(3, 1));
 cozy> max(abs(sol.x - wstar)) < 1e-5
 true

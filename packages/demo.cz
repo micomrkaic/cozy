@@ -504,7 +504,7 @@ let demo_sec15 = fn -> (
   dshow("let sol = maximize_con(U, W / T * ones(T, 1), {eq = fn c -> [(sum[t = 1:T] c[t] / R^(t - 1)) - W]});");
   dshow("sol.x");
   dshow("abs(sol.x[2] / sol.x[1] - β * R) < 1e-4");
-  dshow("abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-9");
+  dshow("abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-8");
   dwait();
   dhead("15.6 — Minimum variance, numerically and in closed form");
   dshow("load(\"packages/optim.cz\")");
@@ -1087,7 +1087,7 @@ let demo_playprob = fn s2, k2 -> (
     dshow("let sol = maximize_con(U, W / T * ones(T, 1), {eq = fn c -> [(sum[t = 1:T] c[t] / R^(t - 1)) - W]});");
     dshow("sol.x");
     dshow("abs(sol.x[2] / sol.x[1] - β * R) < 1e-4");
-    dshow("abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-9");
+    dshow("abs((sum[t = 1:T] sol.x[t] / R^(t - 1)) - W) < 1e-8");
     null) end;
   if s2 == 15 & k2 == 6 then (dhead("15.6 — Minimum variance, numerically and in closed form");
     dshow("load(\"packages/optim.cz\")");

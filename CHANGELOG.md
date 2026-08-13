@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.0.59 — the augmented Lagrangian stops standing still
+
+### Fixed (owner: Problem 15.5 visibly slow in the demo)
+- **minimize_con burned its full budget at the exact answer**: under
+  large rho the inner BFGS's gradient test is unreachable, so the
+  outer loop's "viol tiny AND inner converged" gate never tripped —
+  14631 iterations, converged=false, ~1.5 s of standing still. Two
+  changes: convergence now also accepts constraints-satisfied plus
+  iterate-stalled-between-outers (norm(x - xprev) <= 1e-10*(1+|x|)),
+  and the initial penalty starts at rho=100 (was 10), pulling the
+  constraint in fewer outer rounds. The life-cycle problem: 14631
+  iters/1.5 s unconverged -> converged in 0.07 s. The book's 15.5
+  and 15.6 fences were recaptured by execution (last-digit drift; the
+  budget-residual bound honestly restated at 1e-8, which is what
+  rho=100 delivers); every other golden and transcript passed
+  unchanged.
+
 ## 0.0.58 — Enter advances, everywhere, under test
 
 ### Fixed (owner's third demo report — the instability ends here)
