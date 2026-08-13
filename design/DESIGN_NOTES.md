@@ -470,3 +470,38 @@ TRIGGER: friction transcripts — a package API sprouting an awkward name
 family (f / f_tol / f_tol_maxit) or callers passing null placeholders
 where one optional would do. One demo() incident, already better-
 solved, does not fire it.
+
+## 14. Optimization backend seam — TRIGGER FIRED (owner's ruling after the
+AL stall bug, 0.0.59: "optimization will be a very important part of Cozy;
+it has to run the best stuff in the background"). This is the charter's
+founding capability 3, arriving the chartered way: through a friction
+transcript. DESIGN, mirroring the linalg seam (entry 10's pattern):
+- Build-time backend: OPTIM=nlopt (orthogonal to BACKEND=). NLopt 2.7.x
+  — C API, MIT-core, in Ubuntu (libnlopt-dev) and Homebrew. tier0 =
+  the pure optim.cz implementations, kept forever (wasm ships these;
+  parity is the conformance guarantee).
+- One builtin family: nlmin(f, x0, opts) with an options record
+  {alg = "slsqp" | "lbfgs" | "bobyqa" | "cobyla", eq, ineq, lb, ub,
+  xtol, maxeval}. packages/optim.cz keeps its public API and
+  DISPATCHES: minimize/minimize_con/maximize_con route to nlmin when
+  buildinfo().optim == "nlopt", else run the tier0 path unchanged.
+- The distinctive wire: Cozy's EXACT derivatives feed the gradient
+  algorithms — the objective trampoline evaluates f with dual seeds
+  and hands NLopt analytic gradients; no finite differencing anywhere.
+- Callback discipline (the error-path lesson, LESSONS §2): the C
+  trampoline re-enters the interpreter like map does; a runtime error
+  in the user's objective must NOT longjmp through NLopt's frames —
+  local setjmp in the trampoline, set an abort flag, return NaN, call
+  nlopt_force_stop, re-raise after nlopt returns.
+- Transcript posture: optimizer output in books/goldens pins
+  INVARIANTS (residual bounds, constraint satisfaction, convergence
+  booleans), never raw iterates — different algorithms legitimately
+  land on different last digits (the 15.5 recapture already models
+  this).
+- Release ladder: (1) seam + nlmin + SLSQP/LBFGS with dual-gradient
+  trampoline, container-proven; (2) optim.cz dispatch + both books
+  green both ways; (3) Mac acceptance (brew nlopt; every Darwin trap
+  in the almanac applies to the new C boundary); (4) BOBYQA/COBYLA +
+  a book problem exercising derivative-free; (5) global methods when
+  a transcript asks. wasm keeps tier0 (NLopt-to-emscripten parked,
+  same posture as LAPACK-to-wasm).

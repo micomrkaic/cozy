@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.0.60 — entry 14: the optimization backend seam, chartered
+
+### Design
+- **Docket entry 14 written and trigger FIRED** (owner's ruling after
+  0.0.59's AL stall): a build-time optimization backend seam in the
+  image of the linalg seam — OPTIM=nlopt, one nlmin builtin, optim.cz
+  dispatching by buildinfo, tier0 pure implementations kept forever
+  for wasm and conformance, and Cozy's exact dual gradients feeding
+  NLopt's SLSQP/LBFGS with no finite differences anywhere. Callback
+  error discipline, transcript posture (pin invariants, not
+  iterates), and a five-step release ladder are in the entry. This is
+  the charter's founding capability 3 arriving the chartered way:
+  through a friction transcript.
+
 ## 0.0.59 — the augmented Lagrangian stops standing still
 
 ### Fixed (owner: Problem 15.5 visibly slow in the demo)

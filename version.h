@@ -1,6 +1,6 @@
 /* version.h — Cozy version and build identification. */
 #ifndef COZY_VERSION_H
 #define COZY_VERSION_H
-#define COZY_VERSION "0.0.59"
+#define COZY_VERSION "0.0.60"
 #define COZY_BUILT   __DATE__ " " __TIME__
 #endif
