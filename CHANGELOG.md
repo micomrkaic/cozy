@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.1 — deploy assembles the best machine it can find
+
+### Changed
+- **./deploy.sh now builds the fastest configuration the host
+  supports, in one step** (owner's ruling): Darwin gets Accelerate;
+  Linux probes for OpenBLAS by link test; both probe for nlopt.h —
+  and every fallback prints a NOTE naming the exact install command
+  (libopenblas-dev, libnlopt-dev, brew install nlopt). The deploy's
+  own suite run uses the same detected flags, so the verdict
+  certifies the binary that was actually built. Plain make is
+  unchanged (tier0, zero dependencies). The wasm bundle needs no
+  compilation at deploy time: it ships prebuilt in every tarball and
+  deploy publishes docs/ to GitHub Pages as-is.
+
 ## 0.1.0 — the four capabilities, real
 
 This is a milestone, not a diff. The charter named four founding

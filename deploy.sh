@@ -39,8 +39,28 @@ echo "deploy: tree synced to snapshot in $(pwd)"
 
 # 2. Build and verify before anything touches the remote.
 if [[ $RUN_TESTS == 1 ]]; then
-    make clean >/dev/null && make >/dev/null
-    make test
+    # ---- best-available native build (owner's ruling, 0.1.1): deploy
+    # detects backends and assembles the fastest configuration this
+    # machine supports, flagging every fallback with its remedy. -------
+    BACKEND=tier0
+    if [ "$(uname -s)" = "Darwin" ]; then
+        BACKEND=accelerate
+    elif echo 'int main(void){return 0;}' | cc -x c - -lopenblas -o /dev/null 2>/dev/null; then
+        BACKEND=openblas
+    else
+        echo "deploy: NOTE — no OpenBLAS found; building tier0 (hand-rolled kernels)."
+        echo "        For LAPACK speed: sudo apt install libopenblas-dev"
+    fi
+    OPTIM=none
+    if echo '#include <nlopt.h>' | cc -E -xc - >/dev/null 2>&1; then
+        OPTIM=nlopt
+    else
+        echo "deploy: NOTE — no NLopt found; optimization runs the pure tier0 path."
+        echo "        For the professional backend: sudo apt install libnlopt-dev  (macOS: brew install nlopt)"
+    fi
+    echo "deploy: building BACKEND=$BACKEND OPTIM=$OPTIM"
+    make clean >/dev/null && make BACKEND="$BACKEND" OPTIM="$OPTIM" -j"$(nproc 2>/dev/null || sysctl -n hw.ncpu)" >/dev/null
+    make BACKEND="$BACKEND" OPTIM="$OPTIM" test
     make test-asan
     echo "deploy: all tests green"
 else
