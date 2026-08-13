@@ -8,6 +8,16 @@
 # the full test suite, commit, push, and tag vX.Y.Z (same as version.h).
 set -euo pipefail
 
+# Self-update safety: this script untars a new tree OVER the repo — including
+# over deploy.sh itself. Re-exec from a temp copy so the running script can
+# never be the one being replaced (the v0.1.1 deploy ran v0.1.0's build steps
+# for exactly this reason: the improved script landed on disk mid-run, unread).
+if [ -z "${COZY_DEPLOY_RELOCATED:-}" ]; then
+    tmp="$(mktemp /tmp/cozy-deploy.XXXXXX.sh)"
+    cp "$0" "$tmp"
+    COZY_DEPLOY_RELOCATED=1 exec bash "$tmp" "$@"
+fi
+
 TARBALL="${1:?usage: ./deploy.sh path/to/cozy-vX.Y.Z.tar.gz [--no-test]}"
 RUN_TESTS=1
 [[ "${2:-}" == "--no-test" ]] && RUN_TESTS=0

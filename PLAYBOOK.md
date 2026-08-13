@@ -321,3 +321,15 @@ because book transcripts are fresh sessions and the demo is one long
 one. Found while building: the old hand-written demo still opened with
 a NEUTRINO banner — hand-maintained parallels rot; generated ones
 cannot.
+
+### Trap: deploy.sh improvements apply one release late
+
+deploy.sh untars the new tree over the repo — including over itself.
+Bash keeps reading the old inode, so the release that SHIPS a deploy
+improvement is still deployed BY the previous script: v0.1.1 shipped
+backend autodetection and was itself built plain-tier0 by v0.1.0's
+steps. The fix is structural: deploy.sh re-execs from a temp copy of
+itself before touching the tree, so the running script is never the
+one being replaced. Corollary for any self-updating rite: the step
+that replaces the tool must not be executed by the tool being
+replaced.

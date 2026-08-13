@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.1.2 — deploy stops deploying with its predecessor
+
+### Fixed
+- **The v0.1.1 deploy built tier0 despite shipping autodetection**
+  (owner's catch, buildinfo in hand): deploy.sh untars the new tree
+  over itself, and bash keeps executing the OLD inode — so a deploy
+  improvement always ran one release late. deploy.sh now re-execs
+  from a temp copy of itself before touching the tree; the running
+  script can never be the one being replaced. Trap recorded in the
+  PLAYBOOK. Immediate remedy on any machine that deployed v0.1.1:
+  make clean && make BACKEND=openblas OPTIM=nlopt (or simply run the
+  next deploy — the script on disk is already the detecting one).
+
 ## 0.1.1 — deploy assembles the best machine it can find
 
 ### Changed
