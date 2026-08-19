@@ -110,17 +110,22 @@ static Cplx   as_cplx(Value v)  { return v.kind == VAL_COMPLEX ? v.as.z
                                                                : (Cplx){ (double)v.as.i, 0.0 }; }
 
 /* Wrapping integer power by squaring: O(log e) even for huge exponents, and
- * all arithmetic in uint64 so the documented wraparound is defined behavior
- * (the old loop was UB on overflow and effectively hung for astronomical e). */
-static int64_t ipow(int64_t base, int64_t e)
+ * On overflow the result PROMOTES to float (0.1.5, owner's ruling after
+ * 3^84 wrapped to a misleadingly-signed integer while fzero, entering
+ * through floats, saw the truth): ints are exact within +-2^63 and
+ * become mathematics beyond it — the wrap footgun inherited from
+ * Neutrino is retired. ok=false signals the caller to take the float
+ * path. */
+static bool ipow_checked(int64_t base, int64_t e, int64_t *out)
 {
-    uint64_t r = 1, b = (uint64_t)base;
+    int64_t r = 1, b = base;
     while (e > 0) {
-        if (e & 1) r *= b;
-        b *= b;
+        if (e & 1 && __builtin_mul_overflow(r, b, &r)) return false;
         e >>= 1;
+        if (e > 0 && __builtin_mul_overflow(b, b, &b)) return false;
     }
-    return (int64_t)r;
+    *out = r;
+    return true;
 }
 
 /* ---- PRNG: xoshiro256** seeded by splitmix64 (deterministic, reseed via rng()) ---- */
@@ -215,11 +220,19 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
     case 0: {
         int64_t x = a.as.i, y = b.as.i;
         switch (kind) {
-        /* wraparound is documented; do it in uint64 so it is defined behavior */
-        case AR_ADD: return val_int((int64_t)((uint64_t)x + (uint64_t)y));
-        case AR_SUB: return val_int((int64_t)((uint64_t)x - (uint64_t)y));
-        case AR_MUL: return val_int((int64_t)((uint64_t)x * (uint64_t)y));
-        case AR_POW: return val_int(ipow(x, y));
+        /* exact within int64; overflow promotes to float (0.1.5) */
+        case AR_ADD: { int64_t r; if (!__builtin_add_overflow(x, y, &r))
+                           return val_int(r);
+                       return val_float((double)x + (double)y); }
+        case AR_SUB: { int64_t r; if (!__builtin_sub_overflow(x, y, &r))
+                           return val_int(r);
+                       return val_float((double)x - (double)y); }
+        case AR_MUL: { int64_t r; if (!__builtin_mul_overflow(x, y, &r))
+                           return val_int(r);
+                       return val_float((double)x * (double)y); }
+        case AR_POW: { int64_t r; if (y >= 0 && ipow_checked(x, y, &r))
+                           return val_int(r);
+                       return val_float(pow((double)x, (double)y)); }
         default:     break;
         }
         break;
@@ -491,18 +504,23 @@ static Value matmul(Interp *I, Value a, Value b)
     bool ya_num = y->elt == ELT_BOOL || y->elt == ELT_INT || y->elt == ELT_FLOAT;
     bool xa_int = x->elt == ELT_BOOL || x->elt == ELT_INT;
     bool ya_int = y->elt == ELT_BOOL || y->elt == ELT_INT;
-    if (xa_int && ya_int) {                          /* exact, wrap-on-overflow */
+    if (xa_int && ya_int) {                          /* exact; overflow -> float */
         Value out = val_array(ELT_INT, m, nn);
         int64_t *C = (int64_t *)as_arr(out)->data;
-        for (uint32_t i = 0; i < m; i++)
-            for (uint32_t j = 0; j < nn; j++) {
-                uint64_t acc = 0;                    /* unsigned: defined wrap */
-                for (uint32_t t = 0; t < k; t++)
-                    acc += (uint64_t)as_int_raw(x, (size_t)i*k + t)
-                         * (uint64_t)as_int_raw(y, (size_t)t*nn + j);
-                C[(size_t)i*nn + j] = (int64_t)acc;
+        bool over = false;
+        for (uint32_t i = 0; i < m && !over; i++)
+            for (uint32_t j = 0; j < nn && !over; j++) {
+                int64_t acc = 0;
+                for (uint32_t t = 0; t < k; t++) {
+                    int64_t p;
+                    if (__builtin_mul_overflow(as_int_raw(x, (size_t)i*k + t),
+                                               as_int_raw(y, (size_t)t*nn + j), &p) ||
+                        __builtin_add_overflow(acc, p, &acc)) { over = true; break; }
+                }
+                C[(size_t)i*nn + j] = acc;
             }
-        return out;
+        if (!over) return out;
+        value_release(out);                          /* redo in mathematics */
     }
     if (xa_num && ya_num) {                          /* real: doubles, gemm if present */
         double *Ad = malloc((((size_t)m * k) != 0 ? (size_t)m * k : 1) * sizeof *Ad);

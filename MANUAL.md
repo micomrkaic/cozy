@@ -188,7 +188,7 @@ Cozy has twelve value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
 |---|---|---|
-| `Int` | `42`, `-7` | 64-bit signed; overflow wraps silently (documented footgun) |
+| `Int` | `42`, `-7` | 64-bit signed, exact; overflow PROMOTES to Float (3^84 is 1.19725e+40, not a wrapped integer) |
 | `Float` | `3.14`, `1e-9`, `2.5e3` | IEEE double |
 | `Bool` | `true`, `false` | distinct from numbers: `1 == true` is an error |
 | `Complex` | `2i`, `1 + 3i`, `2.5i` | double re/im pair |

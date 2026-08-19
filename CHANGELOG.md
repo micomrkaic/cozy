@@ -1,5 +1,23 @@
 # Cozy changelog
 
+## 0.1.5 — integer overflow becomes mathematics, not wraparound
+
+### Changed (owner's catch: 3^84 wrapped to a misleadingly signed int
+### while fzero, entering through floats, saw the truth)
+- **Integer overflow now PROMOTES to float** in scalar add/sub/mul/pow
+  (checked via __builtin_*_overflow) and in the int matmul fast path
+  (which falls to the double path on first overflow). Ints remain
+  exact within +-2^63; beyond it results become mathematics —
+  f(3) = -1.19725e+40 in the REPL now agrees with what fzero always
+  saw. Neutrino's LESSONS marked the Int/Float split "undecided,
+  honestly"; this decides it, retiring the documented-wrap footgun.
+- **Conformance edit, recorded**: the v1.0 fuzzing-campaign goldens
+  that pinned wrap semantics (INT64_MAX * 2 -> -2 and kin) are
+  amended to pin promotion — per the charter's provision that
+  conformance goldens may be amended as recorded edits. The range
+  guards and UB-safety those goldens also protect are untouched.
+- The manual's Int row states the new rule.
+
 ## 0.1.4 — the binder reads as mathematics
 
 ### Added (ledger arc 4)

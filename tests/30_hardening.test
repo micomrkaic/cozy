@@ -1,14 +1,16 @@
 # Regression goldens from the v1.0 fuzzing campaign.
-# 1. Integer arithmetic wraps as defined behavior (was UB signed overflow;
-#    the old ipow also effectively hung on astronomical exponents).
+# 1. Integer overflow PROMOTES to float (0.1.5, conformance edit recorded
+#    in the CHANGELOG: the documented-wrap semantics inherited from
+#    Neutrino misled with accidental signs — 3^84 in the wild; ints are
+#    exact within +-2^63 and become mathematics beyond).
 9223372036854775807 * 2
-=> -2
+=> 1.84467e+19
 9223372036854775807 + 1
-=> -9223372036854775808
+=> 9.22337e+18
 9223372036854775807 .^ 9223372036854775807
-=> 9223372036854775807
+=> inf
 2 ^ 64
-=> 0
+=> 1.84467e+19
 # 2. Ranges are capped and count-safe (was: uint32 truncation -> heap overflow risk)
 1 : 4294967306
 => !range too large
