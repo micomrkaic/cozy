@@ -1,0 +1,31 @@
+# Entry 13: default parameter values. Trailing-only; absent or explicit
+# null triggers the default; defaults evaluate left-to-right in the
+# function scope, so later defaults may reference earlier parameters.
+let f = fn x, tol = 0.5 -> x + tol; f(1)
+=> 1.5
+let f = fn x, tol = 0.5 -> x + tol; f(1, 0.25)
+=> 1.25
+let f = fn x, tol = 0.5 -> x + tol; f(1, null)
+=> 1.5
+let g = fn a, b = a * 2, c = a + b -> [a; b; c]; g(10)'
+=> [10, 20, 30]
+let g = fn a, b = a * 2, c = a + b -> [a; b; c]; g(10, 3)'
+=> [10, 3, 13]
+let g = fn a, b = a * 2, c = a + b -> [a; b; c]; g(10, null, 7)'
+=> [10, 20, 7]
+let f = fn x, tol = 0.5 -> x + tol; f
+=> <fn/1..2>
+let f = fn x, tol = 0.5 -> x + tol; f()
+=> !function expects 1 to 2 argument(s), got 0
+let f = fn x, tol = 0.5 -> x + tol; f(1, 2, 3)
+=> !function expects 1 to 2 argument(s), got 3
+let f = fn x = 1, y -> x
+=> !parameters after a defaulted one need defaults
+let h = fn x, t = 10 -> x * t; map(h, [1; 2])'
+=> [10, 20]
+let h = fn x, t = 10 -> x * t; [1, 2] ~> h
+=> [10, 20]
+let k = fn n, p = n - 1 -> if n <= 1 then 1 else n * k(p) end; k(5)
+=> 120
+let f = fn a = 1 -> a; let f2 = f; f2()
+=> 1

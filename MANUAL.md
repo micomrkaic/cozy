@@ -465,6 +465,31 @@ record is rejected: each field already receives the piped value as its
 argument.
 
 
+### Default parameter values
+
+Trailing parameters may carry defaults — `fn x, tol = 1e-8 -> ...` —
+evaluated at call time, left to right, inside the function's own scope,
+so a later default may reference any earlier parameter. An absent
+argument takes its default; so does an explicit `null`, which lets a
+call skip a middle parameter while supplying a later one. A function
+with defaults reports its arity as a range (`<fn/1..3>`), and calling
+outside the range names the range in the error.
+
+```
+cozy> let bisect = fn f, a, b, tol = 1e-10 -> fzero(f, a, b)
+<fn/3..4>
+cozy> let root = fn f, a, b, tol = 1e-10, verbose = false -> fzero(f, a, b)
+<fn/3..5>
+cozy> root
+<fn/3..5>
+cozy> let g = fn a, b = a * 2, c = a + b -> [a; b; c]
+<fn/1..3>
+cozy> g(10)'
+[10, 20, 30]
+cozy> g(10, null, 99)'
+[10, 20, 99]
+```
+
 ## 8. Arrays and matrices
 
 Matrix literals use `,` between columns and `;` between rows; every array is

@@ -660,7 +660,11 @@ void value_print(FILE *out, Value v)
         break;
     }
     case VAL_CLOSURE:
-        fprintf(out, "<fn/%u>", as_clo(v)->chunk->nparams);
+        if (as_clo(v)->chunk->ndefaults)
+            fprintf(out, "<fn/%u..%u>", as_clo(v)->chunk->nparams - as_clo(v)->chunk->ndefaults,
+                    as_clo(v)->chunk->nparams);
+        else
+            fprintf(out, "<fn/%u>", as_clo(v)->chunk->nparams);
         break;
     case VAL_BUILTIN:
         fprintf(out, "<builtin %s>", as_blt(v)->name);

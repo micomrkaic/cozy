@@ -179,7 +179,8 @@ static AstNode *parse_lambda(Parser *p)
     Token kw = p->cur;
     expect(p, TOK_KW_FN, "'fn'");
     AstNode *lam = node(p, AST_LAMBDA, kw);
-    Vec params = VEC_INIT;
+    Vec params = VEC_INIT, defaults = VEC_INIT;
+    bool saw_default = false;
     if (!check(p, TOK_ARROW)) {
         do {
             Token id = expect(p, TOK_IDENT, "parameter name");
@@ -187,10 +188,20 @@ static AstNode *parse_lambda(Parser *p)
             pn->as.lit.text = id.start;
             pn->as.lit.len  = id.len;
             vec_push(p, &params, pn);
+            if (accept(p, TOK_ASSIGN)) {                 /* entry 13: x = default */
+                vec_push(p, &defaults, parse_expr(p, 0));
+                saw_default = true;
+            } else {
+                if (saw_default)
+                    parse_error(p, "parameters after a defaulted one need defaults too "
+                                   "(defaults are trailing: fn x, tol = 1e-8 -> ...)");
+                vec_push(p, &defaults, NULL);
+            }
         } while (accept(p, TOK_COMMA));
     }
     expect(p, TOK_ARROW, "'->' after lambda parameters");
-    lam->as.lambda.params = vec_seal(p, &params);
+    lam->as.lambda.params   = vec_seal(p, &params);
+    lam->as.lambda.defaults = vec_seal(p, &defaults);
     lam->as.lambda.body   = parse_expr(p, 0);  /* full expression, bounded by enclosing terminators */
     /* Source span: from the 'fn' keyword to the token after the body (then
      * trimmed). Powers body(f) and save(); zero-copy into session-lived source. */

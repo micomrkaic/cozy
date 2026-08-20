@@ -599,6 +599,14 @@ static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
     proto->src = n->as.lambda.src; proto->srclen = n->as.lambda.srclen;
     uint32_t np = n->as.lambda.params.count;
     proto->nparams = np;                                  /* arity only; params are slots */
+    /* synthetic lambdas (sections, ~> rewrites, binder desugars) build
+     * AST_LAMBDA without a defaults list; treat that as none */
+    AstNode **defs = n->as.lambda.defaults.items;
+    uint32_t nd = 0;
+    if (defs)
+        for (uint32_t i = 0; i < np; i++)
+            if (defs[i]) nd++;
+    proto->ndefaults = nd;                                /* trailing (parser-enforced) */
     uint32_t idx = chunk_add_proto(cc->chunk, proto);     /* enclosing owns proto */
 
     Compiler fc = (Compiler){ .enclosing = cc, .chunk = proto, .depth = 1, .index_dim = -1, .in_function = true };
@@ -606,6 +614,22 @@ static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
     for (uint32_t i = 0; i < np; i++) {
         AstNode *p = n->as.lambda.params.items[i];
         declare_slot(&fc, p->as.lit.text, p->as.lit.len); /* slots 1..np = params */
+    }
+    /* entry 13 prologue: a defaulted param whose slot arrived null (absent
+     * or explicit null) evaluates its default here, left to right — so a
+     * default may reference any earlier parameter. */
+    for (uint32_t i = 0; defs && i < np; i++) {
+        AstNode *def = defs[i];
+        if (!def) continue;
+        chunk_emit(proto, OP_ARGDEF, def->line);
+        chunk_emit(proto, (uint8_t)(i + 1), def->line);   /* param slot */
+        chunk_emit_u16(proto, 0xffff, def->line);
+        uint32_t at = proto->code_len - 2;
+        compile_node(I, &fc, def);
+        chunk_emit(proto, OP_SET_LOCAL, def->line);
+        chunk_emit(proto, (uint8_t)(i + 1), def->line);
+        chunk_emit(proto, OP_POP, def->line);             /* SET_LOCAL leaves top */
+        patch_jump(I, n, proto, at);
     }
     compile_node(I, &fc, n->as.lambda.body);              /* body leaves one value */
 

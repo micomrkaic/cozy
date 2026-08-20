@@ -30,6 +30,8 @@ typedef enum : uint8_t {
     OP_JUMP_IF_FALSE,  /* u16 off   : top must be Bool; if false ip += off    */
     OP_JUMP_IF_TRUE,   /* u16 off   : top must be Bool; if true  ip += off    */
     OP_POP,            /*           : pop and release                         */
+    OP_ARGDEF,         /* u8 slot, u16 off : if frame slot is non-null, skip the
+                          default-value code that follows (entry 13)            */
     OP_TEE,            /*           : print top of stack (tee pipe), no pop   */
     /* --- stage 2: scopes, loops, iteration --- */
     OP_LOOP,           /* u16 off   : ip -= off (backward jump)               */
@@ -73,6 +75,7 @@ typedef struct Chunk {
     const char *src; uint32_t srclen;   /* lambda source span (session-lived buffer), for body()/save() */
     /* parameters, when this chunk is a function proto (non-owning arena slices) */
     const char **params; uint32_t *paramlens; uint32_t nparams;
+    uint32_t ndefaults;   /* trailing params with defaults; min arity = nparams - ndefaults */
 } Chunk;
 
 void     chunk_init(Chunk *c);

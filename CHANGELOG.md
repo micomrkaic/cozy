@@ -1,5 +1,26 @@
 # Cozy changelog
 
+## 0.1.9 — default parameter values (entry 13)
+
+### Added
+- **fn x, tol = 1e-8 -> ...** — trailing parameters may carry
+  defaults, evaluated at call time, left to right, in the function's
+  own scope, so a later default can reference any earlier parameter
+  (fn a, b = a * 2, c = a + b -> ...). An absent argument takes the
+  default; so does an explicit null, which skips a middle parameter
+  while supplying a later one. Arity becomes a range everywhere: the
+  <fn/1..3> display, who, and both call paths' error messages
+  ("expects 1 to 2 argument(s)").
+- **One earned opcode** (the desugar-first ledger stays honest):
+  OP_ARGDEF slot,off — the VM pads absent arguments with null and a
+  compiled prologue fills null slots from their defaults. Sections,
+  elementwise-pipe rewrites, and binder desugars build lambdas
+  without defaults and compile exactly as before.
+- Non-trailing defaults are a parse error with a teaching message;
+  a 658-program fuzz batch mixing defaults with sections, pipes, and
+  higher-order calls runs ASan-clean; the manual's Functions section
+  gains an executed transcript.
+
 ## 0.1.8 — dates (entry 16)
 
 ### Added

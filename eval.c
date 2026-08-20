@@ -4720,8 +4720,9 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
                 }
             }
         } else if (v.kind == VAL_CLOSURE) {
-            uint32_t np = as_clo(v)->chunk->nparams;
-            fprintf(vout(), "  a function you defined, taking %u argument%s\n", np, np == 1 ? "" : "s");
+            uint32_t np = as_clo(v)->chunk->nparams, nd = as_clo(v)->chunk->ndefaults;
+            if (nd) fprintf(vout(), "  a function you defined, taking %u to %u arguments\n", np - nd, np);
+            else fprintf(vout(), "  a function you defined, taking %u argument%s\n", np, np == 1 ? "" : "s");
         } else if (v.kind == VAL_ARRAY) {
             ArrObj *a = as_arr(v);
             fprintf(vout(), "  a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));

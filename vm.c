@@ -135,6 +135,10 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             if (st->sp >= st->cap) stack_grow(st);
             st->stack[st->sp++] = value_retain(args[i]); /* slots 1..argc        */
         }
+        for (uint32_t i = argc; i < clo->chunk->nparams; i++) {
+            if (st->sp >= st->cap) stack_grow(st);
+            st->stack[st->sp++] = val_null();            /* entry 13: pad to nparams */
+        }
     }
     push_frame(st, ch, clo, /*slot_base=*/0);
 
@@ -269,10 +273,17 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             Value  callee = PEEK(argc);
             if (callee.kind == VAL_CLOSURE) {            /* direct call: push a frame */
                 CloObj *cl = as_clo(callee);
-                if (cl->chunk->nparams != argc)
-                    runtime_error(I, "function expects %u argument(s), got %u", cl->chunk->nparams, argc);
+                uint32_t np2 = cl->chunk->nparams, nd2 = cl->chunk->ndefaults;
+                if (argc < np2 - nd2 || argc > np2) {
+                    if (nd2 == 0)
+                        runtime_error(I, "function expects %u argument(s), got %u", np2, argc);
+                    runtime_error(I, "function expects %u to %u argument(s), got %u",
+                                  np2 - nd2, np2, argc);
+                }
+                for (uint32_t pad = argc; pad < np2; pad++)  /* absent -> null; the */
+                    PUSH(val_null());                        /* ARGDEF prologue fills */
                 if (st->nframe >= VM_MAX_FRAMES) runtime_error(I, "call stack overflow");
-                uint32_t sb = st->sp - argc - 1;          /* callee + args become slots */
+                uint32_t sb = st->sp - np2 - 1;           /* callee + args become slots */
                 fr = push_frame(st, cl->chunk, cl, sb);
             } else {                                      /* builtin (or error): in place */
                 Value *args2 = &st->stack[st->sp - argc];
@@ -282,6 +293,14 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 st->sp -= (uint32_t)argc + 1;
                 PUSH(r);
             }
+            break;
+        }
+
+        case OP_ARGDEF: {                            /* entry 13: default fill */
+            uint8_t  slot = RD_U8();
+            uint16_t off  = RD_U16();
+            if (st->stack[fr->slot_base + slot].kind != VAL_NULL)
+                fr->ip += off;                           /* provided: skip default */
             break;
         }
 
@@ -516,8 +535,12 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 Value vm_run_closure(Interp *I, Value callee, Value *args, uint32_t n)
 {
     CloObj *c = as_clo(callee);
-    if (c->chunk->nparams != n)
-        runtime_error(I, "function expects %u argument(s), got %u", c->chunk->nparams, n);
+    uint32_t np3 = c->chunk->nparams, nd3 = c->chunk->ndefaults;
+    if (n < np3 - nd3 || n > np3) {
+        if (nd3 == 0)
+            runtime_error(I, "function expects %u argument(s), got %u", np3, n);
+        runtime_error(I, "function expects %u to %u argument(s), got %u", np3 - nd3, np3, n);
+    }
     bool ok;
     Value r = vm_run(I, c->chunk, callee, args, n, &ok);
     if (!ok) longjmp(I->jmp, 1);

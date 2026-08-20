@@ -138,6 +138,8 @@ void chunk_disassemble(FILE *out, const Chunk *c, const char *title)
         switch ((OpCode)op) {
         case OP_CONST:      { uint16_t k = U16(); fputs("CONST          ", out); dis_const(out, c, k); break; }
         case OP_NULL:         fputs("NULL", out); break;
+        case OP_ARGDEF:     { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "ARGDEF         slot %u, skip %u", s, o); break; }
         case OP_GET_VAR:    { uint16_t k = U16(); fputs("GET_VAR        ", out); dis_name(out, c, k); break; }
         case OP_DEFINE:     { uint16_t k = U16(); fputs("DEFINE         ", out); dis_name(out, c, k); break; }
         case OP_SET_VAR:    { uint16_t k = U16(); fputs("SET_VAR        ", out); dis_name(out, c, k); break; }

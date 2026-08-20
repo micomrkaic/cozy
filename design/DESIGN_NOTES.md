@@ -522,11 +522,18 @@ transcript. DESIGN, mirroring the linalg seam (entry 10's pattern):
 maximize[...], nlmin[...] desugar to name(fn x -> E, x0); previously
 such phrases always arity-erred at runtime, so the redirect is
 additive. All other callables keep the sigma reduction meaning.
-Entry 13 (default parameters) is the ledger's remaining
-implementation item: a language-core change (parser, closure arity
-range, call-fill) deserving a fresh session's full fuzz-and-rite
-care — first task of the next working session, per the owner's
-sequencing.
+Entry 13 (default parameters) SHIPPED 0.1.9:
+fn x, tol = 1e-8 -> ..., trailing-only (parser-enforced with a
+teaching message), evaluated at CALL TIME left-to-right in the
+function scope — so later defaults reference earlier parameters
+(fn a, b = a * 2, c = a + b works). Mechanism: one earned opcode,
+OP_ARGDEF slot,off — the VM pads absent arguments with null and the
+compiled prologue fills any null slot from its default, which also
+makes an explicit null request the default (skip a middle parameter:
+g(10, null, 99)). Closure arity is a range in both call paths and
+both displays (<fn/1..3>); synthetic lambdas (sections, ~>, binders)
+carry no defaults list and compile as before. 658-program fuzz batch
+mixing defaults with sections, pipes, and HOFs: ASan-clean.
 
 ## 15. Missing values — DESIGN WRITTEN (owner: "critical"), trigger live.
 The composable answer, per the data-frame lesson (the best feature
