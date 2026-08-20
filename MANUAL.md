@@ -1442,6 +1442,13 @@ cozy> clear("scatter"); who
 |---|---|
 | `nlmin(f, x0, opts?)` | professional minimization (NLopt; exact dual gradients); opts: {alg = "slsqp"\|"lbfgs"\|"bobyqa"\|"cobyla", eq, ineq, lb, ub, xtol, maxeval} |
 
+### statistics
+
+| Signature | Description |
+|---|---|
+| `ismissing(x)` | true where a value is missing: NaN in numerics, "" in strings; composes with mask indexing (x[!ismissing(x)]) |
+| `dropmissing(t)` | remove every row of a record-of-columns where any column is missing (NaN or "") |
+
 ## 18. Grammar summary
 
 Reserved words: `let in fn if then else end true false null for while do break

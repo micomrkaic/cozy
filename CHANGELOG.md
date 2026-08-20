@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.1.7 — missing values, the composable way (entry 15)
+
+### Added
+- **ismissing** — NaN worn with intent on numerics, "" on strings;
+  composes with mask indexing (x[!ismissing(x)] was already the skip
+  idiom and remains it).
+- **readtable reads NA / NaN / nan cells as NaN** (empty cells already
+  did — a quiet inheritance the audit surfaced); a hole no longer
+  poisons the parse.
+- **dropmissing(t)** — row-wise deletion on a record of columns, the
+  data-frame convention Cozy already had.
+- **"omit" on mean, sum, std, and median** — one shared filter hook,
+  so the one-liner works when the mask idiom is ceremony.
+  No new value kind, no validity bitmaps: missing IS NaN, per entry
+  15's recorded design and the data-frame lesson (the best feature
+  required no features).
+
 ## 0.1.6 — entries 15 and 16: missing values and dates, designed
 
 ### Design

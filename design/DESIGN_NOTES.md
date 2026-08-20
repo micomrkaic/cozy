@@ -541,9 +541,13 @@ by another, intent-bearing name; on string arrays tests ""); readtable
 reads empty/NA/NaN cells as NaN instead of poisoning the parse (the
 actual gap today); dropmissing(t) for row-wise deletion on a
 record-of-columns; an "omit" option on mean/sum/std/median for the
-one-liner case. Strings: missing reads as "". Order: BEFORE dates
-(entry 16 depends on it). Book problem: a real CSV with holes,
-end to end.
+one-liner case. Strings: missing reads as "". SHIPPED 0.1.7:
+ismissing (NaN-with-intent; "" on strings), NA/NaN/nan CSV cells read
+as NaN (empty cells already did — a quiet inheritance), dropmissing on
+records-of-columns, and "omit" on mean/sum/std/median via one shared
+filter hook. tests/64_missing.test pins every piece. RESIDUE: the
+holey-CSV book problem rides with entry 16's time-series problem
+(one dataset, both lessons).
 
 ## 16. Dates — DESIGN WRITTEN (owner: "critical"), trigger live.
 A Date value/element kind whose REPRESENTATION is a double: days since

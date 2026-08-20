@@ -1564,8 +1564,35 @@ static int dim_arg(Interp *I, Value v, const char *name)
     return (int)d;
 }
 
+/* the "omit" option: filter NaN once, then reduce as before */
+static Value omit_missing(Value v)
+{
+    if (!is_array(v) || as_arr(v)->elt != ELT_FLOAT) return value_retain(v);
+    ArrObj *a = as_arr(v);
+    size_t c = (size_t)a->rows * a->cols, kept = 0;
+    const double *d = (const double *)a->data;
+    for (size_t k = 0; k < c; k++) kept += !isnan(d[k]);
+    Value out = val_array(ELT_FLOAT, a->cols == 1 ? (uint32_t)kept : 1,
+                          a->cols == 1 ? 1 : (uint32_t)kept);
+    double *o = (double *)as_arr(out)->data;
+    size_t w = 0;
+    for (size_t k = 0; k < c; k++) if (!isnan(d[k])) o[w++] = d[k];
+    return out;
+}
+#define OMIT_HOOK(fn_self)                                                     \
+    if (n >= 2 && args[n-1].kind == VAL_STRING &&                              \
+        as_str(args[n-1])->len == 4 && !memcmp(as_str(args[n-1])->data, "omit", 4)) { \
+        Value filtered = omit_missing(args[0]);                                \
+        Value a2[3] = { filtered, val_null(), val_null() };                    \
+        for (uint32_t q = 1; q + 1 < n; q++) a2[q] = args[q];                  \
+        Value r0 = fn_self(I, a2, n - 1);                                      \
+        value_release(filtered);                                               \
+        return r0;                                                             \
+    }
+
 static Value bi_sum(Interp *I, Value *args, uint32_t n)
 {
+    OMIT_HOOK(bi_sum)
     Value a = args[0];
     if (n == 2) {
         if (!is_array(a)) runtime_error(I, "sum: the dim form needs an array");
@@ -2964,6 +2991,11 @@ static double csv_cell(Interp *I, const char *cell, size_t row, uint32_t col, co
     const char *p = cell;
     while (*p == ' ' || *p == '\t') p++;
     if (*p == '\0') return NAN;                       /* missing value */
+    if ((p[0] == 'N' || p[0] == 'n') &&               /* NA / NaN / nan cells */
+        ((p[1] == 'A' && (p[2] == '\0' || p[2] == ' ')) ||
+         ((p[1] == 'a' || p[1] == 'A') && (p[2] == 'N' || p[2] == 'n') &&
+          (p[3] == '\0' || p[3] == ' '))))
+        return NAN;                                   /* entry 15: holes read as NaN */
     char *end;
     double v = strtod(p, &end);
     while (*end == ' ' || *end == '\t') end++;
@@ -6132,10 +6164,12 @@ static Value stat_var_common(Interp *I, Value *args, uint32_t n, StatKernel f, c
     return stat_all(I, args[0], f, w, who);
 }
 static Value bi_var(Interp *I, Value *args, uint32_t n) { return stat_var_common(I, args, n, st_var, "var"); }
-static Value bi_std(Interp *I, Value *args, uint32_t n) { return stat_var_common(I, args, n, st_std, "std"); }
+static Value bi_std(Interp *I, Value *args, uint32_t n)
+{ OMIT_HOOK(bi_std) return stat_var_common(I, args, n, st_std, "std"); }
 
 static Value bi_median(Interp *I, Value *args, uint32_t n)
 {
+    OMIT_HOOK(bi_median)
     if (n == 2) {
         if (!is_array(args[0])) runtime_error(I, "median: the dim form needs an array");
         return stat_dim(I, as_arr(args[0]), dim_arg(I, args[1], "median"), st_median, 0.0, "median");
@@ -6172,6 +6206,7 @@ static Value bi_quantile(Interp *I, Value *args, uint32_t n)
 
 static Value bi_mean(Interp *I, Value *args, uint32_t n)
 {
+    OMIT_HOOK(bi_mean)
     Value v = args[0];
     if (n == 2) {
         if (!is_array(v)) runtime_error(I, "mean: the dim form needs an array");
@@ -6563,6 +6598,73 @@ static Value sc_isfinite(Interp *I, Value v)
     }
 }
 static Value bi_isnan(Interp *I, Value *args, uint32_t n)    { (void)n; return map_unary(I, args[0], sc_isnan); }
+
+/* entry 15: missing IS NaN, worn with intent. On strings, missing is "". */
+static Value bi_ismissing(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value v = args[0];
+    if (v.kind == VAL_STRING) return val_bool(as_str(v)->len == 0);
+    if (is_array(v) && as_arr(v)->elt == ELT_STRING) {
+        ArrObj *a = as_arr(v);
+        size_t c = (size_t)a->rows * a->cols;
+        Value out = val_array(ELT_BOOL, a->rows, a->cols);
+        unsigned char *b = (unsigned char *)as_arr(out)->data;
+        for (size_t k = 0; k < c; k++) {
+            Value e = arr_get(a, k);
+            b[k] = e.kind == VAL_STRING && as_str(e)->len == 0;
+        }
+        return out;
+    }
+    return map_unary(I, v, sc_isnan);
+}
+
+/* dropmissing(t): remove rows of a record-of-columns where any column is
+ * missing (NaN numerics, "" strings). */
+static Value bi_dropmissing(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_RECORD) runtime_error(I, "dropmissing: expected a record of columns");
+    RecObj *r = as_rec(args[0]);
+    if (r->count == 0) return value_retain(args[0]);
+    uint32_t rows = 0; bool have = false;
+    for (uint32_t c = 0; c < r->count; c++) {
+        if (!is_array(r->vals[c]))
+            runtime_error(I, "dropmissing: field '%.*s' is not a column",
+                          (int)r->keylens[c], r->keys[c]);
+        ArrObj *a = as_arr(r->vals[c]);
+        uint32_t rr = (uint32_t)((size_t)a->rows * a->cols);
+        if (!have) { rows = rr; have = true; }
+        else if (rr != rows) runtime_error(I, "dropmissing: columns differ in length");
+    }
+    bool *keep2 = calloc(rows ? rows : 1, sizeof *keep2);
+    if (!keep2) abort();
+    for (uint32_t i = 0; i < rows; i++) keep2[i] = true;
+    for (uint32_t c = 0; c < r->count; c++) {
+        ArrObj *a = as_arr(r->vals[c]);
+        for (uint32_t i = 0; i < rows; i++) {
+            Value e = arr_get(a, i);
+            if ((e.kind == VAL_FLOAT && isnan(e.as.f)) ||
+                (e.kind == VAL_STRING && as_str(e)->len == 0)) keep2[i] = false;
+        }
+    }
+    uint32_t kept = 0;
+    for (uint32_t i = 0; i < rows; i++) kept += keep2[i];
+    Value out = val_record(r->count);
+    RecObj *o = as_rec(out);
+    for (uint32_t c = 0; c < r->count; c++) {
+        ArrObj *a = as_arr(r->vals[c]);
+        Value col = val_array(a->elt, kept, 1);
+        uint32_t w = 0;
+        for (uint32_t i = 0; i < rows; i++)
+            if (keep2[i]) arr_set(as_arr(col), w++, arr_get(a, i));
+        o->keys[c] = r->keys[c]; o->keylens[c] = r->keylens[c];
+        o->vals[c] = col;
+    }
+    free(keep2);
+    return out;
+}
+
 static Value bi_isinf(Interp *I, Value *args, uint32_t n)    { (void)n; return map_unary(I, args[0], sc_isinf); }
 static Value bi_isfinite(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_isfinite); }
 
@@ -6754,6 +6856,8 @@ EnvObj *globals_new(void)
     def_builtin(e, "whos",  bi_whos,  0, 0);
     def_builtin(e, "version", bi_version, 0, 0);
     def_builtin(e, "nlmin",      bi_nlmin,      2, 3);
+    def_builtin(e, "ismissing",  bi_ismissing,  1, 1);
+    def_builtin(e, "dropmissing", bi_dropmissing, 1, 1);
     def_builtin(e, "buildinfo", bi_buildinfo, 0, 0);
     def_builtin(e, "now",   bi_now,   0, 0);
     def_builtin(e, "help",  bi_help,  0, 1);

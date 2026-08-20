@@ -176,3 +176,5 @@
     { "map", "map(f, A)", "apply f to each element of A, returning an array of results", "hof", "map(fn x -> x * 10, [1, 2, 3])    %= [10, 20, 30]\nmap((_ ^ 2), [1, 2, 3])           %= [1, 4, 9]" },
     { "ast", "ast(f)", "quote a function: its body as a symb-style record tree ({op, l, r, ...}); params as a string row", "core", "ast(fn x -> x^2).body.op           %= \"pow\"" },
     { "nlmin", "nlmin(f, x0, opts?)", "professional minimization (NLopt; exact dual gradients); opts: {alg = \"slsqp\"|\"lbfgs\"|\"bobyqa\"|\"cobyla\", eq, ineq, lb, ub, xtol, maxeval}", "optimization", "fields(buildinfo())[4]           %= \"optim\"" },
+    { "ismissing", "ismissing(x)", "true where a value is missing: NaN in numerics, \"\" in strings; composes with mask indexing (x[!ismissing(x)])", "statistics", "ismissing([1.0, 0/0, 3.0])           %= [false, true, false]" },
+    { "dropmissing", "dropmissing(t)", "remove every row of a record-of-columns where any column is missing (NaN or \"\")", "statistics", "fields(dropmissing({a = [1.0; 0/0]}))[1]           %= \"a\"" },
