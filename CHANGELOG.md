@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.6 — entries 15 and 16: missing values and dates, designed
+
+### Design
+- **The next capability arc, designed and docketed** (owner's ruling:
+  "dates + missing values is critical"): entry 15 — missing IS NaN,
+  embraced, with a thin layer (ismissing, hole-tolerant readtable,
+  dropmissing, "omit" reductions) and no new storage; entry 16 — a
+  Date kind represented as an epoch-day double, adding display and
+  strict dimensional algebra (Date - Date is days; Date * anything is
+  an error) atop machinery that already works on doubles. Missing
+  first, dates second; each ships with a book problem on real holey
+  time-series data. Docket-only release so the designs survive the
+  session.
+
 ## 0.1.5 — integer overflow becomes mathematics, not wraparound
 
 ### Changed (owner's catch: 3^84 wrapped to a misleadingly signed int

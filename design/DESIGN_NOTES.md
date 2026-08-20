@@ -527,3 +527,37 @@ implementation item: a language-core change (parser, closure arity
 range, call-fill) deserving a fresh session's full fuzz-and-rite
 care — first task of the next working session, per the owner's
 sequencing.
+
+## 15. Missing values — DESIGN WRITTEN (owner: "critical"), trigger live.
+The composable answer, per the data-frame lesson (the best feature
+required no features): MISSING IS NaN, embraced — float NaN already
+propagates through arithmetic, LAPACK, and reductions exactly as
+missingness should, and mask indexing already gives the skip idiom
+(x[!isnan(x)]). Rejected: a distinct NA kind with validity bitmaps —
+new storage in every element type, and hardware does not preserve NaN
+payloads through arithmetic, so an NA/NaN distinction quietly rots
+(R's own ambiguity). The thin honest layer to build: ismissing (isnan
+by another, intent-bearing name; on string arrays tests ""); readtable
+reads empty/NA/NaN cells as NaN instead of poisoning the parse (the
+actual gap today); dropmissing(t) for row-wise deletion on a
+record-of-columns; an "omit" option on mean/sum/std/median for the
+one-liner case. Strings: missing reads as "". Order: BEFORE dates
+(entry 16 depends on it). Book problem: a real CSV with holes,
+end to end.
+
+## 16. Dates — DESIGN WRITTEN (owner: "critical"), trigger live.
+A Date value/element kind whose REPRESENTATION is a double: days since
+epoch, fractional time-of-day — so comparison, sorting, ranges
+(weekly sampling as date : 7 : date), mask indexing, and lags by
+subtraction all work with zero new machinery. What the kind adds is
+display (a date column prints as dates; tables stay self-describing)
+and STRICT dimensional algebra in the strictness-doctrine tradition:
+Date + number -> Date, Date - Date -> number (days), Date * anything
+-> error. Surface: date("2024-03-15") ISO parsing, today(), datestr,
+year/month/day/quarter/weekday extractors, readtable auto-typing ISO
+columns, date tick labels in the plot backends. Missing dates are NaN
+inside Date arrays (entry 15 unifies). Rejected: bare datenums (tables
+stop being self-describing) and calendar-object zoos (time zones and
+civil-time edge cases stay out until a transcript demands them; UTC
+days only). Book problem: align two series on dates, growth rates by
+lag, plot with a time axis.
