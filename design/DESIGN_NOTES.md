@@ -563,5 +563,11 @@ columns, date tick labels in the plot backends. Missing dates are NaN
 inside Date arrays (entry 15 unifies). Rejected: bare datenums (tables
 stop being self-describing) and calendar-object zoos (time zones and
 civil-time edge cases stay out until a transcript demands them; UTC
-days only). Book problem: align two series on dates, growth rates by
-lag, plot with a time axis.
+days only). SHIPPED 0.1.8: VAL_DATE/ELT_DATE
+double-backed with civil-calendar print (Hinnant algorithms), the full
+strict algebra and comparisons, date columns in matrices and sort,
+date()/datestr/today/year/month/day/quarter/weekday, readtable ISO
+auto-typing with NaN holes, tests/65_dates.test (leap day pinned), the
+thirteenth manual kind. RESIDUE, next session: plot date tick labels;
+the time-series book problem (align, lag-growth, time axis — one
+dataset also carrying entry 15's holes lesson).

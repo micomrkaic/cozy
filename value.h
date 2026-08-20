@@ -24,10 +24,13 @@ typedef enum : uint8_t {
     VAL_SPARSE,                     /* appended: existing kind numbers stable */
     VAL_DUAL,                       /* dual number a + b*eps — immediate scalar */
     VAL_HDUAL,                      /* hyper-dual a + b*eps1 + c*eps2 + d*eps1eps2 — immediate */
+    VAL_DATE,                       /* calendar date: days since 1970-01-01 UTC in a
+                                       double (fractional part = time of day); entry 16 —
+                                       display-typed, strict dimensional algebra */
 } ValueKind;
 
 /* array element type — the numeric tower plus a logical (Bool) element */
-typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING, ELT_DUAL, ELT_HDUAL } EltType;
+typedef enum : uint8_t { ELT_INT, ELT_FLOAT, ELT_COMPLEX, ELT_BOOL, ELT_STRING, ELT_DUAL, ELT_HDUAL, ELT_DATE } EltType;
 
 typedef struct Obj Obj;
 
@@ -111,6 +114,7 @@ static inline Value val_complex(double re, double im) { return (Value){ .kind = 
 static inline Value val_dual(double v, double e)      { return (Value){ .kind = VAL_DUAL,    .as.d = { v, e } }; }
 static inline Value val_hdual(double v, double e1, double e2, double e12)
                                                       { return (Value){ .kind = VAL_HDUAL,   .as.h = { v, e1, e2, e12 } }; }
+static inline Value val_date(double days)             { return (Value){ .kind = VAL_DATE,    .as.f = days }; }
 
 /* --- heap constructors (return +1 ref) --- */
 Value val_string(const char *bytes, uint32_t len);   /* copies */

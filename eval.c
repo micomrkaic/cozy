@@ -31,10 +31,13 @@
     longjmp(I->jmp, 1);
 }
 
+static bool parse_iso_date(const char *p, uint32_t len, double *out);
+
 static const char *type_name(ValueKind k)
 {
     switch (k) {
     case VAL_NULL:    return "Null";
+    case VAL_DATE:    return "Date";
     case VAL_BOOL:    return "Bool";
     case VAL_INT:     return "Int";
     case VAL_FLOAT:   return "Float";
@@ -57,6 +60,7 @@ static const char *elt_name(EltType e)
     case ELT_BOOL:    return "Bool";
     case ELT_INT:     return "Int";
     case ELT_FLOAT:   return "Float";
+    case ELT_DATE:    return "Date";
     case ELT_COMPLEX: return "Complex";
     case ELT_STRING:  return "String";
     case ELT_DUAL:    return "Dual";
@@ -178,6 +182,23 @@ static Arith arith_of(enum TokenKind op)
 
 static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
 {
+    /* entry 16: dates carry units. Date +- number -> Date; number + Date
+     * -> Date; Date - Date -> Float days; anything else with a Date is a
+     * caught mistake, in the strictness-doctrine tradition. */
+    if (a.kind == VAL_DATE || b.kind == VAL_DATE) {
+        bool an = a.kind == VAL_INT || a.kind == VAL_FLOAT;
+        bool bn = b.kind == VAL_INT || b.kind == VAL_FLOAT;
+        double av = a.kind == VAL_INT ? (double)a.as.i : a.as.f;
+        double bv = b.kind == VAL_INT ? (double)b.as.i : b.as.f;
+        if (a.kind == VAL_DATE && b.kind == VAL_DATE) {
+            if (kind == AR_SUB) return val_float(av - bv);
+            runtime_error(I, "dates: only date - date is defined between two dates (giving days)");
+        }
+        if (a.kind == VAL_DATE && bn && (kind == AR_ADD || kind == AR_SUB))
+            return val_date(kind == AR_ADD ? av + bv : av - bv);
+        if (an && b.kind == VAL_DATE && kind == AR_ADD) return val_date(av + bv);
+        runtime_error(I, "dates: only date +- number, number + date, and date - date are defined");
+    }
     if (a.kind == VAL_STRING && b.kind == VAL_STRING) {
         if (kind != AR_ADD)
             runtime_error(I, "string arithmetic supports only + (concatenation)");
@@ -317,6 +338,17 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
 
 static Value scalar_cmp(Interp *I, enum TokenKind op, Value a, Value b)
 {
+    if (a.kind == VAL_DATE || b.kind == VAL_DATE) {
+        if (a.kind != b.kind)
+            runtime_error(I, "dates compare only with dates (subtract for day counts)");
+        double c2 = a.as.f - b.as.f;
+        switch (op) {
+        case TOK_EQ: return val_bool(c2 == 0); case TOK_NE: return val_bool(c2 != 0);
+        case TOK_LT: return val_bool(c2 <  0); case TOK_LE: return val_bool(c2 <= 0);
+        case TOK_GT: return val_bool(c2 >  0); case TOK_GE: return val_bool(c2 >= 0);
+        default: break;
+        }
+    }
     if (a.kind == VAL_STRING && b.kind == VAL_STRING) {
         StrObj *x = as_str(a), *y = as_str(b);
         uint32_t m = x->len < y->len ? x->len : y->len;
@@ -379,7 +411,7 @@ static EltType vk_elt(ValueKind k)
 {
     return k == VAL_BOOL ? ELT_BOOL : k == VAL_INT ? ELT_INT : k == VAL_FLOAT ? ELT_FLOAT
          : k == VAL_STRING ? ELT_STRING : k == VAL_DUAL ? ELT_DUAL
-         : k == VAL_HDUAL ? ELT_HDUAL : ELT_COMPLEX;
+         : k == VAL_HDUAL ? ELT_HDUAL : k == VAL_DATE ? ELT_DATE : ELT_COMPLEX;
 }
 static EltType elt_max(EltType a, EltType b) { return a > b ? a : b; }   /* numeric tower only */
 
@@ -1092,7 +1124,9 @@ static int elt_rank(EltType e)
                  case ELT_FLOAT: return 2; case ELT_COMPLEX: return 3;
                  case ELT_DUAL: return 3;  /* above float; incomparable with complex (gated) */
                  case ELT_HDUAL: return 3; /* likewise; all cross-mixes gated explicitly */
-                 case ELT_STRING: return 4; /* never promotes with numerics */ }
+                 case ELT_STRING: return 4; /* never promotes with numerics */
+                 case ELT_DATE: return 5;   /* dates never promote: their algebra is
+                                               gated element-wise in scalar_arith */ }
     return 0;
 }
 
@@ -1106,6 +1140,7 @@ static EltType scalar_elt(Interp *I, Value v)
     case VAL_DUAL:    return ELT_DUAL;
     case VAL_HDUAL:   return ELT_HDUAL;
     case VAL_STRING:  return ELT_STRING;
+    case VAL_DATE:    return ELT_DATE;
     default: runtime_error(I, "cannot assign a value of type %s into an array", type_name(v.kind));
     }
 }
@@ -1211,16 +1246,18 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
     uint32_t ntot = 0;
     for (uint32_t r = 0; r < nrows; r++) ntot += (uint32_t)rowcounts[r];
 
-    bool saw_bool = false, saw_num = false, saw_str = false;
+    bool saw_bool = false, saw_num = false, saw_str = false, saw_date = false;
     bool saw_cplx = false, saw_dual = false, saw_hd = false;
     EltType numelt = ELT_INT;
     for (uint32_t k = 0; k < ntot; k++) {
         Value e = ev[k];
-        if (!is_num(e) && e.kind != VAL_BOOL && e.kind != VAL_STRING && !is_array(e))
+        if (!is_num(e) && e.kind != VAL_BOOL && e.kind != VAL_STRING &&
+            e.kind != VAL_DATE && !is_array(e))
             runtime_error(I, "matrix elements must be numbers, strings, or matrices, got %s", type_name(e.kind));
         EltType ee = is_array(e) ? as_arr(e)->elt : vk_elt(e.kind);
         if      (ee == ELT_BOOL)   saw_bool = true;
         else if (ee == ELT_STRING) saw_str = true;
+        else if (ee == ELT_DATE)   saw_date = true;
         else { saw_num = true; numelt = elt_max(numelt, ee);
                if (ee == ELT_COMPLEX) saw_cplx = true;
                if (ee == ELT_DUAL)    saw_dual = true;
@@ -1235,7 +1272,10 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
         runtime_error(I, "cannot mix strings with numbers in a matrix");
     if (saw_bool && saw_num)
         runtime_error(I, "cannot mix Bool and numeric elements in a matrix");
-    EltType elt = saw_str ? ELT_STRING : saw_bool ? ELT_BOOL : numelt;
+    if (saw_date && (saw_num || saw_bool || saw_str))
+        runtime_error(I, "cannot mix dates with other element types in a matrix");
+    EltType elt = saw_date ? ELT_DATE
+                : saw_str ? ELT_STRING : saw_bool ? ELT_BOOL : numelt;
 
     uint32_t *rowh = malloc(nrows * sizeof *rowh);
     if (!rowh) abort();
@@ -3167,6 +3207,9 @@ static Value bi_readtable(Interp *I, Value *args, uint32_t n)
      * split lines are consumed by csv_split in place, classification works on
      * a scratch copy of each line. */
     bool *is_str = calloc(cols, sizeof *is_str);
+    bool *is_date = calloc(cols, sizeof *is_date);
+    bool *seen_num = calloc(cols, sizeof *seen_num);
+    if (!is_date || !seen_num) abort();
     if (!is_str) abort();
     for (size_t r = 0; r < rows; r++) {
         char *scratch = strdup(c.lines[hline + 1 + r]);
@@ -3181,10 +3224,18 @@ static Value bi_readtable(Interp *I, Value *args, uint32_t n)
             const char *p = fields[j];
             while (*p == ' ' || *p == '\t') p++;
             if (*p == '\0') continue;                 /* empty: nan for numeric, "" for string */
+            double dv;
+            if (parse_iso_date(p, (uint32_t)strlen(p), &dv)) {
+                if (!is_date[j] && seen_num[j]) is_str[j] = true;   /* mixed column */
+                else is_date[j] = true;
+                continue;
+            }
+            if (is_date[j]) { is_str[j] = true; continue; }
             char *end;
             strtod(p, &end);
             while (*end == ' ' || *end == '\t') end++;
             if (*end != '\0') is_str[j] = true;
+            else seen_num[j] = true;
         }
         free(scratch);
     }
@@ -3192,7 +3243,8 @@ static Value bi_readtable(Interp *I, Value *args, uint32_t n)
     Value *colv = calloc(cols, sizeof *colv);
     if (!colv) abort();
     for (uint32_t j = 0; j < cols; j++)
-        colv[j] = val_array(is_str[j] ? ELT_STRING : ELT_FLOAT, (uint32_t)rows, 1);
+        colv[j] = val_array(is_str[j] ? ELT_STRING :
+                            is_date[j] ? ELT_DATE : ELT_FLOAT, (uint32_t)rows, 1);
     for (size_t r = 0; r < rows; r++) {
         csv_split(c.lines[hline + 1 + r], delim, fields, CSV_MAX_COLS);
         for (uint32_t j = 0; j < cols; j++) {
@@ -3204,12 +3256,16 @@ static Value bi_readtable(Interp *I, Value *args, uint32_t n)
             } else {
                 const char *p = cell;
                 while (*p == ' ' || *p == '\t') p++;
-                double v = (*p == '\0') ? NAN : strtod(p, nullptr);
+                double v;
+                if (*p == '\0') v = NAN;
+                else if (is_date[j]) {
+                    if (!parse_iso_date(p, (uint32_t)strlen(p), &v)) v = NAN;
+                } else v = csv_cell(I, cell, r + 1, j + 1, "readtable");
                 ((double *)as_arr(colv[j])->data)[r] = v;
             }
         }
     }
-    free(is_str);
+    free(is_str); free(is_date); free(seen_num);
     memcpy(I->jmp, saved, sizeof(jmp_buf));
     Value rec = val_record(cols);
     RecObj *o = as_rec(rec);
@@ -6600,6 +6656,144 @@ static Value sc_isfinite(Interp *I, Value v)
 static Value bi_isnan(Interp *I, Value *args, uint32_t n)    { (void)n; return map_unary(I, args[0], sc_isnan); }
 
 /* entry 15: missing IS NaN, worn with intent. On strings, missing is "". */
+/* ---- entry 16: calendar math (Howard Hinnant's civil algorithms) ---- */
+static int64_t days_from_civil(int64_t y, int64_t m, int64_t d)
+{
+    y -= m <= 2;
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    int64_t yoe = y - era * 400;
+    int64_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    int64_t doe = yoe * 365 + yoe/4 - yoe/100 + doy;
+    return era * 146097 + doe - 719468;
+}
+static void civil_from_days(double dd, int64_t *Y, int64_t *M, int64_t *D, double *frac)
+{
+    int64_t z = (int64_t)(dd >= 0 ? dd : dd - 0.999999);
+    if (frac) *frac = dd - (double)z;
+    int64_t za = z + 719468;
+    int64_t era = (za >= 0 ? za : za - 146096) / 146097;
+    int64_t doe = za - era * 146097;
+    int64_t yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+    int64_t y = yoe + era * 400;
+    int64_t doy = doe - (365*yoe + yoe/4 - yoe/100);
+    int64_t mp = (5*doy + 2)/153;
+    *D = doy - (153*mp+2)/5 + 1;
+    *M = mp < 10 ? mp+3 : mp-9;
+    *Y = *M <= 2 ? y + 1 : y;
+}
+static bool parse_iso_date(const char *p, uint32_t len, double *out)
+{
+    if (len < 10) return false;
+    for (int i = 0; i < 10; i++) {
+        char c = p[i];
+        if (i == 4 || i == 7) { if (c != '-') return false; }
+        else if (c < '0' || c > '9') return false;
+    }
+    int64_t y = (p[0]-'0')*1000 + (p[1]-'0')*100 + (p[2]-'0')*10 + (p[3]-'0');
+    int64_t m = (p[5]-'0')*10 + (p[6]-'0');
+    int64_t d = (p[8]-'0')*10 + (p[9]-'0');
+    if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+    double v = (double)days_from_civil(y, m, d);
+    if (len >= 19 && (p[10] == ' ' || p[10] == 'T')) {
+        int hh = (p[11]-'0')*10 + (p[12]-'0');
+        int mi = (p[14]-'0')*10 + (p[15]-'0');
+        int ss = (p[17]-'0')*10 + (p[18]-'0');
+        v += (hh*3600 + mi*60 + ss) / 86400.0;
+    } else if (len != 10) return false;
+    *out = v;
+    return true;
+}
+static Value bi_date(Interp *I, Value *args, uint32_t n)
+{
+    if (n == 1 && args[0].kind == VAL_STRING) {
+        StrObj *s = as_str(args[0]);
+        double v;
+        if (!parse_iso_date(s->data, s->len, &v))
+            runtime_error(I, "date: expected \"YYYY-MM-DD\" or \"YYYY-MM-DD HH:MM:SS\", got '%.*s'",
+                          (int)s->len, s->data);
+        return val_date(v);
+    }
+    if (n == 3) {
+        int64_t y = args[0].kind == VAL_INT ? args[0].as.i : (int64_t)as_double(args[0]);
+        int64_t m = args[1].kind == VAL_INT ? args[1].as.i : (int64_t)as_double(args[1]);
+        int64_t d = args[2].kind == VAL_INT ? args[2].as.i : (int64_t)as_double(args[2]);
+        if (m < 1 || m > 12 || d < 1 || d > 31)
+            runtime_error(I, "date: month 1-12 and day 1-31, got (%lld, %lld)", (long long)m, (long long)d);
+        return val_date((double)days_from_civil(y, m, d));
+    }
+    runtime_error(I, "date: date(\"YYYY-MM-DD\") or date(y, m, d)");
+}
+static Value bi_datestr(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_DATE) runtime_error(I, "datestr: expected a date");
+    char buf[40]; int64_t Y, M, D; double fr;
+    civil_from_days(args[0].as.f, &Y, &M, &D, &fr);
+    int len = snprintf(buf, sizeof buf, "%04lld-%02lld-%02lld",
+                       (long long)Y, (long long)M, (long long)D);
+    if (fr > 1e-9) {
+        int s = (int)(fr * 86400.0 + 0.5);
+        len += snprintf(buf + len, sizeof buf - (size_t)len, " %02d:%02d:%02d",
+                        s/3600, (s/60)%60, s%60);
+    }
+    return val_string(buf, (uint32_t)len);
+}
+static Value bi_today(Interp *I, Value *args, uint32_t n)
+{
+    (void)I; (void)args; (void)n;
+    return val_date((double)(time(NULL) / 86400));
+}
+#define DATE_PART(name, expr)                                                  \
+static Value bi_##name(Interp *I, Value *args, uint32_t n)                     \
+{                                                                              \
+    (void)n;                                                                   \
+    Value v = args[0];                                                         \
+    if (v.kind == VAL_DATE) {                                                  \
+        int64_t Y, M, D; civil_from_days(v.as.f, &Y, &M, &D, NULL);            \
+        return val_int(expr);                                                  \
+    }                                                                          \
+    if (is_array(v) && as_arr(v)->elt == ELT_DATE) {                           \
+        ArrObj *a = as_arr(v);                                                 \
+        size_t c = (size_t)a->rows * a->cols;                                  \
+        Value out = val_array(ELT_INT, a->rows, a->cols);                      \
+        int64_t *o = (int64_t *)as_arr(out)->data;                             \
+        for (size_t k = 0; k < c; k++) {                                       \
+            int64_t Y, M, D;                                                   \
+            civil_from_days(((const double *)a->data)[k], &Y, &M, &D, NULL);   \
+            o[k] = (expr);                                                     \
+        }                                                                      \
+        return out;                                                            \
+    }                                                                          \
+    runtime_error(I, #name ": expected a date or date column");                \
+}
+DATE_PART(year, Y)
+DATE_PART(month, M)
+DATE_PART(day, D)
+DATE_PART(quarter, (M + 2) / 3)
+static Value bi_weekday(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Value v = args[0];
+    /* 1970-01-01 was a Thursday; Monday = 1 .. Sunday = 7 */
+    if (v.kind == VAL_DATE) {
+        int64_t z = (int64_t)(v.as.f >= 0 ? v.as.f : v.as.f - 0.999999);
+        return val_int(((z % 7) + 10) % 7 + 1);
+    }
+    if (is_array(v) && as_arr(v)->elt == ELT_DATE) {
+        ArrObj *a = as_arr(v);
+        size_t c = (size_t)a->rows * a->cols;
+        Value out = val_array(ELT_INT, a->rows, a->cols);
+        int64_t *o = (int64_t *)as_arr(out)->data;
+        for (size_t k = 0; k < c; k++) {
+            double dd = ((const double *)a->data)[k];
+            int64_t z = (int64_t)(dd >= 0 ? dd : dd - 0.999999);
+            o[k] = ((z % 7) + 10) % 7 + 1;
+        }
+        return out;
+    }
+    runtime_error(I, "weekday: expected a date or date column");
+}
+
 static Value bi_ismissing(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -6857,6 +7051,14 @@ EnvObj *globals_new(void)
     def_builtin(e, "version", bi_version, 0, 0);
     def_builtin(e, "nlmin",      bi_nlmin,      2, 3);
     def_builtin(e, "ismissing",  bi_ismissing,  1, 1);
+    def_builtin(e, "date",       bi_date,       1, 3);
+    def_builtin(e, "datestr",    bi_datestr,    1, 1);
+    def_builtin(e, "today",      bi_today,      0, 0);
+    def_builtin(e, "year",       bi_year,       1, 1);
+    def_builtin(e, "month",      bi_month,      1, 1);
+    def_builtin(e, "day",        bi_day,        1, 1);
+    def_builtin(e, "quarter",    bi_quarter,    1, 1);
+    def_builtin(e, "weekday",    bi_weekday,    1, 1);
     def_builtin(e, "dropmissing", bi_dropmissing, 1, 1);
     def_builtin(e, "buildinfo", bi_buildinfo, 0, 0);
     def_builtin(e, "now",   bi_now,   0, 0);

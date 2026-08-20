@@ -1,5 +1,27 @@
 # Cozy changelog
 
+## 0.1.8 — dates (entry 16)
+
+### Added
+- **The Date kind, thirteenth of the family**: days since 1970-01-01
+  UTC in a double, fractional time-of-day, printing as
+  "2024-03-15" — so comparison, sorting, ranges, mask filtering, and
+  lag-by-subtraction all worked the moment the kind existed. Strict
+  dimensional algebra in the strictness-doctrine tradition:
+  Date + number is a Date, Date - Date is days, anything else is a
+  caught mistake ("dates: only date +- number ... are defined").
+- **date("2024-03-15") / date(y, m, d), datestr, today, and the
+  extractors** year/month/day/quarter/weekday (Monday = 1), all
+  column-aware, on Hinnant's civil-calendar algorithms (leap day
+  golden included).
+- **readtable auto-types ISO date columns** (mixed columns fall back
+  to strings; holes are NaN) — with entry 15, a CSV of dated, holey
+  data now loads into the workday view directly: t.date is dates,
+  quarter(t.date) extracts, mean(t.gdp, "omit") summarizes,
+  dropmissing(t) cleans.
+- Residue for the next session, recorded in the docket: plot date
+  tick labels, and the time-series book problem.
+
 ## 0.1.7 — missing values, the composable way (entry 15)
 
 ### Added

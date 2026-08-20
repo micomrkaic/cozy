@@ -90,6 +90,7 @@ size_t elt_size(EltType e)
     case ELT_STRING:  return sizeof(StrObj *);
     case ELT_INT:     return sizeof(int64_t);
     case ELT_FLOAT:   return sizeof(double);
+    case ELT_DATE:    return sizeof(double);
     case ELT_COMPLEX: return sizeof(Cplx);
     case ELT_DUAL:    return sizeof(Dual);
     case ELT_HDUAL:   return sizeof(HDual);
@@ -270,6 +271,7 @@ Value arr_get(const ArrObj *a, size_t k)
     }
     case ELT_INT:     return val_int(((const int64_t *)a->data)[k]);
     case ELT_FLOAT:   return val_float(((const double *)a->data)[k]);
+    case ELT_DATE:    return val_date(((const double *)a->data)[k]);
     case ELT_COMPLEX: { Cplx c = ((const Cplx *)a->data)[k]; return val_complex(c.re, c.im); }
     case ELT_DUAL:    { Dual d = ((const Dual *)a->data)[k]; return val_dual(d.v, d.e); }
     case ELT_HDUAL:   { HDual q = ((const HDual *)a->data)[k]; return val_hdual(q.v, q.e1, q.e2, q.e12); }
@@ -294,6 +296,9 @@ void arr_set(ArrObj *a, size_t k, Value v)
         break;
     case ELT_FLOAT:
         ((double *)a->data)[k] = (v.kind == VAL_INT) ? (double)v.as.i : v.as.f;
+        break;
+    case ELT_DATE:
+        ((double *)a->data)[k] = v.as.f;             /* dates store their days */
         break;
     case ELT_COMPLEX: {
         Cplx c;
@@ -456,6 +461,27 @@ static void print_hdual(FILE *out, HDual q)
 static void print_scalar(FILE *out, Value v)
 {
     switch (v.kind) {
+    case VAL_DATE: {
+        double dd = v.as.f;
+        int64_t z = (int64_t)(dd >= 0 ? dd : dd - 0.999999);  /* floor */
+        double frac = dd - (double)z;
+        int64_t za = z + 719468;
+        int64_t era = (za >= 0 ? za : za - 146096) / 146097;
+        int64_t doe = za - era * 146097;
+        int64_t yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+        int64_t y = yoe + era * 400;
+        int64_t doy = doe - (365*yoe + yoe/4 - yoe/100);
+        int64_t mp = (5*doy + 2)/153;
+        int64_t d = doy - (153*mp+2)/5 + 1;
+        int64_t m = mp < 10 ? mp+3 : mp-9;
+        if (m <= 2) y++;
+        fprintf(out, "%04lld-%02lld-%02lld", (long long)y, (long long)m, (long long)d);
+        if (frac > 1e-9) {
+            int s = (int)(frac * 86400.0 + 0.5);
+            fprintf(out, " %02d:%02d:%02d", s/3600, (s/60)%60, s%60);
+        }
+        break;
+    }
     case VAL_NULL:    fputs("null", out); break;
     case VAL_BOOL:    fputs(v.as.b ? "true" : "false", out); break;
     case VAL_INT:     fprintf(out, "%lld", (long long)v.as.i); break;
@@ -475,6 +501,7 @@ const char *value_type_name(Value v)
     case VAL_BOOL:    return "Bool";
     case VAL_INT:     return "Int";
     case VAL_FLOAT:   return "Float";
+    case VAL_DATE:    return "Date";
     case VAL_COMPLEX: return "Complex";
     case VAL_DUAL:    return "Dual";
     case VAL_HDUAL:   return "HDual";
@@ -497,6 +524,14 @@ static void scalar_str(char *buf, size_t cap, Value v)
     case VAL_BOOL:  snprintf(buf, cap, "%s", v.as.b ? "true" : "false"); break;
     case VAL_INT:   snprintf(buf, cap, "%lld", (long long)v.as.i); break;
     case VAL_FLOAT: fmt_double_str(buf, cap, v.as.f); break;
+    case VAL_DATE: {                                   /* str(date): the display form */
+        FILE *ms = tmpfile();
+        if (ms) { print_scalar(ms, v); long L = ftell(ms); rewind(ms);
+                  size_t got = fread(buf, 1, (size_t)L < cap - 1 ? (size_t)L : cap - 1, ms);
+                  buf[got] = 0; fclose(ms); }
+        else snprintf(buf, cap, "%f", v.as.f);
+        break;
+    }
     case VAL_COMPLEX: {
         double re = v.as.z.re, im = v.as.z.im;
         if (im == 0.0) im = 0.0;
@@ -589,7 +624,7 @@ void value_print(FILE *out, Value v)
     if (v.kind == VAL_SPARSE) { sparse_print(out, as_sp(v)); return; }
     switch (v.kind) {
     case VAL_NULL: case VAL_BOOL: case VAL_INT: case VAL_FLOAT: case VAL_COMPLEX:
-    case VAL_DUAL: case VAL_HDUAL:
+    case VAL_DUAL: case VAL_HDUAL: case VAL_DATE:
         print_scalar(out, v);
         break;
     case VAL_SPARSE: sparse_print(out, as_sp(v)); return;

@@ -177,3 +177,11 @@ ast	ast(f)	quote a function: its body as a symb-style record tree ({op, l, r, ..
 nlmin	nlmin(f, x0, opts?)	professional minimization (NLopt; exact dual gradients); opts: {alg = "slsqp"|"lbfgs"|"bobyqa"|"cobyla", eq, ineq, lb, ub, xtol, maxeval}	optimization	fields(buildinfo())[4]           %= "optim"
 ismissing	ismissing(x)	true where a value is missing: NaN in numerics, "" in strings; composes with mask indexing (x[!ismissing(x)])	statistics	ismissing([1.0, 0/0, 3.0])           %= [false, true, false]
 dropmissing	dropmissing(t)	remove every row of a record-of-columns where any column is missing (NaN or "")	statistics	fields(dropmissing({a = [1.0; 0/0]}))[1]           %= "a"
+date	date("2024-03-15") | date(y, m, d)	a calendar Date (days since 1970-01-01 UTC, fractional time); strict algebra: Date +- number -> Date, Date - Date -> days, anything else errors	core	date("2024-03-15") + 30           %= 2024-04-14
+datestr	datestr(d)	a date rendered "YYYY-MM-DD[ HH:MM:SS]" as a string	core	datestr(date(2024, 3, 15))           %= "2024-03-15"
+today	today()	the current UTC date	core	class_of_today = 1           %= 1
+year	year(d)	calendar year of a date or date column	core	year(date("2024-03-15"))           %= 2024
+month	month(d)	calendar month (1-12) of a date or date column	core	month(date("2024-03-15"))           %= 3
+day	day(d)	day of month of a date or date column	core	day(date("2024-03-15"))           %= 15
+quarter	quarter(d)	calendar quarter (1-4) of a date or date column	core	quarter(date("2024-07-01"))           %= 3
+weekday	weekday(d)	day of week, Monday = 1 .. Sunday = 7	core	weekday(date("2024-03-15"))           %= 5

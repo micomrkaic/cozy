@@ -184,7 +184,7 @@ digits too — so Greek reads naturally: `let α = 0.05`, `let θ = [1; 2]`,
 visually identical characters in different Unicode normalizations are
 different names (type your α one way). Keywords stay ASCII.
 
-Cozy has twelve value kinds. The scalar kinds:
+Cozy has thirteen value kinds. The scalar kinds:
 
 | Type | Literals | Notes |
 |---|---|---|
@@ -194,6 +194,7 @@ Cozy has twelve value kinds. The scalar kinds:
 | `Complex` | `2i`, `1 + 3i`, `2.5i` | double re/im pair |
 | `Dual` | `dual(2, 3)`, prints `2+3eps` | value + derivative pair, `eps^2 = 0`; see the dual numbers section |
 | `HDual` | `hdual(3, 1, 1)`, prints `3+1eps1+1eps2+0eps12` | hyper-dual: two nilpotent directions whose product survives, so one pass carries an exact second derivative in the `eps12` slot; `hdual12` reads it — the engine under `hess` and `minimize_newton` |
+| `Date` | `date("2024-03-15")`, prints `2024-03-15` | a calendar date: days since 1970-01-01 UTC in a double (fractional time-of-day); strict algebra — `Date + number` is a Date, `Date - Date` is days, anything else errors; `readtable` auto-types ISO columns |
 | `String` | `"hello"` | byte strings: `+` concatenates, comparisons are lexicographic, `s[i]`/`s[a:b]` index bytes (see the Strings section) |
 | `Null` | `null` | the "no value" value; a suppressed or valueless statement yields it |
 
@@ -1202,6 +1203,14 @@ cozy> clear("scatter"); who
 | `tic` | start the wall-clock timer (monotonic) |
 | `toc` | seconds elapsed since tic |
 | `ast(f)` | quote a function: its body as a symb-style record tree ({op, l, r, ...}); params as a string row |
+| `date("2024-03-15") \| date(y, m, d)` | a calendar Date (days since 1970-01-01 UTC, fractional time); strict algebra: Date +- number -> Date, Date - Date -> days, anything else errors |
+| `datestr(d)` | a date rendered "YYYY-MM-DD[ HH:MM:SS]" as a string |
+| `today()` | the current UTC date |
+| `year(d)` | calendar year of a date or date column |
+| `month(d)` | calendar month (1-12) of a date or date column |
+| `day(d)` | day of month of a date or date column |
+| `quarter(d)` | calendar quarter (1-4) of a date or date column |
+| `weekday(d)` | day of week, Monday = 1 .. Sunday = 7 |
 
 ### Strings
 
