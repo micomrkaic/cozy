@@ -1,5 +1,17 @@
 # Cozy changelog
 
+## 0.1.10 — the binding-regime debt, parked by ruling
+
+### Design
+- **Docket entry 17**: the one-binding-regime cleanup (@ by name vs
+  slots) is consciously deferred — an override of the charter's
+  fix-from-day-one list, recorded as overrides are. Reviewed and
+  ledgered: zero measurable runtime cost (hot paths are slot-bound by
+  the _@e rewrite); the debt is trap surface for future binder-shaped
+  features. Trigger written: the cleanup runs FIRST when any such
+  feature next enters the docket, with byte-for-byte goldens as the
+  acceptance bar.
+
 ## 0.1.9 — default parameter values (entry 13)
 
 ### Added

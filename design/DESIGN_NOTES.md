@@ -578,3 +578,15 @@ auto-typing with NaN holes, tests/65_dates.test (leap day pinned), the
 thirteenth manual kind. RESIDUE, next session: plot date tick labels;
 the time-series book problem (align, lag-growth, time axis — one
 dataset also carrying entry 15's holes lesson).
+
+## 17. One binding regime — PARKED BY RULING (owner, 2026-08-20),
+recorded as an override of the charter's fix-from-day-one list. The
+facts as reviewed: @ resolves by name while parameters live in slots;
+the ~> desugar's _@e rewrite keeps every hot path slot-bound, so the
+runtime cost is nil (name lookup only on plain-pipe stages, once per
+stage). The debt is trap surface for FUTURE binder-flavored features,
+not performance. TRIGGER: the next docket entry that binds @ or
+introduces a scope form (a new binder, nested-pipe disambiguation,
+module work) — do this cleanup FIRST, on one regime, before that
+feature lands. Acceptance when it fires: delete rewrite_at_to_elem,
+compile @ to a slot, all goldens pass byte-for-byte.
