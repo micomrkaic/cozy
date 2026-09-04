@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.11 — the Makefile learns to speak make 3.81
+
+### Fixed
+- **make BACKEND=accelerate OPTIM=nlopt died on macOS with "invalid
+  syntax in conditional"** (owner's Mac, first reunion build): Apple
+  ships GNU make 3.81 (2006, GPLv3 freeze), and 3.81 treats a '#'
+  inside a function invocation as a comment start — the nlopt header
+  probe echoed '#include <nlopt.h>' and left its ifeq unbalanced. The
+  probe now uses $(CC) -E -include nlopt.h /dev/null, which needs no
+  hash character. Trap recorded in the PLAYBOOK with its general law:
+  Makefile code must parse under make 3.81.
+  Note the probe still fires correctly on the Mac after brew install
+  nlopt; without it, the failure names that exact remedy.
+
 ## 0.1.10 — the binding-regime debt, parked by ruling
 
 ### Design

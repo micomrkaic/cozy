@@ -333,3 +333,13 @@ itself before touching the tree, so the running script is never the
 one being replaced. Corollary for any self-updating rite: the step
 that replaces the tool must not be executed by the tool being
 replaced.
+
+### Trap: macOS GNU make is from 2006
+
+Apple froze GNU make at 3.81 (GPLv3), and 3.81 treats a '#' inside a
+function invocation as a comment start — an ifeq whose $(shell ...)
+echoes '#include <...>' dies as "invalid syntax in conditional" on
+every Mac while passing on any modern Linux make. Probe headers with
+-include instead ($(CC) -E -xc -include hdr.h /dev/null), which needs
+no hash. General law: Makefile code must parse under make 3.81 until
+Apple relents; anything version-sensitive belongs in shell scripts.

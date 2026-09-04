@@ -78,7 +78,10 @@ else
 endif
 OPTIM ?= none
 ifeq ($(OPTIM),nlopt)
-  ifeq ($(shell echo '#include <nlopt.h>' | $(CC) -E -xc - >/dev/null 2>&1 && echo yes),)
+  # probe via -include so no hash character appears here: macOS ships GNU
+  # make 3.81, which treats a hash inside a function call as a comment and
+  # dies with "invalid syntax in conditional" (owner's Mac, v0.1.10 reunion)
+  ifeq ($(shell $(CC) -E -xc -include nlopt.h /dev/null >/dev/null 2>&1 && echo yes),)
     $(error OPTIM=nlopt: nlopt.h not found — install the NLopt dev package \
       (Debian/Ubuntu: sudo apt install libnlopt-dev; macOS: brew install nlopt))
   endif
