@@ -78,15 +78,29 @@ else
 endif
 OPTIM ?= none
 ifeq ($(OPTIM),nlopt)
+  # Homebrew on Apple Silicon lives in /opt/homebrew, which is NOT on
+  # clang's default search path (Intel Macs used /usr/local) — ask brew
+  # where it is and search both, before probing and when building.
+  NLOPT_INC :=
+  NLOPT_LIB :=
+  ifeq ($(shell uname -s),Darwin)
+    BREW_PREFIX := $(shell brew --prefix 2>/dev/null)
+    ifneq ($(BREW_PREFIX),)
+      NLOPT_INC += -I$(BREW_PREFIX)/include
+      NLOPT_LIB += -L$(BREW_PREFIX)/lib
+    endif
+    NLOPT_INC += -I/usr/local/include
+    NLOPT_LIB += -L/usr/local/lib
+  endif
   # probe via -include so no hash character appears here: macOS ships GNU
   # make 3.81, which treats a hash inside a function call as a comment and
   # dies with "invalid syntax in conditional" (owner's Mac, v0.1.10 reunion)
-  ifeq ($(shell $(CC) -E -xc -include nlopt.h /dev/null >/dev/null 2>&1 && echo yes),)
+  ifeq ($(shell $(CC) $(NLOPT_INC) -E -xc -include nlopt.h /dev/null >/dev/null 2>&1 && echo yes),)
     $(error OPTIM=nlopt: nlopt.h not found — install the NLopt dev package \
       (Debian/Ubuntu: sudo apt install libnlopt-dev; macOS: brew install nlopt))
   endif
-  CFLAGS += -DCOZY_NLOPT
-  OPTIM_LIBS = -lnlopt -lm
+  CFLAGS += -DCOZY_NLOPT $(NLOPT_INC)
+  OPTIM_LIBS = $(NLOPT_LIB) -lnlopt -lm
 else
   OPTIM_LIBS =
 endif

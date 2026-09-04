@@ -343,3 +343,9 @@ every Mac while passing on any modern Linux make. Probe headers with
 -include instead ($(CC) -E -xc -include hdr.h /dev/null), which needs
 no hash. General law: Makefile code must parse under make 3.81 until
 Apple relents; anything version-sensitive belongs in shell scripts.
+Sequel, same reunion: Homebrew on Apple Silicon installs under
+/opt/homebrew, which clang does NOT search by default — a probe (or
+build) without -I$(brew --prefix)/include reports a brewed library as
+absent. Every darwin probe and its build must share the brew include
+and lib paths; readline had this treatment from birth, nlopt learned
+it at 0.1.12.

@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.12 — the probe learns where Homebrew lives
+
+### Fixed
+- **brew-installed NLopt was invisible on Apple Silicon** (owner's
+  Mac: brew said "already installed", the probe said "not found"):
+  Homebrew on ARM Macs installs under /opt/homebrew, which clang does
+  not search by default. The Makefile now asks brew --prefix and
+  carries -I/-L for it (and /usr/local for Intel Macs) through BOTH
+  the probe and the build — the same treatment readline had from
+  birth. deploy.sh's autodetection probe gets the identical fix, so
+  a Mac deploy assembles accelerate+nlopt instead of silently noting
+  the backend absent. PLAYBOOK trap extended: every darwin probe and
+  its build must share the brew paths.
+
 ## 0.1.11 — the Makefile learns to speak make 3.81
 
 ### Fixed

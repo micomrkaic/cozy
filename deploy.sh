@@ -62,7 +62,12 @@ if [[ $RUN_TESTS == 1 ]]; then
         echo "        For LAPACK speed: sudo apt install libopenblas-dev"
     fi
     OPTIM=none
-    if echo '#include <nlopt.h>' | cc -E -xc - >/dev/null 2>&1; then
+    NLOPT_PROBE_INC=""
+    if [ "$(uname -s)" = "Darwin" ]; then
+        bp="$(brew --prefix 2>/dev/null || true)"
+        [ -n "$bp" ] && NLOPT_PROBE_INC="-I$bp/include"
+    fi
+    if cc $NLOPT_PROBE_INC -E -xc -include nlopt.h /dev/null >/dev/null 2>&1; then
         OPTIM=nlopt
     else
         echo "deploy: NOTE — no NLopt found; optimization runs the pure tier0 path."
