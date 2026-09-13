@@ -1,5 +1,20 @@
 # Cozy changelog
 
+## 0.1.13 — the repo stops carrying machine code
+
+### Fixed
+- **A fresh Linux clone failed to link: "arena.o: file format not
+  recognized"** (owner's X1): deploy committed the tree including
+  build/, so a Mac deploy had pushed Mach-O objects into git; on a
+  clone, equal checkout mtimes made make skip the compile and link
+  Apple code on Linux. Now: .gitignore covers build/ and the
+  binaries; deploy.sh runs make clean before git add and evicts
+  previously-committed artifacts (git rm --cached) — the next deploy
+  from any machine heals the repository, and clone size stops
+  growing by a build tree per release. Trap ledgered with its tell:
+  a strange link failure means first find the object that was never
+  compiled. Remedy on an already-poisoned clone: make clean.
+
 ## 0.1.12 — the probe learns where Homebrew lives
 
 ### Fixed

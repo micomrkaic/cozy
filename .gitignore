@@ -1,0 +1,9 @@
+# build artifacts never enter the repo (a committed Mach-O arena.o from a
+# Mac deploy linked into a Linux clone and died: "file format not
+# recognized" — see PLAYBOOK, the cross-platform object trap)
+build/
+cozy
+vmtest
+vmtest-asan
+*.o
+*.d

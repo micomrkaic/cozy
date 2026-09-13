@@ -349,3 +349,17 @@ build) without -I$(brew --prefix)/include reports a brewed library as
 absent. Every darwin probe and its build must share the brew include
 and lib paths; readline had this treatment from birth, nlopt learned
 it at 0.1.12.
+
+### Trap: the committed object file crosses an ocean and a platform
+
+deploy.sh built, tested, then committed the tree WITH build/ — so a
+Mac deploy pushed Mach-O objects into git. A fresh Linux clone then
+checked every file out with the same mtimes, make read arena.o as
+up-to-date beside arena.c (the equal-mtimes law, third costume),
+skipped the compile, and fed Apple machine code to GNU ld: "file
+format not recognized," with the tell being the MISSING compile line
+in the build log. Laws: build artifacts never enter the repo
+(.gitignore build/ and the binaries; deploy cleans before git add and
+evicts previously-committed artifacts with git rm --cached); and when
+a link fails strangely, first read the build log for the object that
+was never compiled. Remedy on any poisoned clone: make clean.

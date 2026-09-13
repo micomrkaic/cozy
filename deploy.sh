@@ -83,6 +83,12 @@ else
 fi
 
 # 3. Commit, push, tag.
+# Build artifacts never enter the repo: clean the tree that gets
+# committed (the binaries were just tested; the SOURCES are the release),
+# and evict anything a pre-.gitignore deploy already committed — a
+# Mach-O arena.o from a Mac deploy once linked into a Linux clone.
+make clean >/dev/null
+git rm -r -q --cached build cozy vmtest vmtest-asan 2>/dev/null || true
 git add -A
 if git diff --cached --quiet; then
     echo "deploy: nothing to commit (tree already at this state)"
