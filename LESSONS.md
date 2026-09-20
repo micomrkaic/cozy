@@ -399,3 +399,16 @@ the-verdict, second occurrence, this time self-inflicted), and no claim
 ships unexecuted — "rebuilt" is a claim, and mtime is its cheapest
 witness. Mechanized: make pdfs, run bare, exit code visible; and the
 audit habit — after any "regenerated X" step, stat X.
+
+### The overflow era: when two paths disagree, one is confessing
+
+3^84 wrapped to a misleadingly signed integer at the prompt while
+fzero, entering the same expression through floats, reported the true
+value — the same formula, two arithmetics, one answer wrong. The
+catch generalizes past integer overflow: WHEN TWO EVALUATION PATHS
+OF THE SAME EXPRESSION DISAGREE, THE DISAGREEMENT IS THE BUG REPORT —
+one path is confessing to a semantics you did not intend. Cozy's
+verify step for the promotion release pinned exactly this: the prompt
+value and the fzero-probe value must be equal. Any future dual-path
+feature (fast path vs generic, backend vs tier0, compiled vs quoted)
+owes the suite an agreement golden of the same shape.

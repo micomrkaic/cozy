@@ -311,7 +311,7 @@
     writeLine('dim', 'help(name) shows one with examples. format(n) sets precision.');
     writeLine('dim', 'plot and hist render as SVG in the Plots panel. Drop files anywhere:');
     writeLine('dim', '.cz opens in the editor, data files upload for readtable/load.');
-    writeLine('dim', 'The standard packages are preloaded: try load("packages/dist.cz").');
+    writeLine('dim', 'The standard packages are preloaded: try load("dist").');
     writeLine('dim', 'Type manual (or manual packages) to read the docs in the Docs tab.');
     writeLine('dim', '');
     inputline.style.display = 'flex';
@@ -526,7 +526,7 @@
                 done = true;
               }
               if (tc.indexOf('standard packages are preloaded') !== -1)
-                lines[i].textContent = 'Packages load on demand: the Packages tab or load("packages/dist.cz").';
+                lines[i].textContent = 'Packages load on demand: the Packages tab or load("dist").';
             }
             if (!done && ++tries < 60) { setTimeout(fixBanner, 150); return; }
             window.nuTerm.scroll();

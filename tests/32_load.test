@@ -19,7 +19,7 @@ load("tests/data/badparse.cz")
 load("tests/data/badrun.cz")
 => !undefined name 'definitely_undefined'
 load("nonexistent.cz")
-=> !cannot open
+=> !cannot find
 load(42)
 => !expected a file name string
 # load returns null: silent on success

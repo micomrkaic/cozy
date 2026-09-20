@@ -1,0 +1,13 @@
+# The load search path (Neutrino 2.32.x port): bare names resolve through
+# packages/, COZY_PATH, and the binary's own directory; misses name every
+# place searched; ls falls back beside the binary for bare dir names.
+load("dist"); 1
+=> 1
+load("dist.cz"); 1
+=> 1
+load("packages/dist.cz"); 1
+=> 1
+load("nosuch")
+=> !load: cannot find 'nosuch'
+length(ls("packages")) > 5
+=> true

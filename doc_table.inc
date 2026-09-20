@@ -73,7 +73,7 @@
     { "pwd", "pwd", "the current working directory, as a string", "io", "length(pwd()) > 0                 %= true" },
     { "cd", "cd(\"dir\") | cd", "change the working directory (persists, unlike !cd); bare cd goes home", "io", "cd(\"packages\")                    % ...then load(\"dist.cz\") works\ncd(\"..\")                          % back up" },
     { "ls", "ls | ls(\"dir\") | ls(\"*.cz\")", "directory listing as a string array (globs supported)", "io", "numel(ls(\"packages\")) >= 5        %= true" },
-    { "load", "load(\"file.cz\")", "run a file in the current session; its let-bindings persist (a record of closures makes a module)", "core", "load(\"tests/data/mathlib.cz\"); cube(3)   %= 27\nload(\"mylib.cz\"); mylib.f(2)     % record-of-closures as a namespace" },
+    { "load", "load(\"name\" | \"file.cz\")", "run a file in the current session; bare names search packages/, $COZY_PATH, and beside the binary (a miss names every place tried); let-bindings persist", "core", "load(\"tests/data/mathlib.cz\"); cube(3)   %= 27\nload(\"mylib.cz\"); mylib.f(2)     % record-of-closures as a namespace" },
     { "eval", "eval(\"code\")", "run a string as Cozy code in this session; returns the last value", "core", "eval(\"2 + 2\")                      % 4" },
     { "names", "names() | names(\"vars\"|\"funcs\")", "your workspace names as a sorted string column (the programmatic who)", "core", "let a = 1; names(\"vars\")           % [\"a\"]" },
     { "input", "input(\"prompt\")", "read one line from the keyboard as a string (window.prompt in the browser)", "io", "let name = input(\"who? \")          % interactive" },
@@ -186,3 +186,4 @@
     { "day", "day(d)", "day of month of a date or date column", "core", "day(date(\"2024-03-15\"))           %= 15" },
     { "quarter", "quarter(d)", "calendar quarter (1-4) of a date or date column", "core", "quarter(date(\"2024-07-01\"))           %= 3" },
     { "weekday", "weekday(d)", "day of week, Monday = 1 .. Sunday = 7", "core", "weekday(date(\"2024-03-15\"))           %= 5" },
+    { "packeur", "packeur", "interactive package picker: a checklist of the .cz packages beside the session (arrows/jk move, space toggles, Enter applies, q cancels); headless stdin drives it in scripts", "core", "1           %= 1" },

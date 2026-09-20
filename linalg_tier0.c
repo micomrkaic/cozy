@@ -365,28 +365,86 @@ static int t0_chol(const Cplx *A, uint32_t N, Cplx *L)
 
 /* ---- the table ---------------------------------------------------------- */
 
-static int t0_solve_d(double *A, double *B, uint32_t n, uint32_t m)
+/* Real twins of t0_solve/t0_det (ported from Neutrino v2.30.x): the same
+ * partial-pivot elimination in plain doubles with restrict row pointers.
+ * Pivoting via fabs == hypot(x, 0) and real division == Smith's c_div on
+ * zero-imag inputs, so results are BIT-IDENTICAL to the old promotion
+ * shims — no golden recaptures. Upstream measured 2.0x on 1000x1000
+ * (bandwidth-bound); the win belongs to tier0 native and, above all,
+ * to the browser build, which has no other backend. */
+static int t0_solve_d(double *LU, double *X, uint32_t n, uint32_t m)
 {
-    Cplx *a = malloc((size_t)n * n * sizeof *a);
-    Cplx *b = malloc((size_t)n * m * sizeof *b);
-    if ((!a && n) || (!b && n && m)) abort();
-    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
-    for (size_t k = 0; k < (size_t)n * m; k++) b[k] = (Cplx){ B[k], 0 };
-    int rc = t0_solve(a, b, n, m);
-    if (rc == 0) for (size_t k = 0; k < (size_t)n * m; k++) B[k] = b[k].re;
-    free(a); free(b);
-    return rc;
+    for (uint32_t k = 0; k < n; k++) {
+        uint32_t piv = k;
+        double best = fabs(LU[(size_t)k*n+k]);
+        for (uint32_t i = k+1; i < n; i++) {
+            double mag = fabs(LU[(size_t)i*n+k]);
+            if (mag > best) { best = mag; piv = i; }
+        }
+        if (best == 0.0) return 1;                            /* singular */
+        if (piv != k) {
+            for (uint32_t j = 0; j < n; j++) { double t = LU[(size_t)k*n+j]; LU[(size_t)k*n+j] = LU[(size_t)piv*n+j]; LU[(size_t)piv*n+j] = t; }
+            for (uint32_t j = 0; j < m; j++) { double t = X[(size_t)k*m+j];  X[(size_t)k*m+j]  = X[(size_t)piv*m+j];  X[(size_t)piv*m+j]  = t; }
+        }
+        double akk = LU[(size_t)k*n+k];
+        for (uint32_t i = k+1; i < n; i++) {
+            double f = LU[(size_t)i*n+k] / akk;
+            double *restrict ri = &LU[(size_t)i*n];
+            const double *restrict rk = &LU[(size_t)k*n];
+            for (uint32_t j = k; j < n; j++) ri[j] -= f * rk[j];
+            double *restrict xi = &X[(size_t)i*m];
+            const double *restrict xk = &X[(size_t)k*m];
+            for (uint32_t j = 0; j < m; j++) xi[j] -= f * xk[j];
+        }
+    }
+    for (uint32_t c = 0; c < m; c++)
+        for (int64_t ii = (int64_t)n - 1; ii >= 0; ii--) {
+            uint32_t i = (uint32_t)ii;
+            double s = X[(size_t)i*m+c];
+            for (uint32_t j = i+1; j < n; j++) s -= LU[(size_t)i*n+j] * X[(size_t)j*m+c];
+            X[(size_t)i*m+c] = s / LU[(size_t)i*n+i];
+        }
+    return 0;
 }
-static int t0_det_d(double *A, uint32_t n, double *out)
+static int t0_det_d(double *M, uint32_t n, double *out)
 {
-    Cplx *a = malloc((size_t)n * n * sizeof *a);
-    if (!a && n) abort();
-    for (size_t k = 0; k < (size_t)n * n; k++) a[k] = (Cplx){ A[k], 0 };
-    Cplx d;
-    int rc = t0_det(a, n, &d);
-    free(a);
-    *out = d.re;
-    return rc;
+    double det = 1.0;
+    int sign = 1;
+    for (uint32_t k = 0; k < n; k++) {
+        uint32_t p = k; double best = fabs(M[(size_t)k*n+k]);
+        for (uint32_t i = k+1; i < n; i++) {
+            double mg = fabs(M[(size_t)i*n+k]);
+            if (mg > best) { best = mg; p = i; }
+        }
+        if (best == 0.0) { *out = 0.0; return 0; }
+        if (p != k) { for (uint32_t j = 0; j < n; j++) { double t = M[(size_t)k*n+j]; M[(size_t)k*n+j] = M[(size_t)p*n+j]; M[(size_t)p*n+j] = t; } sign = -sign; }
+        det *= M[(size_t)k*n+k];
+        for (uint32_t i = k+1; i < n; i++) {
+            double f = M[(size_t)i*n+k] / M[(size_t)k*n+k];
+            double *restrict ri = &M[(size_t)i*n];
+            const double *restrict rk = &M[(size_t)k*n];
+            for (uint32_t j = k+1; j < n; j++) ri[j] -= f * rk[j];
+        }
+    }
+    *out = sign < 0 ? -det : det;
+    return 0;
+}
+/* Flat float matmul (Neutrino v2.31.0's 68x kernel): i-k-j order so the
+ * inner loop streams C[i,:] += a_ik * B[k,:]; memset-zero C first.
+ * 0.0 + p == p, so results match the boxed generic loop exactly. */
+static int t0_gemm_d(const double *A, const double *B, double *C,
+                     uint32_t m, uint32_t k, uint32_t n)
+{
+    memset(C, 0, (size_t)m * n * sizeof *C);
+    for (uint32_t i = 0; i < m; i++) {
+        double *restrict ci = &C[(size_t)i*n];
+        for (uint32_t p = 0; p < k; p++) {
+            double a = A[(size_t)i*k+p];
+            const double *restrict bp = &B[(size_t)p*n];
+            for (uint32_t j = 0; j < n; j++) ci[j] += a * bp[j];
+        }
+    }
+    return 0;
 }
 
 static int t0_eig_sym_d(double *A, uint32_t n, double *w, double *V)
@@ -435,6 +493,7 @@ static const LinalgKernels tier0 = {
     .solve    = t0_solve,
     .solve_d  = t0_solve_d,
     .det_d    = t0_det_d,
+    .gemm_d   = t0_gemm_d,
     .eig_sym_d = t0_eig_sym_d,
     .svd_d    = t0_svd_d,
     .chol_d   = t0_chol_d,

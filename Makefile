@@ -148,6 +148,7 @@ test: vmtest $(BIN)
 	@timeout 30 python3 tests/run_completion.py || true
 	@bash tests/run_svg.sh
 	@bash tests/run_demo.sh
+	@sh tests/run_packeur.sh ./vmtest 2>/dev/null || sh tests/run_packeur.sh ./cozy
 	@bash tests/run_io.sh
 	@python3 tests/run_doclint.py
 	@python3 tools/check_release.py

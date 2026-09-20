@@ -182,6 +182,7 @@
     "num"
     "numel"
     "ones"
+    "packeur"
     "pause"
     "phi"
     "pi"

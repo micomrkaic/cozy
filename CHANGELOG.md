@@ -1,5 +1,68 @@
 # Cozy changelog
 
+## 0.1.16 — packeur, and the heritage refresh (Neutrino 2.33.0 harvest)
+
+### Added
+- **packeur, the package picker**: a zero-argument TUI (autocalls
+  bare) listing the .cz packages beside the session — arrows and j/k
+  move, space toggles, Enter applies, q/ESC cancels. Checkboxes
+  reflect live shelves; applying loads the newly checked through
+  bi_load and clears the newly unchecked through lg_clear_shelf,
+  factored out of clear("name") so both share one mechanism (the
+  upstream cross-cut). Raw termios + ANSI reverse video, no ncurses.
+  Headless (piped stdin): drawing is skipped, keys ride the same
+  stdin, EOF cancels — tests/run_packeur.sh drives four key
+  scenarios in make test (printf uses octal \033; dash does not know
+  \x1b), and golden 68 pins EOF-cancel. wasm declines with a pointer
+  to load() and the Packages tab.
+- **Heritage refresh**: LESSONS gains the overflow-era law ("when two
+  evaluation paths of the same expression disagree, one is
+  confessing") and the PLAYBOOK gains the heritage-refresh rule
+  itself — case law transfers with the code at every sync.
+- This completes the Neutrino 2.29-2.33 reconciliation list: items
+  1-8 all implemented or verified equivalent.
+
+## 0.1.15 — load finds its packages (Neutrino 2.32.x harvest)
+
+### Added
+- **The load search path**: load("dist") now resolves bare names
+  through packages/NAME, packages/NAME.cz, NAME.cz in the CWD, each
+  colon-dir in $COZY_PATH (Cozy's own variable — no NEUTRINO_PATH
+  transition, there is no installed base), and beside the running
+  binary (readlink /proc/self/exe on Linux, _NSGetExecutablePath on
+  macOS, empty in wasm). Names already ending .cz — exactly what
+  ls("packages") hands out — are never double-suffixed, so
+  ls("packages") ~> load works. A miss names every place searched.
+- **ls exe-relative fallback**: a bare directory name that fails to
+  open retries beside the binary, so ls("packages") works from
+  anywhere a symlinked cozy does.
+- **Tidy shelf labels**: who shows packages/dist.cz, not the absolute
+  exe-dir path, from a symlinked session.
+- Conformance edit, recorded: 32_load's miss pin becomes "cannot
+  find" (the richer error), per the upstream note. New goldens in
+  67_load_path.test; the manual gains "Where load looks"; the wasm
+  teach lines say load("dist").
+
+## 0.1.14 — tier0 learns the real fast paths (Neutrino 2.30-2.31 harvest)
+
+### Changed
+- **tier0 solve, det, and float matmul run flat real kernels** (ported
+  from Neutrino v2.30.0/v2.30.1/v2.31.0): plain-double partial-pivot
+  elimination with restrict row pointers replaces the promote-to-Cplx
+  shims, and Float x Float matmul gets the i-k-j streaming kernel
+  (C[i,:] += a_ik * B[k,:]) instead of boxing every multiply-add
+  through scalar dispatch. Measured here: A*B at n=600 from the boxed
+  loop's seconds to 0.10 s; solve at n=1000 to 0.04 s. Pivoting by
+  fabs (== hypot(x,0)) and real division (== Smith's c_div on
+  zero-imag) make results BIT-IDENTICAL — zero golden recaptures, per
+  the upstream claim, now verified against 1138 goldens.
+- **The chief beneficiary is the browser**: native builds already had
+  these speeds through the LAPACK seam; the wasm build is tier0 by
+  construction and inherits the kernels wholesale — the tab where
+  quick calculations actually happen gets the 2.30-2.31 era for free.
+- Parity goldens from upstream's promotion suite added (prod(1:20)
+  and 2^62 stay exact Int; prod(1:25) promotes to 1.55112e+25).
+
 ## 0.1.13 — the repo stops carrying machine code
 
 ### Fixed

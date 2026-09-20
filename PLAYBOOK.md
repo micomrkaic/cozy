@@ -363,3 +363,19 @@ in the build log. Laws: build artifacts never enter the repo
 evicts previously-committed artifacts with git rm --cached); and when
 a link fails strangely, first read the build log for the object that
 was never compiled. Remedy on any poisoned clone: make clean.
+
+### Recipe drift: Ubuntu 24's time64 renames
+
+The emscripten recipe's clang-15 runtime libs now carry t64 suffixes:
+libclang-cpp15t64 and libllvm15t64 (bare libclang-cpp15/libllvm15 have
+no candidate). Symptom: clang-15 dies loading libclang-cpp.so.15 or
+libLLVM-15.so.1 after a fresh container restore. Download the t64
+names, force-dpkg, ldconfig.
+
+### The heritage refresh rule
+
+When Neutrino's PLAYBOOK/LESSONS gain entries, the next Cozy cut
+carries them over — the two-paths-confession law and the rite-halt
+law arrived with the 2.29-2.33 harvest (0.1.14-0.1.16). Heritage
+files are part of the sync list, not an afterthought: the case law is
+transferred knowledge exactly like the code.

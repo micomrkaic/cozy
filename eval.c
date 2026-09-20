@@ -18,6 +18,11 @@
 #include "chunk.h"
 #include "linalg.h"
 #include "sparse.h"
+#include <unistd.h>                 /* readlink, access — load_resolve */
+#include <termios.h>                /* packeur's raw mode */
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>            /* _NSGetExecutablePath — exe_dir */
+#endif
 
 /* ------------------------------------------------------------------ */
 /* errors                                                              */
@@ -2704,18 +2709,108 @@ static size_t lg_live(Interp *I, const LoadGroup *g)   /* members still bound */
     return live;
 }
 
+/* ---- load search path (ported from Neutrino v2.32.0-v2.32.2) ----------
+ * exe_dir(): directory of the running binary, cached; empty in wasm. */
+static const char *exe_dir(void)
+{
+    static char dir[1024];
+    static bool cached = false;
+    if (cached) return dir;
+    cached = true;
+    dir[0] = '\0';
+#if defined(__EMSCRIPTEN__)
+    /* no meaningful exe path in the browser */
+#elif defined(__APPLE__)
+    char tmp[1024]; uint32_t sz = sizeof tmp;
+    if (_NSGetExecutablePath(tmp, &sz) == 0) {
+        char real[1024];
+        if (realpath(tmp, real)) {
+            char *slash = strrchr(real, '/');
+            if (slash) { *slash = '\0'; snprintf(dir, sizeof dir, "%s", real); }
+        }
+    }
+#else
+    char tmp[1024];
+    ssize_t got2 = readlink("/proc/self/exe", tmp, sizeof tmp - 1);
+    if (got2 > 0) {
+        tmp[got2] = '\0';
+        char *slash = strrchr(tmp, '/');
+        if (slash) { *slash = '\0'; snprintf(dir, sizeof dir, "%s", tmp); }
+    }
+#endif
+    return dir;
+}
+
+/* Resolve a load name. Order: (a) the literal path as given; (b) bare
+ * names (no '/'): packages/NAME, then packages/NAME.cz, then NAME.cz in
+ * the CWD — a name already ending .cz (exactly what ls hands out) is
+ * tried as-is and never double-suffixed; (c) each colon-dir D in
+ * $COZY_PATH: D/NAME, D/NAME.cz; (d) beside the binary: E/given and
+ * E/packages/NAME(.cz). On a miss the error names every place searched. */
+#define LR_TRY(...) do { \
+    snprintf(cand, sizeof cand, __VA_ARGS__); \
+    if (tries < 16) snprintf(tried[tries++], 1024, "%.1000s", cand); \
+    if (access(cand, R_OK) == 0) { snprintf(out, outsz, "%s", cand); return true; } \
+} while (0)
+static bool load_resolve(const char *given, char *out, size_t outsz,
+                         char tried[][1024], int *ntried)
+{
+    char cand[1200];
+    int tries = 0;
+    bool bare = strchr(given, '/') == NULL;
+    size_t gl = strlen(given);
+    bool has_cz = gl > 3 && !strcmp(given + gl - 3, ".cz");
+    LR_TRY("%s", given);
+    if (bare) {
+        LR_TRY("packages/%s", given);
+        if (!has_cz) {
+            LR_TRY("packages/%s.cz", given);
+            LR_TRY("%s.cz", given);
+        }
+        const char *pathenv = getenv("COZY_PATH");
+        if (pathenv && *pathenv) {
+            char buf[2048];
+            snprintf(buf, sizeof buf, "%s", pathenv);
+            for (char *tok = strtok(buf, ":"); tok; tok = strtok(NULL, ":")) {
+                LR_TRY("%s/%s", tok, given);
+                if (!has_cz) LR_TRY("%s/%s.cz", tok, given);
+            }
+        }
+    }
+    const char *ed = exe_dir();
+    if (ed[0]) {
+        LR_TRY("%s/%s", ed, given);
+        if (bare) {
+            LR_TRY("%s/packages/%s", ed, given);
+            if (!has_cz) LR_TRY("%s/packages/%s.cz", ed, given);
+        }
+    }
+    *ntried = tries;
+    return false;
+}
+#undef LR_TRY
+
 static Value bi_load(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
     if (args[0].kind != VAL_STRING)
         runtime_error(I, "load: expected a file name string, e.g. load(\"stats.cz\")");
     StrObj *ps = as_str(args[0]);
-    char path[1024];
-    if (ps->len >= sizeof path) runtime_error(I, "load: file name too long");
-    memcpy(path, ps->data, ps->len); path[ps->len] = '\0';
+    char given[1024], path[1200];
+    if (ps->len >= sizeof given) runtime_error(I, "load: file name too long");
+    memcpy(given, ps->data, ps->len); given[ps->len] = '\0';
 
     if (g_load_depth >= 16)
         runtime_error(I, "load: nesting too deep (circular load?)");
+
+    char tried[16][1024]; int ntried = 0;
+    if (!load_resolve(given, path, sizeof path, tried, &ntried)) {
+        char places[4200]; size_t off = 0;
+        for (int k = 0; k < ntried && off + 2 < sizeof places; k++)
+            off += (size_t)snprintf(places + off, sizeof places - off,
+                                    "%s%s", k ? ", " : "", tried[k]);
+        runtime_error(I, "load: cannot find '%s' — searched: %s", given, places);
+    }
 
     FILE *f = fopen(path, "rb");
     if (!f) runtime_error(I, "load: cannot open '%s'", path);
@@ -2789,7 +2884,12 @@ static Value bi_load(Interp *I, Value *args, uint32_t n)
                 ng.lens[ng.n] = ge->namelens[i]; ng.n++;
             }
             if (ng.n) {
-                ng.path = strdup(path);
+                const char *lbl = path;               /* v2.32.2: tidy labels */
+                const char *ed2 = exe_dir();
+                size_t edl = strlen(ed2);
+                if (edl && !strncmp(path, ed2, edl) && path[edl] == '/')
+                    lbl = path + edl + 1;
+                ng.path = strdup(lbl);
                 const char *slash = strrchr(path, '/');
                 const char *base = slash ? slash + 1 : path;
                 size_t bl = strlen(base);
@@ -4241,6 +4341,11 @@ static Value bi_ls(Interp *I, Value *args, uint32_t n)
         if (rc == 0) globfree(&g);
     } else {
         DIR *d = opendir(arg);
+        if (!d && !strchr(arg, '/') && exe_dir()[0]) {   /* v2.32.1 fallback */
+            char alt[1200];
+            snprintf(alt, sizeof alt, "%.600s/%.500s", exe_dir(), arg);
+            d = opendir(alt);
+        }
         if (!d) runtime_error(I, "ls: %s: %s", arg, strerror(errno));
         struct dirent *e;
         while ((e = readdir(d))) {
@@ -4569,6 +4674,139 @@ static Value bi_keep(Interp *I, Value *args, uint32_t n)
     return val_null();
 }
 
+/* clear a shelf: remove every live member, then the shelf itself.
+ * Factored from bi_clear (Neutrino v2.33.0) so packeur shares it. */
+static void lg_clear_shelf(Interp *I, int gi)
+{
+    EnvObj *g = I->globals;
+    for (size_t m = 0; m < g_lg[gi].n; m++)
+        for (uint32_t i = g->n_protected; i < g->count; i++)
+            if (g->namelens[i] == g_lg[gi].lens[m] &&
+                !memcmp(g->names[i], g_lg[gi].names[m], g_lg[gi].lens[m])) {
+                value_release(g->vals[i]); free((char *)g->names[i]);
+                g->names[i]    = g->names[g->count - 1];
+                g->namelens[i] = g->namelens[g->count - 1];
+                g->vals[i]     = g->vals[g->count - 1];
+                g->count--;
+                break;
+            }
+    lg_free(&g_lg[gi]);
+    memmove(&g_lg[gi], &g_lg[gi + 1], (g_nlg - gi - 1) * sizeof g_lg[0]);
+    g_nlg--;
+}
+
+/* ---- packeur, the package picker (Neutrino v2.33.0) --------------------
+ * TUI over the *.cz files beside the session: arrows/jk move, space
+ * toggles, Enter applies (load newly checked, lg_clear_shelf newly
+ * unchecked), q/ESC cancels. Raw termios + ANSI reverse video; no
+ * ncurses. Headless (stdin or stdout not a tty): drawing skipped, keys
+ * ride stdin (the pause precedent), EOF cancels. wasm declines. */
+#ifndef __EMSCRIPTEN__
+typedef struct { char name[256]; bool was; bool now; } PkRow;
+
+static int pk_cmp(const void *a, const void *b)
+{ return strcmp(((const PkRow *)a)->name, ((const PkRow *)b)->name); }
+
+static Value bi_packeur(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    char dirbuf[1200];
+    const char *dir = "packages";
+    DIR *d = opendir(dir);
+    if (!d && exe_dir()[0]) {
+        snprintf(dirbuf, sizeof dirbuf, "%.600s/packages", exe_dir());
+        dir = dirbuf;
+        d = opendir(dir);
+    }
+    if (!d) runtime_error(I, "packeur: no packages directory found");
+    PkRow rows[128]; int nrows = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) && nrows < 128) {
+        size_t l = strlen(e->d_name);
+        if (l > 3 && !strcmp(e->d_name + l - 3, ".cz")) {
+            snprintf(rows[nrows].name, sizeof rows[nrows].name, "%.250s", e->d_name);
+            rows[nrows].was = rows[nrows].now = false;
+            nrows++;
+        }
+    }
+    closedir(d);
+    if (!nrows) runtime_error(I, "packeur: no .cz packages in %s", dir);
+    qsort(rows, (size_t)nrows, sizeof rows[0], pk_cmp);
+    for (int i = 0; i < nrows; i++) {                 /* checkbox = live shelf */
+        char lbl[300];
+        snprintf(lbl, sizeof lbl, "packages/%.250s", rows[i].name);
+        int gi = lg_find(lbl, (uint32_t)strlen(lbl));
+        if (gi < 0) gi = lg_find(rows[i].name, (uint32_t)strlen(rows[i].name));
+        rows[i].was = rows[i].now = gi >= 0 && lg_live(I, &g_lg[gi]) > 0;
+    }
+
+    bool tty = isatty(0) && isatty(1);
+    struct termios oldt;
+    if (tty) {
+        tcgetattr(0, &oldt);
+        struct termios raw = oldt;
+        raw.c_lflag &= (tcflag_t)~(ICANON | ECHO);
+        tcsetattr(0, TCSANOW, &raw);
+    }
+    int cur = 0; bool apply = false, done = false;
+    while (!done) {
+        if (tty) {
+            printf("\033[2J\033[H  packeur — space toggles, Enter applies, q cancels\r\n\r\n");
+            for (int i = 0; i < nrows; i++)
+                printf("  %s[%c] %s%s\r\n", i == cur ? "\033[7m" : "",
+                       rows[i].now ? 'x' : ' ', rows[i].name,
+                       i == cur ? "\033[0m" : "");
+            fflush(stdout);
+        }
+        int c = getchar();
+        if (c == EOF || c == 'q' || c == 27) {
+            if (c == 27 && tty) {                     /* arrow keys: ESC [ A/B */
+                int c2 = getchar();
+                if (c2 == '[') {
+                    int c3 = getchar();
+                    if (c3 == 'A') { if (cur > 0) cur--; continue; }
+                    if (c3 == 'B') { if (cur < nrows - 1) cur++; continue; }
+                }
+            }
+            done = true;                              /* bare ESC / q / EOF */
+        }
+        else if (c == 'j') { if (cur < nrows - 1) cur++; }
+        else if (c == 'k') { if (cur > 0) cur--; }
+        else if (c == ' ') rows[cur].now = !rows[cur].now;
+        else if (c == '\n' || c == '\r') { apply = true; done = true; }
+    }
+    if (tty) { tcsetattr(0, TCSANOW, &oldt); printf("\033[2J\033[H"); fflush(stdout); }
+
+    int loaded = 0, cleared = 0;
+    if (apply) {
+        for (int i = 0; i < nrows; i++) {
+            if (rows[i].now && !rows[i].was) {
+                Value nm = val_string(rows[i].name, (uint32_t)strlen(rows[i].name));
+                bi_load(I, &nm, 1);                   /* callable internally */
+                value_release(nm);
+                loaded++;
+            } else if (!rows[i].now && rows[i].was) {
+                char lbl[300];
+                snprintf(lbl, sizeof lbl, "packages/%.250s", rows[i].name);
+                int gi = lg_find(lbl, (uint32_t)strlen(lbl));
+                if (gi < 0) gi = lg_find(rows[i].name, (uint32_t)strlen(rows[i].name));
+                if (gi >= 0) { lg_clear_shelf(I, gi); cleared++; }
+            }
+        }
+        printf("packeur: loaded %d; cleared %d\n", loaded, cleared);
+    } else
+        printf(apply || loaded || cleared ? "packeur: no changes\n" : "packeur: cancelled\n");
+    return val_null();
+}
+#else
+static Value bi_packeur(Interp *I, Value *args, uint32_t n)
+{
+    (void)args; (void)n;
+    runtime_error(I, "packeur: not available in the browser — use load(\"name\") "
+                     "or the Packages tab");
+}
+#endif
+
 static Value bi_clear(Interp *I, Value *args, uint32_t n)
 {
     EnvObj *g = I->globals;
@@ -4602,21 +4840,7 @@ static Value bi_clear(Interp *I, Value *args, uint32_t n)
             if (gi < 0)
                 runtime_error(I, "clear: no such variable or loaded package '%.*s'",
                               (int)s->len, s->data);
-            /* clear a shelf: remove every live member, then the shelf itself */
-            for (size_t m = 0; m < g_lg[gi].n; m++)
-                for (uint32_t i = g->n_protected; i < g->count; i++)
-                    if (g->namelens[i] == g_lg[gi].lens[m] &&
-                        !memcmp(g->names[i], g_lg[gi].names[m], g_lg[gi].lens[m])) {
-                        value_release(g->vals[i]); free((char *)g->names[i]);
-                        g->names[i]    = g->names[g->count - 1];
-                        g->namelens[i] = g->namelens[g->count - 1];
-                        g->vals[i]     = g->vals[g->count - 1];
-                        g->count--;
-                        break;
-                    }
-            lg_free(&g_lg[gi]);
-            memmove(&g_lg[gi], &g_lg[gi + 1], (g_nlg - gi - 1) * sizeof g_lg[0]);
-            g_nlg--;
+            lg_clear_shelf(I, gi);
         }
     }
     return val_null();
@@ -7061,6 +7285,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "quarter",    bi_quarter,    1, 1);
     def_builtin(e, "weekday",    bi_weekday,    1, 1);
     def_builtin(e, "dropmissing", bi_dropmissing, 1, 1);
+    def_builtin(e, "packeur",    bi_packeur,    0, 0);
     def_builtin(e, "buildinfo", bi_buildinfo, 0, 0);
     def_builtin(e, "now",   bi_now,   0, 0);
     def_builtin(e, "help",  bi_help,  0, 1);

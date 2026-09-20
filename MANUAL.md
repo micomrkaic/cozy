@@ -940,6 +940,17 @@ a header regardless of its content. A column containing text (country names,
 tickers) is rejected with an error naming the column: representing it needs
 first-class strings, which the language does not yet have.
 
+### Where load looks
+
+A bare name — `load("dist")` — searches, in order: the literal path,
+`packages/NAME` and `packages/NAME.cz`, `NAME.cz` in the current
+directory, each colon-separated directory in `$COZY_PATH`, and finally
+beside the running binary (so a symlinked `cozy` finds its own
+packages from anywhere). Names already ending `.cz` — exactly what
+`ls("packages")` hands out — are never double-suffixed, and a miss
+names every place searched. `ls` with a bare directory name falls back
+beside the binary the same way.
+
 ## 15. Output and formatting
 
 Number display has one rule worth internalizing: **`format(n)` sets
@@ -1219,7 +1230,7 @@ cozy> clear("scatter"); who
 | `numel(x)` | number of elements (rows*cols) |
 | `save("file.cz")` | write all variables and functions as reloadable source (restore with load) |
 | `body(f)` | print the source of a user-defined function |
-| `load("file.cz")` | run a file in the current session; its let-bindings persist (a record of closures makes a module) |
+| `load("name" \| "file.cz")` | run a file in the current session; bare names search packages/, $COZY_PATH, and beside the binary (a miss names every place tried); let-bindings persist |
 | `eval("code")` | run a string as Cozy code in this session; returns the last value |
 | `names() \| names("vars"\|"funcs")` | your workspace names as a sorted string column (the programmatic who) |
 | `clear() \| clear("a", ...)` | remove all user variables, or the named ones; clearing a shadow restores the standard-library original |
@@ -1236,6 +1247,7 @@ cozy> clear("scatter"); who
 | `day(d)` | day of month of a date or date column |
 | `quarter(d)` | calendar quarter (1-4) of a date or date column |
 | `weekday(d)` | day of week, Monday = 1 .. Sunday = 7 |
+| `packeur` | interactive package picker: a checklist of the .cz packages beside the session (arrows/jk move, space toggles, Enter applies, q cancels); headless stdin drives it in scripts |
 
 ### Strings
 

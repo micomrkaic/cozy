@@ -43,3 +43,9 @@ inv([0, 0; 0, 0])
 # 5. Deep recursion is bounded cleanly; heap frames allow honest depth
 let g = fn n -> if n == 0 then 0 else g(n - 1) end; g(100000)
 => 0
+prod(1:20)
+=> 2432902008176640000
+2^62
+=> 4611686018427387904
+prod(1:25)
+=> 1.55112e+25
