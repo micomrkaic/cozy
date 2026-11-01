@@ -185,6 +185,29 @@ ast:    $(BIN); ./$(BIN) --ast
 tokens: $(BIN); ./$(BIN) --tokens
 clean:; rm -rf $(BIN) vmtest vmtest-asan build
 
+# ---- install / uninstall (owner's ruling: ~/.local by default) ----------
+# Installs the CLI, the workbench launcher (the GUI: cozy-workbench
+# serves the browser UI and opens it), every runtime asset (packages,
+# sample data, the docs bundle the workbench serves), and the man page.
+# The binary finds installed assets through exe_dir()/../share/cozy —
+# and a dev tree always wins, because exe-beside paths are tried first.
+PREFIX ?= $(HOME)/.local
+install: $(BIN)
+	install -d $(PREFIX)/bin $(PREFIX)/share/cozy $(PREFIX)/share/man/man1
+	install -m 755 $(BIN) $(PREFIX)/bin/cozy
+	install -m 755 tools/cozy-workbench $(PREFIX)/bin/cozy-workbench
+	rm -rf $(PREFIX)/share/cozy/packages $(PREFIX)/share/cozy/data $(PREFIX)/share/cozy/docs
+	cp -r packages data docs $(PREFIX)/share/cozy/
+	install -m 644 doc/cozy.1 $(PREFIX)/share/man/man1/cozy.1
+	@echo "installed: $(PREFIX)/bin/cozy, cozy-workbench, share/cozy/{packages,data,docs}, man1/cozy.1"
+	@echo "note: ensure $(PREFIX)/bin is on PATH and $(PREFIX)/share/man on MANPATH (usually automatic)"
+
+uninstall:
+	rm -f  $(PREFIX)/bin/cozy $(PREFIX)/bin/cozy-workbench
+	rm -rf $(PREFIX)/share/cozy
+	rm -f  $(PREFIX)/share/man/man1/cozy.1
+	@echo "uninstalled from $(PREFIX)"
+
 # WebAssembly browser build: compiles the interpreter to a single self-contained
 # docs/cozy.js (the .wasm is embedded as base64 via SINGLE_FILE, so there is
 # no separate file to fetch and GitHub Pages needs no configuration). Requires
@@ -203,10 +226,10 @@ WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Cozy -sALLOW_MEMORY_GROWTH=1 \
               -sEXPORTED_FUNCTIONS=_cozy_init,_cozy_eval,_cozy_version,_malloc,_free \
               -sEXPORTED_RUNTIME_METHODS=cwrap,ccall,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS
 wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
-	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_FLAGS) \
+	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_FLAGS) $(WASM_OPTIM_FLAGS) \
 	  --embed-file packages --embed-file data --embed-file MANUAL.md --embed-file PACKAGES.md --embed-file BOOK.md \
 	  --embed-file CHANGELOG.md --embed-file LESSONS.md --embed-file DESIGN_NOTES.md \
-	  $(WASM_SRCS) -o docs/cozy.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
+	  $(WASM_SRCS) $(WASM_OPTIM_SRCS) -o docs/cozy.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
 	@echo "built docs/cozy.js ($$(wc -c < docs/cozy.js) bytes) — commit and push to update GitHub Pages"
 
 # wasm-ubuntu: the whole recipe for a stock Ubuntu 24 container (see
@@ -222,4 +245,44 @@ wasm-ubuntu:
 stress: $(BIN) vmtest-asan
 	bash stress/run.sh
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu manual pdfs stress
+# The wasm rite: compile vmtest itself to wasm for node (NODERAWFS reads the
+# repo's files; SINGLE_FILE sidesteps emscripten-3.1's fetch() path under
+# modern node) and run the whole golden suite through it. Native-only
+# goldens (first line "# native-only") are skipped. Browser behavior is now
+# conformance-tested, not assumed.
+# NLopt in the browser (audit item 7, half one): the vendored C subset in
+# third_party/nlopt compiles into both the web bundle and the wasm vmtest,
+# so buildinfo().optim says "nlopt" in the tab and the optim package
+# dispatches to SLSQP there too. WASM_OPTIM=none keeps the pure path.
+WASM_OPTIM ?= nlopt
+NLOPT_DIR   = third_party/nlopt
+NLOPT_ALGS  = $(wildcard $(NLOPT_DIR)/algs/*/*.c)
+NLOPT_API   = $(NLOPT_DIR)/api/general.c $(NLOPT_DIR)/api/optimize.c $(NLOPT_DIR)/api/options.c $(NLOPT_DIR)/api/deprecated.c
+NLOPT_UTIL  = $(NLOPT_DIR)/util/mt19937ar.c $(NLOPT_DIR)/util/qsort_r.c $(NLOPT_DIR)/util/redblack.c \
+              $(NLOPT_DIR)/util/rescale.c $(NLOPT_DIR)/util/sobolseq.c $(NLOPT_DIR)/util/stop.c $(NLOPT_DIR)/util/timer.c
+NLOPT_INCS  = -I$(NLOPT_DIR) -I$(NLOPT_DIR)/api -I$(NLOPT_DIR)/util $(patsubst %/,-I%,$(dir $(NLOPT_ALGS)))
+ifeq ($(WASM_OPTIM),nlopt)
+  WASM_OPTIM_FLAGS = -DCOZY_NLOPT -DNLOPT_LUKSAN $(NLOPT_INCS) -Wno-unused-but-set-variable
+  WASM_OPTIM_SRCS  = $(NLOPT_ALGS) $(NLOPT_API) $(NLOPT_UTIL)
+else
+  WASM_OPTIM_FLAGS =
+  WASM_OPTIM_SRCS  =
+endif
+WASM_TEST_SRCS = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c sparse.c linalg_tier0.c wasm_test_stub.c vmtest.c
+build/vmtest-wasm.js: $(WASM_TEST_SRCS) $(HDRS) version.h
+	@mkdir -p build
+	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_OPTIM_FLAGS) -sSUPPORT_LONGJMP=1 -sALLOW_MEMORY_GROWTH=1 \
+	  -sENVIRONMENT=node -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sSINGLE_FILE=1 \
+	  $(WASM_TEST_SRCS) $(WASM_OPTIM_SRCS) -o $@
+test-wasm: build/vmtest-wasm.js
+	@printf '#!/bin/sh\nexec node "$$(dirname "$$0")/vmtest-wasm.js" "$$@"\n' > build/vmtest-wasm && chmod +x build/vmtest-wasm
+	@VMTEST=./build/vmtest-wasm VMTEST_WASM=1 bash tests/run.sh
+test-wasm-ubuntu:
+	NODE_PATH=/usr/share/nodejs $(MAKE) test-wasm EMCC_C23='-Dnullptr=NULL -Dalignof=_Alignof -Dtypeof=__typeof__ -Dstatic_assert=_Static_assert'
+
+# wasm via the pinned toolchain image (tools/wasm.Dockerfile) — immune to
+# distro drift; build the image once: docker build -t cozy-wasm -f tools/wasm.Dockerfile .
+wasm-docker:
+	docker run --rm -u "$$(id -u)" -v "$$PWD":/src -w /src cozy-wasm make wasm-ubuntu
+
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu wasm-docker test-wasm test-wasm-ubuntu manual pdfs stress install uninstall

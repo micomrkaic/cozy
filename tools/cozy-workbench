@@ -1,0 +1,12 @@
+#!/bin/sh
+# cozy-workbench — serve the Cozy browser workbench and open it.
+# Usage: cozy-workbench [port]   (default 8765)
+PORT="${1:-8765}"
+URL="http://localhost:$PORT"
+BIN="$(dirname "$0")/cozy"
+[ -x "$BIN" ] || BIN=cozy
+( sleep 0.7
+  xdg-open "$URL" >/dev/null 2>&1 || open "$URL" >/dev/null 2>&1 || \
+    echo "workbench: open $URL in your browser"
+) &
+exec "$BIN" --workbench "$PORT"

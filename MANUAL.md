@@ -1087,7 +1087,9 @@ constraint Jacobians supplied EXACTLY by Cozy's dual numbers rather than
 finite differences. `minimize_con` and `maximize_con` in the optim
 package dispatch to SLSQP automatically when `buildinfo().optim` says
 `"nlopt"`; without the backend they run the pure augmented-Lagrangian
-path, which is also what the browser build ships. `minimize_newton`
+path. The browser build carries NLopt too — a vendored C subset
+compiled into the bundle — so the tab optimizes with the same
+algorithms as the desktop. `minimize_newton`
 never dispatches: exact hyper-dual Newton is native Cozy either way.
 
 The optimizers also have a binder surface, the index-bound notation

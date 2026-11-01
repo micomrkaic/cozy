@@ -8,6 +8,7 @@
 #define COZY_EVAL_H
 
 #include <setjmp.h>
+#include <stdio.h>
 #include "value.h"
 #include "ast.h"
 
@@ -29,6 +30,8 @@ typedef struct Interp {
 void    interp_init(Interp *I);
 /* append "    in <name> (line N)" frames of the running VM chain to buf (vm.c) */
 void    vm_backtrace(Interp *I, char *buf, size_t cap);
+const char *exe_dir(void);                 /* dir of the running binary ("" in wasm) */
+FILE   *fopen_asset(const char *path);     /* read-only open: cwd, exe dir, installed share */
 EnvObj *globals_new(void);                 /* env preloaded with builtins (+1 ref) */
 
 Value eval_map_builtin(void);

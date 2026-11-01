@@ -81,6 +81,17 @@ int main(int argc, char **argv)
             int port = (i + 1 < argc) ? atoi(argv[i + 1]) : 8765;
             return cozy_workbench(port > 0 ? port : 8765);
         }
+        else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("usage: cozy [options] [file.cz ...]\n"
+                   "  (no arguments)      interactive REPL\n"
+                   "  file.cz             run a script (several run in order)\n"
+                   "  --workbench [port]  serve the browser workbench (default 8765)\n"
+                   "  --version           print version and build info\n"
+                   "  --tokens | --ast | --dis   compiler introspection on stdin\n"
+                   "  --sample            print a sample session\n"
+                   "see also: man cozy; the manual (type 'manual' in the REPL)\n");
+            return 0;
+        }
         else if (strcmp(argv[i], "--version") == 0) {
             printf("cozy %s (built %s)\n", COZY_VERSION, COZY_BUILT);
             return 0;

@@ -382,3 +382,36 @@ carries them over — the two-paths-confession law and the rite-halt
 law arrived with the 2.29-2.33 harvest (0.1.14-0.1.16). Heritage
 files are part of the sync list, not an afterthought: the case law is
 transferred knowledge exactly like the code.
+
+### The rite, mechanized; the toolchain, pinned (audit items 5-6)
+
+.github/workflows/ci.yml runs the full suite on every push: Linux
+(tier0, openblas+nlopt, ASan, an install smoke) and macOS
+(accelerate+nlopt) — the Mac acceptance layer is now a robot in
+GitHub's basement, not a trip to Alexandria. tools/wasm.Dockerfile
+freezes the Ubuntu emscripten recipe (clang-15 chain, node + its
+externalized builtins) as an image; make wasm-docker builds the bundle
+through it, ending the per-reset re-derivation tax. The Dockerfile's
+package list is the almanac recipe verbatim; its sanity line (emcc +
+node versions) verifies the toolchain at image-build time.
+
+### Installed vs development paths: one law
+
+make install (PREFIX ?= ~/.local) installs bin/cozy, bin/cozy-workbench,
+share/cozy/{packages,data,docs}, and man1/cozy.1. Every asset lookup —
+load(), ls(), packeur, readtable's data files, the workbench's docs —
+resolves: as given, then beside the binary, then exe_dir()/../share/cozy.
+The dev tree always wins when present because its candidates are tried
+first. Writes never resolve: they stay literal.
+
+### The wasm rite
+
+make test-wasm compiles vmtest itself to WebAssembly for node
+(NODERAWFS so the engine reads the repo's own files; SINGLE_FILE so
+emscripten 3.1's loader never hits modern node's fetch(); a one-line
+stub stands in for the browser pause latch) and runs the ENTIRE golden
+suite through it. Goldens whose first line is "# native-only" are
+skipped (packeur declines in the browser by design). The browser build
+is thereby conformance-tested, not assumed — 1161 goldens on the first
+run, and the vendored NLopt landed under it. Law: a build that ships
+to users takes the suite; "it compiles" was never the bar.

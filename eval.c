@@ -2798,7 +2798,7 @@ static size_t lg_live(Interp *I, const LoadGroup *g)   /* members still bound */
 
 /* ---- load search path (ported from Neutrino v2.32.0-v2.32.2) ----------
  * exe_dir(): directory of the running binary, cached; empty in wasm. */
-static const char *exe_dir(void)
+const char *exe_dir(void)
 {
     static char dir[1024];
     static bool cached = false;
@@ -2871,9 +2871,32 @@ static bool load_resolve(const char *given, char *out, size_t outsz,
             LR_TRY("%s/packages/%s", ed, given);
             if (!has_cz) LR_TRY("%s/packages/%s.cz", ed, given);
         }
+        /* installed layout (make install): bin/cozy with assets in
+         * ../share/cozy — the dev tree keeps winning when present,
+         * because the exe-beside candidates are tried first. */
+        LR_TRY("%s/../share/cozy/%s", ed, given);
+        if (bare) {
+            LR_TRY("%s/../share/cozy/packages/%s", ed, given);
+            if (!has_cz) LR_TRY("%s/../share/cozy/packages/%s.cz", ed, given);
+        }
     }
     *ntried = tries;
     return false;
+}
+
+/* Open a read-only data/doc asset: the path as given, then beside the
+ * binary, then in the installed share dir. Writes never use this —
+ * they stay literal. */
+FILE *fopen_asset(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (f || path[0] == '/' || !exe_dir()[0]) return f;
+    char alt[1400];
+    snprintf(alt, sizeof alt, "%.600s/%.700s", exe_dir(), path);
+    f = fopen(alt, "rb");
+    if (f) return f;
+    snprintf(alt, sizeof alt, "%.600s/../share/cozy/%.700s", exe_dir(), path);
+    return fopen(alt, "rb");
 }
 #undef LR_TRY
 
@@ -3237,7 +3260,7 @@ typedef struct { char **lines; size_t n; char *buf; } CsvLines;
  * skipped. Caller frees lines[0] (one block) and lines. */
 static CsvLines csv_read_lines(Interp *I, const char *path, const char *who)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = fopen_asset(path);                 /* cwd, exe dir, installed share */
     if (!f) runtime_error(I, "%s: cannot open '%s': %s", who, path, strerror(errno));
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
@@ -4471,6 +4494,10 @@ static Value bi_ls(Interp *I, Value *args, uint32_t n)
             char alt[1200];
             snprintf(alt, sizeof alt, "%.600s/%.500s", exe_dir(), arg);
             d = opendir(alt);
+            if (!d) {                                    /* installed layout */
+                snprintf(alt, sizeof alt, "%.500s/../share/cozy/%.500s", exe_dir(), arg);
+                d = opendir(alt);
+            }
         }
         if (!d) runtime_error(I, "ls: %s: %s", arg, strerror(errno));
         struct dirent *e;
@@ -4843,6 +4870,10 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
         snprintf(dirbuf, sizeof dirbuf, "%.600s/packages", exe_dir());
         dir = dirbuf;
         d = opendir(dir);
+        if (!d) {                                        /* installed layout */
+            snprintf(dirbuf, sizeof dirbuf, "%.500s/../share/cozy/packages", exe_dir());
+            d = opendir(dir);
+        }
     }
     if (!d) runtime_error(I, "packeur: no packages directory found");
     PkRow rows[128]; int nrows = 0;

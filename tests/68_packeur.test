@@ -1,3 +1,4 @@
+# native-only
 # packeur headless: EOF on a bare autocall cancels without touching state
 packeur
 => packeur: cancelled

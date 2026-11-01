@@ -1,0 +1,125 @@
+.TH COZY 1 "November 2026" "cozy" "User Commands"
+.SH NAME
+cozy \- a small functional matrix language for econometrics
+.SH SYNOPSIS
+.B cozy
+.RI [ options ]
+.RI [ file.cz " ...]"
+.br
+.B cozy-workbench
+.RI [ port ]
+.SH DESCRIPTION
+.B cozy
+is an interpreter for Cozy, a functional language with first-class
+matrices, exact automatic differentiation (dual and hyper-dual
+numbers), sparse matrices, calendar dates, missing-value handling, and
+professional linear-algebra and optimization backends (LAPACK via
+OpenBLAS or Accelerate; NLopt) behind build-time seams.
+.PP
+With no arguments it starts an interactive REPL. With file arguments it
+runs each script in order and exits; the exit code is nonzero if any
+script raises an error, so scripts compose with
+.BR make (1)
+and shell pipelines. Runtime errors name the full closure call chain.
+.SH OPTIONS
+.TP
+.B \-\-workbench [port]
+Serve the browser workbench (editor, plots pane, documentation tabs) on
+localhost at the given port (default 8765). The
+.B cozy-workbench
+command does this and opens the browser.
+.TP
+.B \-\-version
+Print the version, linear-algebra backend, optimization backend, and
+build date.
+.TP
+.B \-\-help
+Print a usage summary.
+.TP
+.B \-\-tokens, \-\-ast, \-\-dis
+Compiler introspection: read a program on stdin and print its token
+stream, syntax tree, or bytecode disassembly.
+.TP
+.B \-\-sample
+Print a sample session.
+.SH THE LANGUAGE, BRIEFLY
+.nf
+cozy> let A = rand(3); A \\ ones(3, 1)
+cozy> let f = fn x, tol = 1e-8 -> x^2 - 2
+cozy> minimize[b = [0.0; 0.0]] ssr(b)
+cozy> load("ts"); mean(growth(t.gdp), "omit")
+.fi
+.PP
+Type
+.B help
+in the REPL for a tour,
+.B help(name)
+for any builtin with executable examples, and
+.B manual
+to read the full manual. Every transcript in the manual and the
+accompanying book re-executes at every release; the documentation
+cannot go stale.
+.SH PACKAGES
+.B load("name")
+resolves bare names through the
+.I packages/
+directory of the development tree, each colon-separated directory in
+.BR COZY_PATH ,
+the directory of the running binary, and the installed
+.IR share/cozy ;
+a miss names every place searched.
+.B packeur
+is an interactive package picker. Installed packages include
+.BR dist ", " optim ", " ts ", " finance ", " sparselin ", "
+.BR autodiff ", and " symb .
+.SH ENVIRONMENT
+.TP
+.B COZY_PATH
+Colon-separated extra directories searched by
+.BR load() .
+.TP
+.B COZY_PLOT_TERM
+Plot backend override: an empty value uses gnuplot when present;
+.B ascii
+renders text plots;
+.B svg
+writes SVG files (the workbench shows them in its plots pane).
+.TP
+.B COZY_PLOT_OUT
+Output file for gnuplot terminals that write files.
+.TP
+.B OPENBLAS_NUM_THREADS
+Caps OpenBLAS threading; 2 is often best for interactive-sized
+problems on hybrid-core laptops.
+.SH FILES
+.TP
+.I ~/.local/share/cozy/packages
+Installed packages.
+.TP
+.I ~/.local/share/cozy/docs
+The browser workbench and its bundled documentation.
+.TP
+.I ~/.local/share/cozy/data
+Sample data sets used by the book's worked problems.
+.SH BUILDING
+.B make
+builds the zero-dependency tier0 interpreter.
+.B make BACKEND=openblas OPTIM=nlopt
+(Linux) or
+.B make BACKEND=accelerate OPTIM=nlopt
+(macOS) links the professional backends.
+.B make install
+installs into
+.I ~/.local
+(override with
+.BR PREFIX= ).
+.B buildinfo()
+in the REPL reports what the running binary was built with.
+.SH SEE ALSO
+The manual, the package guide, and the book of worked econometrics
+problems: in the REPL as
+.BR manual ", " "manual packages" ", and " "manual book" ;
+as PDFs in the source tree; and in the browser workbench.
+.SH AUTHOR
+Mico Mrkaic, with the methodology and releases engineered in
+collaboration with Claude (Anthropic).

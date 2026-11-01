@@ -1,5 +1,57 @@
 # Cozy changelog
 
+## 0.1.20 — the browser gets NLopt, and takes the suite (audit item 7)
+
+### Added
+- **NLopt in the browser**: a vendored C subset of NLopt 2.11
+  (third_party/nlopt — the C algorithms and API, StoGO/AGS omitted, a
+  hand-written nlopt_config.h for wasm32) compiles into the web
+  bundle. buildinfo().optim reports "nlopt" in the tab; nlmin runs
+  SLSQP, L-BFGS, BOBYQA, COBYLA there; the optim package dispatches
+  exactly as on the desktop; backtraces thread through the wasm NLopt
+  frames. Bundle grows 1.59 -> 2.07 MB. WASM_OPTIM=none keeps the
+  pure path.
+- **The wasm rite — make test-wasm**: vmtest compiled to WebAssembly
+  for node and the ENTIRE golden suite run through it (1161 goldens
+  green; packeur's browser decline is the one native-only golden, by
+  marker). The browser build is now conformance-tested on every
+  release and in CI (new wasm job), not assumed. The suite found its
+  first browser fact at once: BOBYQA lands identically to native to
+  five digits.
+- Transcript-posture fix: Problem 15.10 pinned a derivative-free
+  method's landing to 1e-3 (and had honestly recorded false); the pin
+  is now the invariant 1e-2 and reads true on both platforms.
+- LAPACK-to-wasm remains parked with its trigger (tier0's real kernels
+  already cover solve/det/matmul in the browser; eig/svd stay
+  hand-rolled there).
+
+## 0.1.19 — a citizen of the machine: install, man page, CI, pinned wasm
+
+### Added
+- **make install / uninstall** (PREFIX ?= ~/.local): the CLI, a
+  cozy-workbench launcher (serves the browser UI and opens it), every
+  runtime asset (packages, sample data, the docs bundle), and the man
+  page. One resolution law everywhere — load(), ls(), packeur,
+  readtable's data files, and the workbench's docs try the path as
+  given, then beside the binary, then exe_dir()/../share/cozy — so an
+  installed cozy works from any directory and a development tree
+  always wins when present (verified: the installed binary ran
+  load("ts"), ls("packages"), readtable("data/gdpq.csv"), and the
+  full workbench from /tmp).
+- **man cozy** (doc/cozy.1): synopsis, options, the language in four
+  lines, package resolution, environment (COZY_PATH, COZY_PLOT_TERM,
+  OPENBLAS_NUM_THREADS), files, building. --help and -h added to the
+  binary.
+- **CI** (.github/workflows/ci.yml, audit item 5): every push runs
+  tier0 + openblas+nlopt + ASan + an install smoke on Linux AND
+  accelerate+nlopt on macOS — the Mac acceptance layer mechanized;
+  the charter baton's standing formality becomes a per-commit robot.
+- **Pinned wasm toolchain** (tools/wasm.Dockerfile + make wasm-docker,
+  audit item 6): the Ubuntu emscripten recipe frozen as an image,
+  ending the per-reset re-derivation tax; image verified by its own
+  sanity line at build (registry unreachable from the dev container —
+  first docker build runs on an owner machine).
+
 ## 0.1.18 — the time-series workbench (entries 15+16, finished story)
 
 ### Added

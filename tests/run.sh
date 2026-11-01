@@ -93,6 +93,11 @@ run_one() {
 
 run_file() {
     local f=$1 input="" have=0 prefix=""
+    # a file whose first line is "# native-only" is skipped under the wasm
+    # rite (VMTEST_WASM=1): the browser build declines that feature by design
+    if [[ "${VMTEST_WASM:-0}" == 1 ]] && head -1 "$f" | grep -q '^# native-only'; then
+        echo "skip $f (native-only)"; return
+    fi
     while IFS= read -r raw || [[ -n "$raw" ]]; do
         local line="${raw%$'\r'}"
         local t="${line#"${line%%[![:space:]]*}"}"      # ltrim

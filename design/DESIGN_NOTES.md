@@ -515,8 +515,17 @@ transcript. DESIGN, mirroring the linalg seam (entry 10's pattern):
   OPTIM=none and OPTIM=nlopt; (3) Mac acceptance (brew nlopt; every Darwin trap
   in the almanac applies to the new C boundary); (4) BOBYQA/COBYLA +
   a book problem exercising derivative-free; (5) global methods when
-  a transcript asks. wasm keeps tier0 (NLopt-to-emscripten parked,
-  same posture as LAPACK-to-wasm).
+  a transcript asks. NLopt-to-wasm SHIPPED 0.1.20 (owner's ruling,
+  audit item 7): a vendored C subset of NLopt 2.11 (third_party/nlopt,
+  the C++ StoGO/AGS omitted, hand-written nlopt_config.h) compiles
+  into the web bundle and into the wasm vmtest — buildinfo().optim is
+  "nlopt" in the tab, the optim package dispatches to SLSQP there, and
+  the WASM RITE (make test-wasm: the full golden suite run through the
+  browser engine under node) proves it. LAPACK-to-wasm stays parked:
+  tier0's 0.1.14 real kernels already cover solve/det/matmul in the
+  browser; eig/svd remain hand-rolled there. TRIGGER unchanged: the
+  first real browser session where a spectrum makes you reach for the
+  desktop.
 
 ## Binder syntax — SHIPPED 0.1.4 (owner's arc 4). minimize[x = x0] E,
 maximize[...], nlmin[...] desugar to name(fn x -> E, x0); previously

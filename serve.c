@@ -85,7 +85,11 @@ static void serve_file(int fd, const char *urlpath)
     if (!strcmp(urlpath, "/")) snprintf(path, sizeof path, "docs/index.html");
     else if (!strncmp(urlpath, "/plot_", 6)) snprintf(path, sizeof path, "%.220s", urlpath + 1);
     else snprintf(path, sizeof path, "docs%.220s", urlpath);
-    FILE *f = fopen(path, "rb");
+    /* docs/ resolves like any asset: cwd (the dev tree), beside the
+     * binary, then the installed share dir — so an installed
+     * cozy --workbench works from any directory. Plots stay cwd-literal
+     * (the session writes them there). */
+    FILE *f = strncmp(path, "docs/", 5) == 0 ? fopen_asset(path) : fopen(path, "rb");
     if (!f) { respond(fd, "404 Not Found", "text/plain", "not found\n", 10); return; }
     fseek(f, 0, SEEK_END); long n = ftell(f); fseek(f, 0, SEEK_SET);
     char *buf = malloc((size_t)n ? (size_t)n : 1);

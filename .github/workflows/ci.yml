@@ -1,0 +1,50 @@
+# Cozy CI — the release rite, mechanized (quality-audit item 5).
+# Every push runs the full golden suite on Linux (tier0, openblas+nlopt,
+# ASan) and macOS (accelerate+nlopt) — the Mac acceptance layer that used
+# to wait for a trip to the machine now runs on every commit.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libnlopt-dev libreadline-dev
+      - name: tier0 suite
+        run: make clean && make -j4 && make test
+      - name: openblas+nlopt suite
+        run: make clean && make BACKEND=openblas OPTIM=nlopt -j4 && make BACKEND=openblas OPTIM=nlopt test
+      - name: sanitizers
+        run: make test-asan
+      - name: install smoke
+        run: |
+          make BACKEND=openblas OPTIM=nlopt install PREFIX="$HOME/.local"
+          cd /tmp && printf 'load("ts")\nlength(ls("packages")) > 10\n' | "$HOME/.local/bin/cozy" | grep -q true
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: brew install nlopt
+      - name: accelerate+nlopt suite
+        run: make clean && make BACKEND=accelerate OPTIM=nlopt -j4 && make BACKEND=accelerate OPTIM=nlopt test
+      - name: tier0 suite
+        run: make clean && make -j4 && make test
+
+  wasm:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: toolchain (the PLAYBOOK recipe)
+        run: sudo apt-get update && sudo apt-get install -y emscripten clang-15 lld-15 llvm-15 binaryen nodejs node-acorn node-cjs-module-lexer node-undici node-busboy
+      - name: the wasm rite
+        run: make test-wasm-ubuntu
+      - name: web bundle builds
+        run: make wasm-ubuntu
