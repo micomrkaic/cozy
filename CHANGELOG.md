@@ -1,5 +1,18 @@
 # Cozy changelog
 
+## 0.1.21 — make install builds the real thing
+
+### Fixed
+- **make install built tier0 with no optimizer** (owner's catch): it
+  took plain make's defaults. It now autodetects exactly as deploy.sh
+  does — Darwin: Accelerate; Linux: OpenBLAS by link test; both: nlopt
+  (brew prefix honored) — announces the configuration, NOTEs any
+  fallback with the install command, cleans first (no cross-config
+  stale objects), and honors explicit BACKEND=/OPTIM= overrides. Plain
+  make stays tier0 by design. Verified: a bare make install here
+  produced buildinfo() = {openblas, nlopt}; an explicit
+  BACKEND=tier0 OPTIM=none install was honored.
+
 ## 0.1.20 — the browser gets NLopt, and takes the suite (audit item 7)
 
 ### Added

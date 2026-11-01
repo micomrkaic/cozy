@@ -109,7 +109,12 @@ builds the zero-dependency tier0 interpreter.
 .B make BACKEND=accelerate OPTIM=nlopt
 (macOS) links the professional backends.
 .B make install
-installs into
+builds with the best backends the machine has (the same detection the
+release script uses; pass
+.B BACKEND=
+and
+.B OPTIM=
+to override) and installs into
 .I ~/.local
 (override with
 .BR PREFIX= ).

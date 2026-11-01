@@ -192,7 +192,43 @@ clean:; rm -rf $(BIN) vmtest vmtest-asan build
 # The binary finds installed assets through exe_dir()/../share/cozy —
 # and a dev tree always wins, because exe-beside paths are tried first.
 PREFIX ?= $(HOME)/.local
-install: $(BIN)
+# make install autodetects the best configuration (the same probes as
+# deploy.sh — Darwin: Accelerate; Linux: OpenBLAS by link test; both:
+# nlopt.h, with the brew prefix on macOS) unless BACKEND= / OPTIM= were
+# given explicitly. Plain `make` stays tier0: the charter's floor is
+# untouched; install is where ambition lives. Hash-free probes: macOS
+# ships GNU make 3.81. The build is cleaned first so stale objects from
+# another configuration can never be linked (the install-time twin of
+# the "equal mtimes" trap).
+ifeq ($(origin BACKEND),command line)
+  INST_BACKEND = $(BACKEND)
+else ifeq ($(shell uname -s),Darwin)
+  INST_BACKEND = accelerate
+else ifeq ($(shell echo 'int main(void){return 0;}' | $(CC) -xc - -lopenblas -o /dev/null 2>/dev/null && echo yes),yes)
+  INST_BACKEND = openblas
+else
+  INST_BACKEND = tier0
+endif
+ifeq ($(origin OPTIM),command line)
+  INST_OPTIM = $(OPTIM)
+else
+  INST_BREW := $(shell brew --prefix 2>/dev/null)
+  INST_NLOPT_INC := $(if $(INST_BREW),-I$(INST_BREW)/include,)
+  ifeq ($(shell $(CC) $(INST_NLOPT_INC) -E -xc -include nlopt.h /dev/null >/dev/null 2>&1 && echo yes),yes)
+    INST_OPTIM = nlopt
+  else
+    INST_OPTIM = none
+  endif
+endif
+install:
+	@echo "install: building BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM)"
+	@if [ "$(INST_BACKEND)" = tier0 ]; then echo "install: NOTE no OpenBLAS found (sudo apt install libopenblas-dev for LAPACK speed)"; fi
+	@if [ "$(INST_OPTIM)" = none ]; then echo "install: NOTE no NLopt found (libnlopt-dev / brew install nlopt for the professional optimizer)"; fi
+	$(MAKE) clean
+	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) $(BIN)
+	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) install-files
+
+install-files: $(BIN)
 	install -d $(PREFIX)/bin $(PREFIX)/share/cozy $(PREFIX)/share/man/man1
 	install -m 755 $(BIN) $(PREFIX)/bin/cozy
 	install -m 755 tools/cozy-workbench $(PREFIX)/bin/cozy-workbench
@@ -285,4 +321,4 @@ test-wasm-ubuntu:
 wasm-docker:
 	docker run --rm -u "$$(id -u)" -v "$$PWD":/src -w /src cozy-wasm make wasm-ubuntu
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu wasm-docker test-wasm test-wasm-ubuntu manual pdfs stress install uninstall
+.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu wasm-docker test-wasm test-wasm-ubuntu manual pdfs stress install install-files uninstall
