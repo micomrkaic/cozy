@@ -127,7 +127,7 @@ shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"]
 cozy> cd("packages");
 cozy> load("dist.cz"); norm.cdf(0, 0, 1)
 0.5
@@ -489,6 +489,25 @@ cozy> g(10)'
 cozy> g(10, null, 99)'
 [10, 20, 99]
 ```
+
+### When something goes wrong
+
+A runtime error names the whole call chain, innermost frame first —
+captured at the moment of the error, so errors raised inside closures
+that optimizers or `map` re-enter keep their trace:
+
+```
+cozy> let inner = fn x -> x[5]
+cozy> let middle = fn v -> inner(v) * 2
+cozy> middle([1; 2])
+error:  index 5 out of bounds (1..2)
+    in inner (line 1)
+    in middle (line 1)
+```
+
+Line numbers are relative to where each function was defined (its file
+line under `load`, its own line at the prompt). Deep recursion shows
+the first eight frames and counts the rest.
 
 ## 8. Arrays and matrices
 

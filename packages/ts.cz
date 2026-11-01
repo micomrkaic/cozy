@@ -1,0 +1,92 @@
+% ts.cz — time-series tools for dated (and plain) columns.
+% The conventions: series are columns; lag/diff/growth return the SAME
+% length with NaN heads, so entry 15's machinery applies directly —
+% mean(growth(y), "omit"), dropmissing on the table. Dates ride along
+% untouched: lag the VALUES, keep the date column as the axis.
+
+% lag(x, k = 1): x shifted down k places; the first k entries are missing.
+let lag = fn x, k = 1 -> (
+  let nn = length(x);
+  if k >= nn then 0.0 / 0.0 * ones(nn, 1)
+  else [0.0 / 0.0 * ones(k, 1); x[1 : nn - k, 1]] end
+)
+
+% diff(x, k = 1): x - lag(x, k), NaN-headed.
+let diff = fn x, k = 1 -> x - lag(x, k)
+
+% growth(x, k = 1): percent growth over k periods, NaN-headed.
+let growth = fn x, k = 1 -> 100 * (x ./ lag(x, k) - 1)
+
+% movavg(x, k): trailing k-period mean, NaN-headed until k points exist.
+let movavg = fn x, k -> (
+  let nn = length(x);
+  let out = 0.0 / 0.0 * ones(nn, 1);
+  for i = k : nn do out[i] = mean(x[i - k + 1 : i, 1]) end;
+  out
+)
+
+% hpfilter(y, lambda = 1600): Hodrick-Prescott trend/cycle split.
+% Solves (I + lambda * D'D) tau = y with D the second-difference
+% operator — dense solve; fine for the few thousand points of a
+% macro series. Returns {trend, cycle}.
+let hpfilter = fn y, lambda = 1600 -> (
+  let T = length(y);
+  if T < 4 then error("hpfilter: need at least 4 observations") end;
+  let D = zeros(T - 2, T);
+  for i = 1 : T - 2 do (
+    D[i, i] = 1.0; D[i, i + 1] = -2.0; D[i, i + 2] = 1.0
+  ) end;
+  let tau = (eye(T) + lambda * (D' * D)) \ y;
+  {trend = tau, cycle = y - tau}
+)
+
+% acf(x, K = 20): autocorrelations at lags 1..K (biased, the standard
+% estimator), as a column.
+let acf = fn x, K = 20 -> (
+  let nn = length(x);
+  let mu = mean(x);
+  let c = x - mu * ones(nn, 1);
+  let v = sum(c .* c);
+  let out = zeros(K, 1);
+  for k = 1 : K do
+    out[k] = sum(c[1 : nn - k, 1] .* c[1 + k : nn, 1]) / v
+  end;
+  out
+)
+
+% pacf(x, K = 20): partial autocorrelations via Durbin-Levinson.
+let pacf = fn x, K = 20 -> (
+  let r = acf(x, K);
+  let phi = zeros(K, K);
+  let out = zeros(K, 1);
+  phi[1, 1] = r[1]; out[1] = r[1];
+  for k = 2 : K do (
+    let num = r[k] - sum[j = 1 : k - 1] phi[k - 1, j] * r[k - j];
+    let den = 1 - sum[j = 1 : k - 1] phi[k - 1, j] * r[j];
+    phi[k, k] = num / den;
+    for j = 1 : k - 1 do
+      phi[k, j] = phi[k - 1, j] - phi[k, k] * phi[k - 1, k - j]
+    end;
+    out[k] = phi[k, k]
+  ) end;
+  out
+)
+
+% arfit(y, p): AR(p) by least squares on lagged regressors.
+% Returns {c, phi, sigma, resid} — intercept, coefficients (phi[j] on
+% lag j), residual std (dof-adjusted), and the residual column.
+let arfit = fn y, p -> (
+  let nn = length(y);
+  if nn <= p + 1 then error("arfit: series too short for AR(p)") end;
+  let rows = nn - p;
+  let X = ones(rows, p + 1);
+  for j = 1 : p do (
+    let xx = y[p + 1 - j : nn - j, 1];
+    for i = 1 : rows do X[i, j + 1] = xx[i] end
+  ) end;
+  let yy = y[p + 1 : nn, 1];
+  let b = X \ yy;
+  let e = yy - X * b;
+  {c = b[1], phi = b[2 : p + 1], resid = e,
+   sigma = sqrt(sum(e .* e) / (rows - p - 1))}
+)

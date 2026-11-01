@@ -45,6 +45,7 @@ typedef struct {
     EnvObj    *globals;  /* floor for scope unwind; never released by a frame */
     int64_t   *end_dims; uint32_t end_sp, end_cap;  /* 'end' context: 2 dims per frame */
     uint32_t  *marks;  uint32_t nmark, mcap;        /* loop-body sp bases (break/continue reset) */
+    void      *prev;   /* enclosing VM (nested vm_run), for backtraces */
 } VM;
 
 #define VM_MAX_FRAMES 200000   /* direct recursion: frame-stack depth   */
@@ -111,6 +112,47 @@ static CallFrame *push_frame(VM *st, Chunk *chunk, CloObj *closure, uint32_t slo
     return fr;
 }
 
+/* Backtrace: walk the running VM chain innermost-first, printing each
+ * FUNCTION frame (closure != null; top-level statement frames carry no
+ * name) as "    in <name> (line N)". A builtin boundary between nested
+ * VMs prints as its own hop only through the next function frame — the
+ * chain is logical, not a C stack walk. At most 8 frames, then an
+ * ellipsis with the suppressed count: deep recursion stays readable. */
+void vm_backtrace(Interp *I, char *buf, size_t cap)
+{
+    size_t off = 0;
+    int shown = 0, total = 0;
+    for (VM *st = I->vm_cur; st; st = st->prev)
+        for (uint32_t f = st->nframe; f-- > 0; )
+            if (st->frames[f].closure) total++;
+    if (total == 0) { if (cap) buf[0] = '\0'; return; }
+    for (VM *st = I->vm_cur; st && off + 40 < cap; st = st->prev)
+        for (uint32_t f = st->nframe; f-- > 0 && off + 40 < cap; ) {
+            CallFrame *fr = &st->frames[f];
+            if (!fr->closure) continue;
+            if (shown == 8) {
+                off += (size_t)snprintf(buf + off, cap - off,
+                                        "\n    ... %d more frame(s)", total - shown);
+                if (cap) buf[cap - 1] = '\0';
+                return;
+            }
+            uint32_t ip = fr->ip > 0 ? fr->ip - 1 : 0;
+            if (ip >= fr->chunk->code_len && fr->chunk->code_len)
+                ip = fr->chunk->code_len - 1;
+            uint32_t line = fr->chunk->lines ? fr->chunk->lines[ip] : 0;
+            const Chunk *c = fr->chunk;
+            if (c->fnamelen)
+                off += (size_t)snprintf(buf + off, cap - off,
+                                        "\n    in %.*s (line %u)",
+                                        (int)(c->fnamelen > 80 ? 80 : c->fnamelen),
+                                        c->fname, line);
+            else
+                off += (size_t)snprintf(buf + off, cap - off,
+                                        "\n    in <fn> (line %u)", line);
+            shown++;
+        }
+}
+
 /* closure: VAL_CLOSURE -> run it with callee at slot 0 and args at slots 1..argc;
  * VAL_NULL -> top-level statement chunk (no slots). */
 static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, bool *ok)
@@ -126,6 +168,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
     st->globals = I->globals;
     st->end_dims = nullptr; st->end_sp = 0; st->end_cap = 0;
     st->marks = nullptr; st->nmark = 0; st->mcap = 0;
+    st->prev = I->vm_cur; I->vm_cur = st;               /* backtrace chain */
     stack_grow(st);
 
     CloObj *clo = closure.kind == VAL_CLOSURE ? as_clo(closure) : nullptr;
@@ -148,6 +191,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             CallFrame *fr = &st->frames[f];
             while (fr->env != st->globals) scope_pop(st, fr);
         }
+        I->vm_cur = st->prev;
         free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
         memcpy(I->jmp, saved, sizeof(jmp_buf));
         vm_depth--;
@@ -170,6 +214,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             st->nmark = fr->mark_base;                  /* discard this frame's loop marks */
             st->nframe--;
             if (st->nframe == 0) {
+                I->vm_cur = st->prev;
                 free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
                 memcpy(I->jmp, saved, sizeof(jmp_buf));
                 vm_depth--;
@@ -325,6 +370,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             st->nmark = fr->mark_base;                  /* discard this frame's loop marks */
             st->nframe--;
             if (st->nframe == 0) {
+                I->vm_cur = st->prev;
                 free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
                 memcpy(I->jmp, saved, sizeof(jmp_buf));
                 vm_depth--;

@@ -1,5 +1,49 @@
 # Cozy changelog
 
+## 0.1.18 — the time-series workbench (entries 15+16, finished story)
+
+### Added
+- **packages/ts.cz**: lag, diff, growth, movavg (same length, NaN
+  heads — entry 15's "omit"/dropmissing machinery applies directly),
+  hpfilter (Hodrick-Prescott by dense solve; lambda = 1600 default),
+  acf/pacf (Durbin-Levinson), arfit (AR(p) least squares with
+  {c, phi, sigma, resid}). Entry 13's defaults carry the API:
+  lag(x) is one period, hpfilter(y) quarterly-smoothed.
+- **Date ranges**: date : step-days : date now works (the entry 16
+  design's weekly-sampling claim, honored at last) and produces a
+  Date column.
+- **Date tick labels on every plot backend** (the docketed residue):
+  a Date x-axis labels its ticks by calendar — years past ~3y,
+  year-month past ~4 months, full dates below — in svg, ascii, and
+  gnuplot (explicit xtics).
+- **Problem 15.11**: data/gdpq.csv (shipped, wasm-embedded), a holey
+  dated quarterly series read, typed, growth-rated across the hole,
+  "omit"-averaged, dropmissing-cleaned, HP-filtered — entries 15 and
+  16 doing one workday's job in a single verified fence.
+- **save() finished to its design**: Date values serialize as
+  date("...") (to the second); loaded packages save as load lines
+  with their members skipped (small files, current packages); in the
+  browser a save also hands the viewer the file as a download.
+- Conformance edit, recorded: 45_files' min-package-name-length pin
+  relaxes for ts.cz; PACKAGES.md gains section 13 with an executed
+  AR(1) transcript (acf decays, pacf cuts off, arfit recovers 0.6).
+
+## 0.1.17 — errors name the whole call chain
+
+### Added
+- **Backtraces**: a runtime error now appends the closure call chain,
+  innermost first — "in inner (line 1) / in middle (line 1)" — walking
+  the live VM frames (and the chain of nested VMs, so errors inside
+  objectives that nlmin or map re-enter keep their trace through the
+  C trampolines). Captured in runtime_error itself, before any
+  unwinding. Function names come from the let-binding (anonymous
+  lambdas show <fn>); eight frames shown, the rest counted. The
+  highest-value daily-driver item from the quality audit: one wrong
+  index three closures under minimize used to report one bare line.
+- strfind audit note: the audit listed it missing; the tree already
+  had it (overlapping matches, [] on miss) — verified, deduplicated
+  from an accidental re-add, no behavior change.
+
 ## 0.1.16 — packeur, and the heritage refresh (Neutrino 2.33.0 harvest)
 
 ### Added

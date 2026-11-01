@@ -1,0 +1,8 @@
+# Error backtraces: runtime errors name the closure call chain,
+# innermost first, captured before any unwinding (incl. trampolines).
+let inner = fn x -> x[5]; let middle = fn v -> inner(v) * 2; middle([1; 2])
+=> !in inner (line
+let inner = fn x -> x[5]; let middle = fn v -> inner(v) * 2; middle([1; 2])
+=> !in middle (line
+let f = fn x -> sqrt("no"); map(f, [1; 2])
+=> !in f (line

@@ -575,9 +575,15 @@ double-backed with civil-calendar print (Hinnant algorithms), the full
 strict algebra and comparisons, date columns in matrices and sort,
 date()/datestr/today/year/month/day/quarter/weekday, readtable ISO
 auto-typing with NaN holes, tests/65_dates.test (leap day pinned), the
-thirteenth manual kind. RESIDUE, next session: plot date tick labels;
-the time-series book problem (align, lag-growth, time axis — one
-dataset also carrying entry 15's holes lesson).
+thirteenth manual kind. RESIDUE CLOSED 0.1.18:
+date ranges (d0 : days : d1 — the design's weekly-sampling claim now
+true), date tick labels on all three plot backends (year / year-month
+/ full-date grain by span), packages/ts.cz (lag/diff/growth/movavg
+NaN-headed same-length; hpfilter; acf/pacf by Durbin-Levinson; arfit),
+and Problem 15.11 — a holey dated quarterly CSV end to end, entries
+15+16 in one workday fence. save() also learned Date, shelf-awareness
+(load lines instead of dumped package source), and a browser download
+hook.
 
 ## 17. One binding regime — PARKED BY RULING (owner, 2026-08-20),
 recorded as an override of the charter's fix-from-day-one list. The

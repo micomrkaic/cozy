@@ -370,7 +370,10 @@ The emscripten recipe's clang-15 runtime libs now carry t64 suffixes:
 libclang-cpp15t64 and libllvm15t64 (bare libclang-cpp15/libllvm15 have
 no candidate). Symptom: clang-15 dies loading libclang-cpp.so.15 or
 libLLVM-15.so.1 after a fresh container restore. Download the t64
-names, force-dpkg, ldconfig.
+names, force-dpkg, ldconfig. The recipe's node side has the same
+drift: nodejs 18 + libnode109 + libcares2 + libuv1t64 + libnghttp2-14
++ node-cjs-module-lexer + node-undici + node-busboy (node aborts with
+"Cannot load externalized builtin" until the last three are in).
 
 ### The heritage refresh rule
 

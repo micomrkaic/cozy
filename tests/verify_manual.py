@@ -56,9 +56,14 @@ for tag, b in blocks:
         exp_clean = norm_ws(exp)   # '#' annotations died at 0.0.50: they ate
         # the '#' series glyphs of 4-series ascii plots (Problem 15.8)
         if exp_clean.startswith('error:'):
-            got = (re.sub(r'^\s*(?:parse )?error at \d+:\d+: ', 'error: ', err_lines[ei])
-                   if ei < len(err_lines) else got)
-            ei += 1
+            # multiline expected errors match that many stderr lines —
+            # backtrace lines (0.1.17) ride under the message
+            nl = len(exp_clean.split('\n'))
+            if ei < len(err_lines):
+                chunk = err_lines[ei:ei + nl]
+                chunk[0] = re.sub(r'^\s*(?:parse )?error at \d+:\d+: ', 'error: ', chunk[0])
+                got = norm_ws('\n'.join(chunk))
+            ei += nl
         def canon(s):
             s = s.strip()
             if s.startswith('[') and '\n' in s:

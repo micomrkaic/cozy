@@ -11,7 +11,7 @@ numel(ls("packages")) >= 5
 numel(ls("packages/*.cz")) >= 5
 => true
 # a listing is a value: map over it (regression: string arrays through map)
-(ls("packages") ~> length |> min) > 5
+(ls("packages") ~> length |> min) > 4
 => true
 map(fn s -> length(s), fields({a = 1, bb = 2}))
 => [1; 2]

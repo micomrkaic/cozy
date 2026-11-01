@@ -76,6 +76,8 @@ typedef struct Chunk {
     /* parameters, when this chunk is a function proto (non-owning arena slices) */
     const char **params; uint32_t *paramlens; uint32_t nparams;
     uint32_t ndefaults;   /* trailing params with defaults; min arity = nparams - ndefaults */
+    const char *fname; uint32_t fnamelen;   /* function name for backtraces
+                                               (the let-binding; empty = anonymous) */
 } Chunk;
 
 void     chunk_init(Chunk *c);

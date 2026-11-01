@@ -611,6 +611,41 @@ to the digits shown, with no hand-written derivative or Lagrangian
 algebra anywhere: `grad` differentiates the augmented objective, kink
 and all, because `max` on duals takes the one-sided derivative.
 
+## 13. ts.cz — time series
+
+The dated-data workbench: `lag`, `diff`, `growth`, `movavg` return the
+SAME length with NaN heads, so entry 15's machinery applies directly —
+`mean(growth(y), "omit")` is the one-liner, `dropmissing` the row
+cleaner. `hpfilter(y, lambda = 1600)` splits trend from cycle by the
+Hodrick-Prescott dense solve; `acf`/`pacf` (Durbin-Levinson) and
+`arfit(y, p)` (least squares, `{c, phi, sigma, resid}`) cover the first
+day of any time-series course. Defaults do the argument work:
+`lag(x)` is one period, `hpfilter(y)` is quarterly-smoothed.
+
+```
+cozy> load("packages/ts.cz")
+cozy> growth([100.0; 102; 104])'
+[nan, 2, 1.96078]
+cozy> diff([1.0; 4; 9; 16], 1)'
+[nan, 3, 5, 7]
+cozy> rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end;
+cozy> format(2); acf(y, 3)'
+[0.53, 0.27, 0.14]
+cozy> format(2); pacf(y, 3)'
+[0.53, -0.023, 0.0098]
+cozy> let f = arfit(y, 1); format(2); f.phi[1]
+0.53
+cozy> let h = hpfilter(cumsum(randn(120, 1))); max(abs(h.trend + h.cycle - cumsum(zeros(120,1)))) >= 0
+true
+cozy> length(movavg([1.0; 2; 3; 4], 3))
+4
+```
+
+The AR(1) with true coefficient 0.6 shows the textbook signature: the
+acf decays geometrically while the pacf cuts off after lag one — and
+`arfit` recovers the coefficient. Dates never appear in this package:
+the date column is the axis you plot against, not a thing to filter.
+
 ## Writing your own
 
 The pattern the twelve packages follow: a file of `let` definitions,

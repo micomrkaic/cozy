@@ -1,0 +1,27 @@
+# ts.cz: lag/diff/growth NaN-headed same-length; hpfilter identity;
+# acf/pacf/arfit recover an AR(1); defaults at work (entry 13).
+load("ts"); lag([1.0; 2; 3; 4])'
+=> [nan, 1, 2, 3]
+load("ts"); lag([1.0; 2; 3; 4], 2)'
+=> [nan, nan, 1, 2]
+load("ts"); diff([1.0; 4; 9; 16])'
+=> [nan, 3, 5, 7]
+load("ts"); growth([100.0; 102; 104])[3]
+=> 1.96078
+load("ts"); mean(growth([100.0; 0/0; 104; 106]), "omit")
+=> 1.92308
+load("ts"); movavg([1.0; 2; 3; 4; 5], 2)'
+=> [nan, 1.5, 2.5, 3.5, 4.5]
+load("ts"); rng(7); let y = cumsum(randn(200, 1)); let h = hpfilter(y); max(abs(h.trend + h.cycle - y)) < 1e-9
+=> true
+load("ts"); rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end; abs(acf(y, 1)[1] - 0.6) < 0.12
+=> true
+load("ts"); rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end; abs(pacf(y, 2)[2]) < 0.1
+=> true
+load("ts"); rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end; abs(arfit(y, 1).phi[1] - 0.6) < 0.12
+=> true
+# date ranges + date plot axis (entry 16 residue)
+length(date("2024-01-01") : 7 : date("2024-03-01"))
+=> 9
+(date("2024-01-01") : 7 : date("2024-01-20"))[2]
+=> 2024-01-08

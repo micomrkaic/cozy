@@ -19,6 +19,9 @@
 #include "linalg.h"
 #include "sparse.h"
 #include <unistd.h>                 /* readlink, access — load_resolve */
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>             /* EM_ASM — save's browser download */
+#endif
 #include <termios.h>                /* packeur's raw mode */
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>            /* _NSGetExecutablePath — exe_dir */
@@ -30,13 +33,20 @@
 [[noreturn]] void runtime_error(Interp *I, const char *fmt, ...)
 {
     va_list ap; va_start(ap, fmt);
-    vsnprintf(I->err, sizeof I->err, fmt, ap);
+    int n2 = vsnprintf(I->err, sizeof I->err, fmt, ap);
     va_end(ap);
+    /* backtrace (QoL arc): captured HERE, before any unwinding, so the
+     * frames are still live; trampolines that re-raise keep the text. */
+    if (n2 > 0 && (size_t)n2 < sizeof I->err)
+        vm_backtrace(I, I->err + n2, sizeof I->err - (size_t)n2);
     I->had_error = true;
     longjmp(I->jmp, 1);
 }
 
 static bool parse_iso_date(const char *p, uint32_t len, double *out);
+static void civil_from_days(double dd, int64_t *Y, int64_t *M, int64_t *D, double *frac);
+static void  save_shelves(FILE *f);                       /* defined with g_lg */
+static bool  save_is_shelf_member(const char *nm, uint32_t len);
 
 static const char *type_name(ValueKind k)
 {
@@ -87,6 +97,7 @@ static int    num_rank(Value v) { return v.kind == VAL_INT ? 0 : v.kind == VAL_F
                                        : v.kind == VAL_COMPLEX ? 2 : v.kind == VAL_DUAL ? 3 : 4; }
                                        /* 3 = dual, 4 = hyper-dual */
 static double as_double(Value v){ return v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f
+                                       : v.kind == VAL_DATE ? v.as.f
                                        : v.kind == VAL_DUAL ? v.as.d.v
                                        : v.kind == VAL_HDUAL ? v.as.h.v : v.as.z.re; }
 static Dual   as_dual(Value v)  { return v.kind == VAL_DUAL  ? v.as.d
@@ -1335,6 +1346,28 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
 
 Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; result is +1 */
 {
+    /* Date ranges (entry 16's design, honored): date : step-days : date
+     * samples the calendar — d0 : 7 : d1 is weekly. Both bounds must be
+     * dates, the step a plain number of days. */
+    if (sv.kind == VAL_DATE || ev.kind == VAL_DATE) {
+        if (sv.kind != VAL_DATE || ev.kind != VAL_DATE)
+            runtime_error(I, "range: both bounds must be dates (mixing a date with a number)");
+        if (!is_num(stv) || stv.kind == VAL_COMPLEX)
+            runtime_error(I, "range: the step of a date range is a number of days");
+        double s = sv.as.f, e = ev.as.f, st = as_double(stv);
+        if (st == 0.0) runtime_error(I, "range step cannot be zero");
+        int64_t count = 0;
+        double span = (e - s) / st;
+        if (span >= 0) {
+            if (span > 100000000.0)
+                runtime_error(I, "range too large: about %.3g elements", span);
+            count = (int64_t)(span + 1e-9) + 1;
+        }
+        Value out2 = val_array(ELT_DATE, 1, (uint32_t)count);
+        for (int64_t k = 0; k < count; k++)
+            ((double *)as_arr(out2)->data)[k] = s + (double)k * st;
+        return out2;
+    }
     if (!is_num(sv) || !is_num(ev) || !is_num(stv))
         runtime_error(I, "range bounds must be numbers");
 
@@ -2426,6 +2459,20 @@ static void save_value(Interp *I, FILE *f, Value v, const char *name)
         fputs(", ", f); save_double(f, v.as.h.e2);
         fputs(", ", f); save_double(f, v.as.h.e12); fputc(')', f);
         return;
+    case VAL_DATE: {                      /* date("YYYY-MM-DD[ HH:MM:SS]") —
+                                             round-trips to the second */
+        int64_t Y2, M2, D2; double fr;
+        civil_from_days(v.as.f, &Y2, &M2, &D2, &fr);
+        if (fr > 1e-9) {
+            int s2 = (int)(fr * 86400.0 + 0.5);
+            fprintf(f, "date(\"%04lld-%02lld-%02lld %02d:%02d:%02d\")",
+                    (long long)Y2, (long long)M2, (long long)D2,
+                    s2/3600, (s2/60)%60, s2%60);
+        } else
+            fprintf(f, "date(\"%04lld-%02lld-%02lld\")",
+                    (long long)Y2, (long long)M2, (long long)D2);
+        return;
+    }
     case VAL_STRING: {
         StrObj *s = as_str(v);
         fputc('"', f);
@@ -2480,6 +2527,25 @@ static void save_value(Interp *I, FILE *f, Value v, const char *name)
     }
 }
 
+#ifdef __EMSCRIPTEN__
+/* The browser is the primary surface: a save also hands the viewer the
+ * file as a download (MEMFS is unreachable otherwise). EM_JS, not
+ * EM_ASM: clang refuses EM_ASM in (or inlined into) any function that
+ * also holds a setjmp, and bi_save guards serialization with one. */
+EM_JS(void, save_browser_download, (const char *path), {
+    try {
+        var p = UTF8ToString(path);
+        var data = FS.readFile(p);
+        var blob = new Blob([data], { type: "text/plain" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = p.split("/").pop();
+        a.click();
+        setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+    } catch (e) {}
+})
+#endif
+
 static Value bi_save(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -2501,9 +2567,15 @@ static Value bi_save(Interp *I, Value *args, uint32_t n)
         memcpy(I->jmp, jsaved, sizeof(jmp_buf)); longjmp(I->jmp, 1);
     }
     fputs("# cozy workspace (reload with load)\n", f);
+    /* shelf-aware (the save design ruling): a loaded package's bindings
+     * are reproduced by reloading the package, not by dumping its source
+     * — one load line per shelf, members skipped; the file stays small
+     * and the packages stay current. */
+    save_shelves(f);
     EnvObj *g = I->globals;
     uint32_t saved = 0;
     for (uint32_t i = g ? g->n_protected : 0; g && i < g->count; i++) {
+        if (save_is_shelf_member(g->names[i], g->namelens[i])) continue;
         fprintf(f, "let %.*s = ", (int)g->namelens[i], g->names[i]);
         char nm[128];
         snprintf(nm, sizeof nm, "%.*s", (int)g->namelens[i], g->names[i]);
@@ -2517,6 +2589,9 @@ static Value bi_save(Interp *I, Value *args, uint32_t n)
     if (!out) { free(buf); runtime_error(I, "save: cannot write '%s'", path); }
     fwrite(buf, 1, buflen, out);
     fclose(out); free(buf);
+#ifdef __EMSCRIPTEN__
+    save_browser_download(path);
+#endif
     (void)saved;                                   /* silent on success, like clear */
     return val_null();
 }
@@ -2553,7 +2628,7 @@ static Value bi_eval_str(Interp *I, Value *args, uint32_t n)
     load_keep_push(a, src);
     Value r = vm_eval_program(I, prog, I->globals, /*echo=*/false);
     if (I->had_error) {
-        char saved[256];
+        char saved[1024];
         snprintf(saved, sizeof saved, "%s", I->err);
         value_release(r);
         runtime_error(I, "eval: %s", saved);
@@ -2680,6 +2755,18 @@ static bool lg_has(const LoadGroup *g, const char *nm, uint32_t len)
 {
     for (size_t i = 0; i < g->n; i++)
         if (g->lens[i] == len && !memcmp(g->names[i], nm, len)) return true;
+    return false;
+}
+
+static void save_shelves(FILE *f)
+{
+    for (size_t gi = 0; gi < g_nlg; gi++)
+        fprintf(f, "load(\"%s\")\n", g_lg[gi].path);
+}
+static bool save_is_shelf_member(const char *nm, uint32_t len)
+{
+    for (size_t gi = 0; gi < g_nlg; gi++)
+        if (lg_has(&g_lg[gi], nm, len)) return true;
     return false;
 }
 static bool lg_claimed_from(size_t from, const char *nm, uint32_t len)
@@ -2906,7 +2993,7 @@ static Value bi_load(Interp *I, Value *args, uint32_t n)
     if (reclaim.n) lg_free(&reclaim);
     value_release(r);
     if (I->had_error) {                           /* re-raise into the outer program */
-        char saved[256];
+        char saved[1024];
         snprintf(saved, sizeof saved, "%s", I->err);
         if (strncmp(saved, "load:", 5) == 0)      /* nested load already labelled: don't wrap again */
             runtime_error(I, "%s", saved);
@@ -3544,9 +3631,24 @@ static const char *svg_palette(uint32_t s)
 #define SVG_MT 40
 #define SVG_MB 52
 
+/* One x-axis tick label: plain %g, or — on a Date axis (entry 16's
+ * residue) — a calendar form whose grain follows the span: years past
+ * ~3y, year-month past ~4 months, full dates below. */
+static void plot_xtick(char *b, size_t cap, double v, bool xdate, double span)
+{
+    if (!xdate) { snprintf(b, cap, "%g", v); return; }
+    int64_t Y2, M2, D2;
+    civil_from_days(v, &Y2, &M2, &D2, NULL);
+    if (span > 1100.0)     snprintf(b, cap, "%04lld", (long long)Y2);
+    else if (span > 120.0) snprintf(b, cap, "%04lld-%02lld", (long long)Y2, (long long)M2);
+    else                   snprintf(b, cap, "%04lld-%02lld-%02lld",
+                                    (long long)Y2, (long long)M2, (long long)D2);
+}
+
 static void svg_frame(FILE *o, double xmin, double xmax, double ymin, double ymax,
                       const char *title, uint32_t tlen,
-                      const char *xl, uint32_t xllen, const char *yl, uint32_t yllen)
+                      const char *xl, uint32_t xllen, const char *yl, uint32_t yllen,
+                      bool xdate)
 {
     const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
     fprintf(o, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"%d\" height=\"%d\" "
@@ -3560,8 +3662,9 @@ static void svg_frame(FILE *o, double xmin, double xmax, double ymin, double yma
         double X = SVG_ML + (v - xmin) / (xmax - xmin) * PW;
         fprintf(o, "<line x1=\"%.2f\" y1=\"%d\" x2=\"%.2f\" y2=\"%d\" stroke=\"#1e2633\"/>\n",
                 X, SVG_MT, X, SVG_MT + PH);
-        fprintf(o, "<text x=\"%.2f\" y=\"%d\" text-anchor=\"middle\" font-size=\"12\" fill=\"#c6cdd8\">%g</text>\n",
-                X, SVG_MT + PH + 18, v);
+        char tl[32]; plot_xtick(tl, sizeof tl, v, xdate, xmax - xmin);
+        fprintf(o, "<text x=\"%.2f\" y=\"%d\" text-anchor=\"middle\" font-size=\"12\" fill=\"#c6cdd8\">%s</text>\n",
+                X, SVG_MT + PH + 18, tl);
     }
     for (double v = ceil(ymin / ys) * ys; v <= ymax + 1e-12 * ys; v += ys) {
         double Y = SVG_MT + PH - (v - ymin) / (ymax - ymin) * PH;
@@ -3631,7 +3734,8 @@ static void svg_plot_render(Interp *I, ArrObj *X, ArrObj *Y, bool yvec,
                        || (stlen - si >= 6 && memcmp(style + si, "circle", 6) == 0)
                        || (stlen - si >= 3 && memcmp(style + si, "dot", 3) == 0);
 
-    svg_frame(o, xmin, xmax, ymin, ymax, title, tlen, xl, xllen, yl, yllen);
+    svg_frame(o, xmin, xmax, ymin, ymax, title, tlen, xl, xllen, yl, yllen,
+              X && X->elt == ELT_DATE);
     const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
     for (uint32_t s = 0; s < nser; s++) {
         const char *col = svg_palette(s);
@@ -3691,7 +3795,7 @@ static void svg_hist_render(Interp *I, double lo, double w, uint32_t nb,
     uint32_t tlen = 0, xllen = 0;
     const char *title = ascii_optstr(opts, "title", &tlen);
     const char *xl = ascii_optstr(opts, "xlabel", &xllen);
-    svg_frame(o, lo, lo + w * nb, 0, (double)cmax * 1.05, title, tlen, xl, xllen, nullptr, 0);
+    svg_frame(o, lo, lo + w * nb, 0, (double)cmax * 1.05, title, tlen, xl, xllen, nullptr, 0, false);
     const int PW = SVG_W - SVG_ML - SVG_MR, PH = SVG_H - SVG_MT - SVG_MB;
     double xspan = w * nb, yspan = (double)cmax * 1.05;
     for (uint32_t b = 0; b < nb; b++) {
@@ -3757,7 +3861,13 @@ static void ascii_plot_render(Interp *I, ArrObj *X, ArrObj *Y, bool yvec,
     fputs("          +", o);
     for (uint32_t c = 0; c < ASCII_W; c++) fputc('-', o);
     fputc('\n', o);
-    fprintf(o, "           %-*.4g%*.4g\n", ASCII_W / 2, xmin, ASCII_W / 2, xmax);
+    if (X && X->elt == ELT_DATE) {
+        char lx[32], rx[32];
+        plot_xtick(lx, sizeof lx, xmin, true, xmax - xmin);
+        plot_xtick(rx, sizeof rx, xmax, true, xmax - xmin);
+        fprintf(o, "           %-*s%*s\n", ASCII_W / 2, lx, ASCII_W / 2, rx);
+    } else
+        fprintf(o, "           %-*.4g%*.4g\n", ASCII_W / 2, xmin, ASCII_W / 2, xmax);
 
     if (nser > 1) {                                 /* legend for multi-series */
         for (uint32_t s = 0; s < nser; s++) {
@@ -3933,6 +4043,22 @@ static Value bi_plot(Interp *I, Value *args, uint32_t n)
     if (plot_is_ascii()) { ascii_plot_render(I, X, Y, yvec, npts, nser, opts); return val_null(); }
     FILE *g = gp_open(I);
     gp_opts(I, g, opts);
+    if (X && X->elt == ELT_DATE) {                /* calendar xtics (entry 16) */
+        double x0 = HUGE_VAL, x1 = -HUGE_VAL;
+        for (uint32_t k = 0; k < npts; k++) {
+            double xv = ((const double *)X->data)[k];
+            if (isfinite(xv)) { if (xv < x0) x0 = xv; if (xv > x1) x1 = xv; }
+        }
+        if (x1 > x0) {
+            fputs("set xtics (", g);
+            for (int q = 0; q <= 4; q++) {
+                double xv = x0 + (x1 - x0) * q / 4.0;
+                char tl[32]; plot_xtick(tl, sizeof tl, xv, true, x1 - x0);
+                fprintf(g, "%s\"%s\" %.17g", q ? ", " : "", tl, xv);
+            }
+            fputs(")\n", g);
+        }
+    }
     fputs("plot ", g);
     for (uint32_t s = 0; s < nser; s++) {
         if (s) fputs(", ", g);

@@ -217,4 +217,12 @@ static const struct { const char *name, *pkg; } pkg_hints[] = {
     { "tofun", "packages/symb.cz" },
     { "ffun", "packages/symb.cz" },
     { "dfun", "packages/symb.cz" },
+    { "lag", "packages/ts.cz" },
+    { "diff", "packages/ts.cz" },
+    { "growth", "packages/ts.cz" },
+    { "movavg", "packages/ts.cz" },
+    { "hpfilter", "packages/ts.cz" },
+    { "acf", "packages/ts.cz" },
+    { "pacf", "packages/ts.cz" },
+    { "arfit", "packages/ts.cz" },
 };

@@ -13,7 +13,8 @@
 
 typedef struct Interp {
     jmp_buf  jmp;
-    char     err[256];
+    char     err[1024];           /* message + appended backtrace lines */
+    void    *vm_cur;              /* innermost running VM (vm.c), for backtraces */
     uint32_t cur_line, cur_col;   /* updated as evaluation proceeds, for diagnostics */
     bool     had_error;
     EnvObj  *globals;             /* current global frame (for who/help introspection) */
@@ -26,6 +27,8 @@ typedef struct Interp {
 } Interp;
 
 void    interp_init(Interp *I);
+/* append "    in <name> (line N)" frames of the running VM chain to buf (vm.c) */
+void    vm_backtrace(Interp *I, char *buf, size_t cap);
 EnvObj *globals_new(void);                 /* env preloaded with builtins (+1 ref) */
 
 Value eval_map_builtin(void);

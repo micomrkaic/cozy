@@ -263,11 +263,11 @@ string functions ride the pipes like everything else:
 
 ```
 cozy> ls("packages")
-["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"]
 cozy> ans ~> (fn f -> endswith(f, ".cz")) |> all
 true
 cozy> ls("packages") ~> (fn f -> contains(f, "s")) |> sum
-6
+7
 ```
 
 **Discussion.** A directory listing maps under `~>` through `endswith`,
@@ -3246,6 +3246,42 @@ saw a derivative. The fence is tagged `cozy-nlopt`: it verifies on
 builds carrying the backend and is skipped (announced, never silent)
 elsewhere, and the demo leaves it book-only — the first
 build-conditional transcript, a mechanism entry 14's residue demanded.
+
+**Problem 15.11 — A quarterly series, with the holes left in.** Real
+data arrives dated and gappy. `data/gdpq.csv` is a small quarterly GDP
+table with one missing cell; `readtable` types the ISO date column as
+dates and reads the hole as missing, and everything downstream has an
+honest answer for it:
+
+```
+cozy> load("ts")
+cozy> let t = readtable("data/gdpq.csv")
+{date = [2022-01-01; 2022-04-01; 2022-07-01; 2022-10-01; 2023-01-01; 2023-04-01; 2023-07-01; 2023-10-01; 2024-01-01; 2024-04-01; 2024-07-01; 2024-10-01], gdp = [100; 101.2; 102.1; nan; 103.9; 105; 105.8; 106.9; 108.2; 109.1; 110.4; 111.8]}
+cozy> quarter(t.date[3]); weekday(t.date[1])
+6
+cozy> let g = growth(t.gdp)
+[nan; 1.2; 0.889328; nan; nan; 1.05871; 0.761905; 1.0397; 1.21609; 0.831793; 1.19157; 1.26812]
+cozy> g[2:4, 1]'
+[1.2, 0.889328, nan]
+cozy> format(4); mean(g, "omit")
+1.051
+cozy> let full = dropmissing(t); length(full.gdp)
+11
+cozy> let h = hpfilter(full.gdp, 1600); format(4); std(h.cycle)
+0.2014
+cozy> abs(t.date[5] - t.date[1] - 365) <= 1
+true
+```
+
+**Discussion.** The growth column is NaN exactly where it must be — at
+the head (no previous quarter) and across the hole, which poisons two
+growth rates (its own and the next quarter's base). `"omit"` averages
+what is real; `dropmissing` hands the HP filter a clean column. Dates
+carry their own algebra: the closing check is `date - date`
+arithmetic, and `plot(t.date, t.gdp)` labels the axis with calendar
+dates on every backend. Entries 15 and 16 of the docket, doing one
+workday's job together (the ts package: `lag`, `diff`, `growth`,
+`movavg`, `hpfilter`, `acf`, `pacf`, `arfit`).
 
 ## Appendix A. Finance (finance.cz)
 
