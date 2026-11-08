@@ -54,23 +54,18 @@ load("packages/finance.cz"); days(2026, 1, 1, 2026, 7, 9)
 load("packages/finance.cz"); dow(2026, 7, 9)
 => 4
 load("packages/finance.cz"); dateadd(2024, 2, 28, 2)
-=> {y = 2024, m = 3, d = 1}
+=> 2024-03-01
 load("packages/finance.cz"); dateadd(2024, 12, 31, 1)
-=> {y = 2025, m = 1, d = 1}
+=> 2025-01-01
 load("packages/finance.cz"); days360(2024, 1, 31, 2024, 7, 31)
 => 180
 load("packages/finance.cz"); days(2024, 2, 28, 2024, 13, 1)
-=> !month must be 1..12
-# roundtrip: daterec inverts datenum across a leap boundary
-load("packages/finance.cz"); let j = datenum(2024, 2, 29); let d = daterec(j); [d.y, d.m, d.d]
-=> [2024, 2, 29]
-# datestr is a zero-padded string
-load("packages/finance.cz"); datestr(datenum(2026, 1, 5))
+=> !month 1-12
+# the Date kind does the calendar now: finance's date functions ride on it
+load("packages/finance.cz"); year(dateadd(2024, 2, 28, 2))
+=> 2024
+# loading finance no longer shadows the today/datestr builtins
+load("packages/finance.cz"); datestr(date(2026, 1, 5))
 => "2026-01-05"
-load("packages/finance.cz"); datestr(datenum(2026, 7, 17))
-=> "2026-07-17"
-# today is a serial day number consistent with now()
-load("packages/finance.cz"); today() == datenum(now().y, now().m, now().d)
-=> true
 load("packages/finance.cz"); length(datestr(today() + 90))
 => 10

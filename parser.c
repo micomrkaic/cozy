@@ -4,6 +4,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+static void doc_block_before(const Parser *p, const char *let_start,
+                             const char **doc, uint32_t *doclen);
+
 /* ------------------------------------------------------------------ */
 /* token cursor                                                        */
 /* ------------------------------------------------------------------ */
@@ -890,6 +893,9 @@ static AstNode *parse_statement(Parser *p)
         n->as.let.name    = name.start;
         n->as.let.namelen = name.len;
         n->as.let.value   = parse_expr(p, 0);
+        if (n->as.let.value && n->as.let.value->kind == AST_LAMBDA)    /* docstring */
+            doc_block_before(p, kw.start, &n->as.let.value->as.lambda.doc,
+                             &n->as.let.value->as.lambda.doclen);
         if (accept(p, TOK_KW_IN))            /* 'let x = v in body' used as a statement */
             n->as.let.body = parse_expr(p, 0);
         return n;
@@ -935,8 +941,42 @@ static AstNode *parse_program(Parser *p)
 /* ------------------------------------------------------------------ */
 void parser_init(Parser *p, const char *src, Arena *arena)
 {
-    *p = (Parser){ .arena = arena };
+    *p = (Parser){ .arena = arena, .src_begin = src };
     lexer_init(&p->lex, src);
+}
+
+/* Docstrings: the contiguous comment block ('%' or '#' lines) directly
+ * above `let NAME = fn ...` — no blank line between — is NAME's
+ * documentation. help(NAME) renders it in the builtins' format and the
+ * suite executes its "e.g." lines. Returns a span into the source
+ * buffer (which closures already keep alive); empty if none. */
+static void doc_block_before(const Parser *p, const char *let_start,
+                             const char **doc, uint32_t *doclen)
+{
+    *doc = nullptr; *doclen = 0;
+    const char *b = p->src_begin;
+    if (!b || let_start <= b) return;
+    const char *q = let_start;
+    while (q > b && (q[-1] == ' ' || q[-1] == '\t')) q--;    /* indentation of let */
+    if (q == b || q[-1] != '\n') return;                   /* let must start its line */
+    q--;                                                    /* at the '\n' ending the previous line */
+    const char *end = q;                                    /* doc block ends here */
+    const char *start = nullptr;
+    for (;;) {
+        /* q points at the '\n' that ends the candidate line; find its start */
+        const char *ls = q;
+        while (ls > b && ls[-1] != '\n') ls--;
+        const char *s = ls;
+        while (s < q && (*s == ' ' || *s == '\t')) s++;
+        if (s < q && (*s == '%' || *s == '#')) {
+            start = ls;
+            if (ls == b) break;
+            q = ls - 1;                                     /* the '\n' before this line */
+        } else break;
+    }
+    if (!start) return;
+    *doc = start;
+    *doclen = (uint32_t)(end - start);
 }
 
 AstNode *parser_parse(Parser *p)

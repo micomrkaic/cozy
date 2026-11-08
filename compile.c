@@ -608,6 +608,7 @@ static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
             if (defs[i]) nd++;
     proto->ndefaults = nd;                                /* trailing (parser-enforced) */
     proto->fname = selfname; proto->fnamelen = selflen;   /* backtraces (entry: QoL 1) */
+    proto->doc = n->as.lambda.doc; proto->doclen = n->as.lambda.doclen;   /* help() */
     uint32_t idx = chunk_add_proto(cc->chunk, proto);     /* enclosing owns proto */
 
     Compiler fc = (Compiler){ .enclosing = cc, .chunk = proto, .depth = 1, .index_dim = -1, .in_function = true };

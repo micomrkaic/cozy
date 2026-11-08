@@ -605,3 +605,23 @@ introduces a scope form (a new binder, nested-pipe disambiguation,
 module work) — do this cleanup FIRST, on one regime, before that
 feature lands. Acceptance when it fires: delete rewrite_at_to_elem,
 compile @ to a slot, all goldens pass byte-for-byte.
+
+## 18. Package docstrings — SHIPPED 0.1.22 (owner: "the same model we have
+for builtins"). The docstring law: the comment block directly above
+`let NAME = fn` is NAME's documentation. The parser captures the span
+(zero copies — closures already keep their source alive), the chunk
+carries it, and help renders it in the builtins' shape: signature from
+the code (defaults included), description from the block, "e.g." lines
+as examples. Examples written `e.g. EXPR %= EXPECTED` are executed by
+the suite after loading the package (tests/verify_pkgdocs.py, in make
+test), which also LINTS: every package function has a description and
+an example, or an `internal:` block. help("pkg") lists a loaded
+package's functions with their first line; help("name") asks by name
+(no autocall). tools/pkgdoc_fill.py fills `%= ?` placeholders. 150
+examples over 11 packages + the generated demo. Rejected: a separate
+doc file per package (drifts) and docstrings as string literals in the
+language (ceremony; the comment block was already the convention).
+The audit paid immediately: finance.cz shadowed the today/datestr
+builtins, ts.cz shadowed the diff builtin, and hdual collapsed a
+1-element array to a scalar (the n=1 Newton) — three bugs no user had
+reported, all found by writing and executing the examples.

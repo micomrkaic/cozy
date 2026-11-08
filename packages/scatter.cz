@@ -7,13 +7,18 @@
 % overlays would require backend changes, so they are deliberately absent.
 % For full option control call plot(x, y, {style = "points", ...}) directly.
 
+% scatter(x, y): a scatter plot — plot(x, y, {style = "points"}) in every
+% backend (SVG circles in the browser, markers in ascii, points in gnuplot).
+% e.g. scatter([1, 2, 3], [2, 4, 9]); 1     %= 1
 let scatter = fn x, y -> plot(x, y, {style = "points"})
 
+% scatter_titled(x, y, t): a scatter plot with title t.
+% e.g. scatter_titled([1, 2, 3], [2, 4, 9], "demo"); 1 %= 1
 let scatter_titled = fn x, y, t -> plot(x, y, {style = "points", title = t})
 
-% jitter(x, amount): spread overplotted values by uniform noise in
-% [-amount/2, amount/2], preserving shape. Seed rng() first for
-% reproducibility.
+% jitter(x, amount): x plus uniform noise in [-amount, amount] — to
+% separate overplotted integer-valued points.
+% e.g. rng(1); max(abs(jitter([1, 2, 3], 0.1) - [1, 2, 3])) <= 0.1 %= true
 let jitter = fn x, amount -> (
   let s = size(x);
   x + (rand(s[1], s[2]) - 0.5) * amount

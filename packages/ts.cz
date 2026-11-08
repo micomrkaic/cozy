@@ -4,20 +4,29 @@
 % mean(growth(y), "omit"), dropmissing on the table. Dates ride along
 % untouched: lag the VALUES, keep the date column as the axis.
 
-% lag(x, k = 1): x shifted down k places; the first k entries are missing.
+% lag(x, k = 1): x shifted down k places; the first k entries are missing
+% (NaN), so the result has the same length as x and lines up with it.
+% e.g. lag([1.0; 2; 3; 4])'                 %= [nan, 1, 2, 3]
+% e.g. lag([1.0; 2; 3; 4], 2)'              %= [nan, nan, 1, 2]
 let lag = fn x, k = 1 -> (
   let nn = length(x);
   if k >= nn then 0.0 / 0.0 * ones(nn, 1)
   else [0.0 / 0.0 * ones(k, 1); x[1 : nn - k, 1]] end
 )
 
-% diff(x, k = 1): x - lag(x, k), NaN-headed.
-let diff = fn x, k = 1 -> x - lag(x, k)
+% change(x, k = 1): the k-period change x - lag(x, k), NaN-headed and the
+% same length as x (the builtin diff is one shorter and has no holes).
+% e.g. change([1.0; 4; 9; 16])'             %= [nan, 3, 5, 7]
+let change = fn x, k = 1 -> x - lag(x, k)
 
-% growth(x, k = 1): percent growth over k periods, NaN-headed.
+% growth(x, k = 1): percent growth over k periods, 100 (x / lag(x, k) - 1),
+% NaN-headed — mean(growth(y), "omit") is the average growth rate.
+% e.g. growth([100.0; 102; 104])'           %= [nan, 2, 1.96078]
+% e.g. format(4); mean(growth([100.0; 0/0; 104; 106]), "omit") %= 1.923
 let growth = fn x, k = 1 -> 100 * (x ./ lag(x, k) - 1)
 
-% movavg(x, k): trailing k-period mean, NaN-headed until k points exist.
+% movavg(x, k): trailing k-period mean, NaN until k points exist.
+% e.g. movavg([1.0; 2; 3; 4; 5], 2)'        %= [nan, 1.5, 2.5, 3.5, 4.5]
 let movavg = fn x, k -> (
   let nn = length(x);
   let out = 0.0 / 0.0 * ones(nn, 1);
@@ -25,10 +34,12 @@ let movavg = fn x, k -> (
   out
 )
 
-% hpfilter(y, lambda = 1600): Hodrick-Prescott trend/cycle split.
-% Solves (I + lambda * D'D) tau = y with D the second-difference
-% operator — dense solve; fine for the few thousand points of a
-% macro series. Returns {trend, cycle}.
+% hpfilter(y, lambda = 1600): Hodrick-Prescott trend/cycle split — solves
+% (I + lambda D'D) tau = y with D the second-difference operator (dense;
+% fine for a few thousand points). 1600 is the quarterly convention,
+% 100 annual, 14400 monthly. Returns {trend, cycle} with trend + cycle = y.
+% e.g. rng(7); let y = cumsum(randn(50, 1)); let h = hpfilter(y); max(abs(h.trend + h.cycle - y)) < 1e-9 %= true
+% e.g. format(4); hpfilter([1.0; 2; 3; 4; 5]).trend[3] %= 3.000
 let hpfilter = fn y, lambda = 1600 -> (
   let T = length(y);
   if T < 4 then error("hpfilter: need at least 4 observations") end;
@@ -40,8 +51,9 @@ let hpfilter = fn y, lambda = 1600 -> (
   {trend = tau, cycle = y - tau}
 )
 
-% acf(x, K = 20): autocorrelations at lags 1..K (biased, the standard
-% estimator), as a column.
+% acf(x, K = 20): sample autocorrelations at lags 1..K (the standard
+% biased estimator), as a column.
+% e.g. format(2); acf([1.0; 2; 3; 4; 5; 6], 2)' %= [0.50, 0.057]
 let acf = fn x, K = 20 -> (
   let nn = length(x);
   let mu = mean(x);
@@ -54,7 +66,9 @@ let acf = fn x, K = 20 -> (
   out
 )
 
-% pacf(x, K = 20): partial autocorrelations via Durbin-Levinson.
+% pacf(x, K = 20): partial autocorrelations at lags 1..K by the
+% Durbin-Levinson recursion; an AR(p) cuts off after lag p.
+% e.g. format(2); pacf([1.0; 2; 3; 4; 5; 6], 2)' %= [0.50, -0.26]
 let pacf = fn x, K = 20 -> (
   let r = acf(x, K);
   let phi = zeros(K, K);
@@ -72,9 +86,10 @@ let pacf = fn x, K = 20 -> (
   out
 )
 
-% arfit(y, p): AR(p) by least squares on lagged regressors.
-% Returns {c, phi, sigma, resid} — intercept, coefficients (phi[j] on
-% lag j), residual std (dof-adjusted), and the residual column.
+% arfit(y, p): AR(p) by least squares on lagged regressors. Returns
+% {c, phi, sigma, resid} — intercept, coefficients (phi[j] on lag j), the
+% dof-adjusted residual std, and the residual column.
+% e.g. rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end; format(1); arfit(y, 1).phi[1] %= 0.5
 let arfit = fn y, p -> (
   let nn = length(y);
   if nn <= p + 1 then error("arfit: series too short for AR(p)") end;

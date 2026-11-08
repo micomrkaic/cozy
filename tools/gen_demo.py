@@ -60,17 +60,24 @@ w('% make test regenerates and diffs this file (the sync is a suite check).\n')
 w('%\n')
 w('%   demo()    the interactive tour: menu, pick a section, Enter advances\n')
 w('%   (a at the menu plays everything; the suite pipes that path headless)\n\n')
+w('% internal: print a line with braces escaped for the formatter.\n')
 w('let praw = fn t -> print(strrep(strrep(t, "{", "{{"), "}", "}}"))\n')
+w('% internal: is a value null?\n')
 w('let isnil = fn v -> str(v) == "null"\n')
 w('let ans = null\n')
+w('% internal: echo a transcript line as the REPL would, evaluate it, keep ans.\n')
 w('let dshow = fn s -> (praw("cozy> " + s); let v = eval(s); '
   'if !isnil(v) & !endswith(s, ";") then (ans = v; praw(str(v))) end; null)\n')
+w('% internal: the Enter-to-advance pause between problems.\n')
 w('let dwait = fn -> pause("        [ Enter for the next problem ] ")\n')
 # each problem starts from default numeric formatting: transcripts are
 # fresh sessions in the book, and format() state must not leak between them
+w('% internal: a problem heading, with numeric format reset to the default.\n')
 w('let dhead = fn t -> (format(6); print(""); praw("  ── Problem " + t); print(""))\n\n')
 
 for si, (title, probs) in enumerate(sections, 1):
+    w(f'% demo_sec{si}(): play section {si} of the book — {title} — straight through.\n')
+    w(f'% e.g. demo_sec{si}   % autocalls; the suite replays it headless\n')
     w(f'let demo_sec{si} = fn -> (\n')
     w(f'  print("");\n  praw("  ═══ Section {si}: {title} ═══");\n')
     for pi, (pid, ptitle, lines) in enumerate(probs):
@@ -81,6 +88,7 @@ for si, (title, probs) in enumerate(sections, 1):
             w('  dwait();\n')
     w('  null)\n\n')
 
+w('% internal: print the section menu.\n')
 w('let demo_menu = fn -> (\n')
 w('  print("");\n  print("  The Cozy tour — the book of examples, live.");\n')
 w('  print("  The demo and the book contain the same examples by construction.");\n')
@@ -97,6 +105,7 @@ w('  print("  Or jump straight in: demo9 (etc.) starts a section; Enter steps.")
 # problem); next advances one problem per call — one eval per click.
 w('let demo_seclens = [' + ', '.join(str(len(p)) for _, p in sections) + ']\n')
 w('let demo_cursec = 0\nlet demo_curprob = 0\n')
+w('% internal: play problem k2 of section s2.\n')
 w('let demo_playprob = fn s2, k2 -> (\n')
 for si, (_, probs) in enumerate(sections, 1):
     for pi, (pid, ptitle, lines) in enumerate(probs, 1):
@@ -105,6 +114,8 @@ for si, (_, probs) in enumerate(sections, 1):
             w(f'    dshow({cz_str(l)});\n')
         w('    null) end;\n')
 w('  null)\n\n')
+w('% next(): advance the guided tour by one problem (bare Enter does this too).\n')
+w('% e.g. next   % autocalls\n')
 w('let next = fn -> (\n')
 w('  if demo_cursec == 0 then print("  no section running — demo15 (etc.) starts one")\n')
 w('  elseif demo_curprob >= demo_seclens[demo_cursec] then '
@@ -115,8 +126,12 @@ w('    if demo_curprob < demo_seclens[demo_cursec] then '
   'else (print("        [ section finished — demo for the menu ]"); demo_cursec = 0) end)\n')
 w('  end; null)\n\n')
 for si in range(1, len(sections) + 1):
+    w(f'% demo{si}(): start the guided tour at section {si} ({title}); next advances.\n')
+    w(f'% e.g. demo{si}   % autocalls\n')
     w(f'let demo{si} = fn -> (demo_cursec = {si}; demo_curprob = 0; next())\n')
 w('\n')
+w('% demo(): the interactive tour of the book — a menu of sections, Enter advances.\n')
+w('% e.g. demo   % autocalls; q quits\n')
 w('let demo = fn -> (\n')
 w('  let going = true;\n')
 w('  while going do\n')

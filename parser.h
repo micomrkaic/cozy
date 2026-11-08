@@ -20,6 +20,7 @@ typedef struct {
     void   **scratch;     /* live parser scratch buffers, freed on parse error */
     uint32_t scr_len, scr_cap;
     int     in_index;     /* >0 while parsing index args (enables 'end') */
+    const char *src_begin; /* start of the source buffer (docstring capture) */
 } Parser;
 
 void     parser_init(Parser *p, const char *src, Arena *arena);

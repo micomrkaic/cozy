@@ -412,3 +412,16 @@ verify step for the promotion release pinned exactly this: the prompt
 value and the fzero-probe value must be equal. Any future dual-path
 feature (fast path vs generic, backend vs tier0, compiled vs quoted)
 owes the suite an agreement golden of the same shape.
+
+### Documenting is auditing
+
+Writing one verified example per package function (0.1.22) found three
+bugs in an afternoon that months of use had not: two packages shadowed
+builtins (finance's today/datestr after the Date kind arrived; ts's
+diff), and hdual collapsed a one-element array to a scalar, breaking
+Newton's method in one dimension. None was a documentation bug — the
+act of stating what each function does and proving it with an executed
+example IS a test of the function, at the one place tests rarely look:
+the boundary between the function's intended meaning and its neighbors.
+Law: a function without a verified example is a function nobody has
+checked against its own description.

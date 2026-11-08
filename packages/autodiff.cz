@@ -6,25 +6,29 @@
 # conditionals, and composition, because duals flow through the
 # numeric tower itself. See tests/58_autodiff.test.
 
-# d(f): the derivative of a scalar function, as a function.
-# f evaluated at x + 1*eps carries f'(x) in its eps part; dualeps is
-# total on plain numbers, so an f with a constant branch returns 0.
+# d(f): the derivative of a scalar function, as a function — f evaluated
+# at x + 1 eps carries f'(x) in its eps part (exact: no step, no
+# differencing). Works through closures, conditionals, composition.
+# e.g. d(fn x -> x^3)(2)                    %= 12
+# e.g. d(sin)(0)                            %= 1
 let d = fn f -> fn x -> dualeps(f(dual(x, 1)))
 
-# ad_seed(x, i): the i-th coordinate direction, in x's own shape.
+# ad_seed(x, i): the i-th coordinate direction in x's own shape (the
+# seed vector for one dual or hyper-dual pass).
+# e.g. ad_seed([5.0; 6.0; 7.0], 2)'         %= [0, 1, 0]
 let ad_seed = fn x, i -> ( let z = 0.0 * x; z[i] = 1; z )
 
-# grad(f): the gradient of f: R^n -> R, as a function of the vector x.
-# One dual pass per component (n passes), each seeded with e_i; the
-# result is a column of exact partial derivatives.
+# grad(f): the gradient of f: R^n -> R as a function of the column x —
+# one exact dual pass per coordinate, returned as a column.
+# e.g. grad(fn x -> x[1]^2 + 3 * x[2])([2.0; 1.0])' %= [4, 3]
 let grad = fn f -> fn x -> (
   map(fn i -> dualeps(f(dual(x, ad_seed(x, i)))), (1:numel(x))')
 )
 
-# hess(f): the exact Hessian of f: R^n -> R. One hyper-dual pass per
-# (i, j) pair with i <= j — hdual(x, e_i, e_j) seeds both directions,
-# hdual12 reads d2f/dxi dxj, and symmetry fills the mirror. hdual12 is
-# total on plain numbers, so constant branches contribute exact zeros.
+# hess(f): the Hessian of f: R^n -> R as a function of x — one hyper-dual
+# pass per (i, j) pair with i <= j, read by hdual12, mirrored by symmetry;
+# exact second derivatives, the engine under minimize_newton.
+# e.g. hess(fn x -> x[1]^2 * x[2])([1.0; 2.0]) %= [4, 2; 2, 0]
 let hess = fn f -> fn x -> (
   let n = numel(x);
   let H = zeros(n, n);

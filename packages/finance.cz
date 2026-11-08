@@ -7,37 +7,55 @@
 # ---- time value of money (END mode) --------------------------------
 # The TVM identity: pv*(1+i)^n + pmt*((1+i)^n - 1)/i + fv = 0
 
+# internal: guard that a per-period rate is above -100%.
 let fin_check_i = fn i -> assert(i > -1, "rate must be > -1, got {}", i)
 
-# pmt(n, i, pv, fv): the level payment.
+# pmt(n, i, pv, fv): the level payment that amortizes pv to fv over n
+# periods at rate i per period (HP-12C PMT; END mode, HP sign convention:
+# a loan received is positive, so its payment comes out negative).
+# e.g. pmt(360, 0.005, 200000, 0)           %= -1199.1
+# e.g. pmt(10, 0.05, 0, -1000)              %= 79.5046
 let pmt = fn n, i, pv, fv -> (
   fin_check_i(i);
   assert(n > 0, "pmt: n must be positive, got {}", n);
   if i == 0 then -(pv + fv) / n
   else -(pv * (1 + i)^n + fv) * i / ((1 + i)^n - 1) end)
 
-# fv(n, i, pv, pmt): future value after n periods.
+# fv(n, i, pv, pmt): future value after n periods of a present amount
+# plus level payments (HP-12C FV).
+# e.g. fv(10, 0.05, -1000, 0)               %= 1628.89
+# e.g. fv(12, 0.01, 0, -100)                %= 1268.25
 let fv = fn n, i, pv, p -> (
   fin_check_i(i);
   if i == 0 then -(pv + p * n)
   else -(pv * (1 + i)^n + p * ((1 + i)^n - 1) / i) end)
 
-# pv(n, i, pmt, fv): present value of payments plus a future amount.
+# pv(n, i, pmt, fv): present value of level payments plus a future
+# amount (HP-12C PV).
+# e.g. pv(10, 0.05, -100, 0)                %= 772.173
+# e.g. pv(360, 0.005, -1199.10, 0)          %= 200000
 let pv = fn n, i, p, f -> (
   fin_check_i(i);
   if i == 0 then -(f + p * n)
   else -(f + p * ((1 + i)^n - 1) / i) / (1 + i)^n end)
 
-# nper(i, pv, pmt, fv): number of periods, solved directly.
+# nper(i, pv, pmt, fv): the number of periods, solved in closed form
+# (HP-12C n); fractional when the cash flows do not land exactly.
+# e.g. nper(0.005, 200000, pmt(360, 0.005, 200000, 0), 0) %= 360
+# e.g. nper(0.05, -1000, 0, 2000)           %= 14.2067
 let nper = fn i, pv0, p, f -> (
   fin_check_i(i);
   if i == 0 then -(pv0 + f) / p
   else ln((p - f * i) / (p + pv0 * i)) / ln(1 + i) end)
 
-# rate(n, pv, pmt, fv): the per-period rate, solved numerically. The upper
-# bracket grows adaptively so large n cannot overflow the probe.
+# internal: grow the upper bracket for the rate solve until the TVM
+# identity changes sign (large n must not overflow the probe).
 let fin_rate_hi = fn g, lo, hi -> (
   if isfinite(g(hi)) && (g(hi) * g(lo) > 0) then fin_rate_hi(g, lo, hi * 2) else hi end)
+# rate(n, pv, pmt, fv): the per-period rate, solved numerically by
+# bracketing the TVM identity (HP-12C i).
+# e.g. format(3); rate(360, 200000, -1199.10, 0) %= 0.00500
+# e.g. rate(10, -1000, 0, 2000)             %= 0.0717735
 let rate = fn n, pv0, p, f -> (
   let g = fn i -> pv0 * (1 + i)^n + p * ((1 + i)^n - 1) / i + f;
   let hi = fin_rate_hi(g, 1e-9, 0.01);
@@ -47,10 +65,18 @@ let rate = fn n, pv0, p, f -> (
 # ---- cash flows ------------------------------------------------------
 # Cash flows as a vector, first entry at t = 0 (the HP-12C's CF0).
 
+# npv(r, cfs): net present value of the cash flows cfs at rate r;
+# cfs is a ROW; cfs[1] is at time 0 (the HP-12C's CF0), undiscounted.
+# e.g. npv(0.10, [-1000, 500, 500, 500])    %= 243.426
+# e.g. npv(0.0, [-100, 60, 60])             %= 20
 let npv = fn r, cfs -> (
   fin_check_i(r);
   sum(cfs ./ (1 + r) .^ (0 : numel(cfs) - 1)))
 
+# irr(cfs): internal rate of return — the rate at which npv is zero,
+# by root-finding; errors when the flows never change sign.
+# e.g. irr([-1000, 500, 500, 500])          %= 0.233752
+# e.g. irr([-100, 110])                     %= 0.1
 let irr = fn cfs -> (
   assert(numel(cfs) >= 2, "irr: need at least two cash flows");
   assert((min(cfs) < 0) && (max(cfs) > 0),
@@ -58,18 +84,31 @@ let irr = fn cfs -> (
   fzero(fn r -> npv(r, cfs), -0.9999, 100))
 
 # ---- bonds -----------------------------------------------------------
-# Period-based (n periods to maturity, freq coupons per year). Rates annual.
+# n is YEARS to maturity, freq coupons per year; crate and y are annual
+# rates (coupon and discounting happen per period, at crate/freq, y/freq).
 
+# bond_price(face, crate, y, n, freq): price of a bond with face value,
+# annual coupon rate crate, annual yield y, n YEARS to maturity, freq
+# coupons per year (coupon and discounting both per period).
+# e.g. bond_price(100, 0.05, 0.05, 10, 2)   %= 100
+# e.g. bond_price(100, 0.05, 0.06, 10, 2)   %= 92.5613
 let bond_price = fn face, crate, y, n, freq -> (
   assert(n > 0, "bond_price: n must be positive");
   let c = face * crate / freq;
   let k = 1 : n * freq;
   sum(c ./ (1 + y / freq) .^ k) + face / (1 + y / freq)^(n * freq))
 
+# bond_ytm(price, face, crate, n, freq): the annual yield implied by a
+# price — bond_price inverted by root-finding.
+# e.g. format(3); bond_ytm(92.5613, 100, 0.05, 10, 2) %= 0.0600
+# e.g. bond_ytm(100, 100, 0.05, 10, 2)      %= 0.05
 let bond_ytm = fn price, face, crate, n, freq -> (
   assert(price > 0, "bond_ytm: price must be positive");
   fzero(fn y -> bond_price(face, crate, y, n, freq) - price, 1e-9, 10))
 
+# bond_duration(face, crate, y, n, freq): Macaulay duration in years —
+# the present-value-weighted mean time to the cash flows.
+# e.g. bond_duration(100, 0.05, 0.05, 10, 2) %= 7.98945
 let bond_duration = fn face, crate, y, n, freq -> (
   let c = face * crate / freq;
   let k = 1 : n * freq;
@@ -77,9 +116,15 @@ let bond_duration = fn face, crate, y, n, freq -> (
   let P = sum(disc) + face / (1 + y / freq)^(n * freq);
   (sum((k ./ freq) .* disc) + (n * freq / freq) * face / (1 + y / freq)^(n * freq)) / P)
 
+# bond_mduration(face, crate, y, n, freq): modified duration, the
+# percent price change per unit yield change (Macaulay / (1 + y/freq)).
+# e.g. bond_mduration(100, 0.05, 0.05, 10, 2) %= 7.79458
 let bond_mduration = fn face, crate, y, n, freq -> (
   bond_duration(face, crate, y, n, freq) / (1 + y / freq))
 
+# bond_convexity(face, crate, y, n, freq): convexity in years squared —
+# the second-order term of the price-yield curve.
+# e.g. bond_convexity(100, 0.05, 0.05, 10, 2) %= 73.6287
 let bond_convexity = fn face, crate, y, n, freq -> (
   let c = face * crate / freq;
   let k = 1 : n * freq;
@@ -92,6 +137,11 @@ let bond_convexity = fn face, crate, y, n, freq -> (
 # amort(principal, i, n): the full schedule as a record of column vectors —
 # {period, payment, interest, principal, balance}. Plot the balance!
 
+# amort(principal, i, n): the full amortization schedule as a record of
+# columns {period, payment, interest, principal, balance} — a table you
+# can index, sum, or plot (plot(s.period, s.balance)).
+# e.g. abs(amort(1000, 0.01, 3).balance[3]) < 1e-9 %= true
+# e.g. format(4); sum(amort(1000, 0.01, 3).interest) %= 20.07
 let amort = fn principal, i, n -> (
   let p = -pmt(n, i, principal, 0);
   let period = reshape(1:n, n, 1);
@@ -109,54 +159,32 @@ let amort = fn principal, i, n -> (
   {period = period, payment = payment, interest = interest,
    principal = princ, balance = balance})
 
-# ---- dates (HP-12C's date arithmetic) --------------------------------
-# Serial dates via the Julian Day Number; y, m, d as integers.
+# ---- dates (HP-12C's date arithmetic, on the Date kind) ---------------
+# Cozy's Date kind (date(), datestr, today, year/month/day, weekday, and
+# date - date in days) is the serial-date machinery the HP-12C had to
+# build by hand, so this section is thin: the three HP keystrokes that
+# still read better as functions, on y, m, d integers.
 
-let datenum = fn y, m, d -> (
-  assert((m >= 1) && (m <= 12), "datenum: month must be 1..12, got {}", m);
-  assert((d >= 1) && (d <= 31), "datenum: day must be 1..31, got {}", d);
-  let a = floor((14 - m) / 12);
-  let y2 = y + 4800 - a;
-  let m2 = m + 12 * a - 3;
-  d + floor((153 * m2 + 2) / 5) + 365 * y2
-    + floor(y2 / 4) - floor(y2 / 100) + floor(y2 / 400) - 32045)
+# days(y1,m1,d1, y2,m2,d2): actual days between two calendar dates
+# (HP-12C ΔDYS); negative when the second date is earlier.
+# e.g. days(2024, 2, 28, 2024, 3, 1)           %= 2
+# e.g. days(2026, 1, 1, 2026, 7, 9)            %= 189
+let days = fn y1, m1, d1, y2, m2, d2 -> date(y2, m2, d2) - date(y1, m1, d1)
 
-# daterec(jdn): the calendar date as a record {y, m, d}.
-let daterec = fn jdn -> (
-  let a = jdn + 32044;
-  let b = floor((4 * a + 3) / 146097);
-  let c = a - floor(146097 * b / 4);
-  let d2 = floor((4 * c + 3) / 1461);
-  let e = c - floor(1461 * d2 / 4);
-  let m2 = floor((5 * e + 2) / 153);
-  {y = 100 * b + d2 - 4800 + floor(m2 / 10),
-   m = m2 + 3 - 12 * floor(m2 / 10),
-   d = e - floor((153 * m2 + 2) / 5) + 1})
+# dateadd(y,m,d, k): the calendar date k days later, as a Date (HP-12C
+# DATE) — leap days and year ends handled by the calendar, not by you.
+# e.g. dateadd(2024, 2, 28, 2)                 %= 2024-03-01
+# e.g. dateadd(2024, 12, 31, 1)                %= 2025-01-01
+let dateadd = fn y, m, d, k -> date(y, m, d) + k
 
-# fin_pad2: zero-pad a day or month number to two digits.
-let fin_pad2 = fn v -> (if v < 10 then "0" else "" end) + fmt("{:.0f}", v)
+# dow(y,m,d): day of week, 1 = Monday .. 7 = Sunday (same convention as
+# the weekday builtin, which takes a Date).
+# e.g. dow(2026, 7, 9)                          %= 4
+let dow = fn y, m, d -> weekday(date(y, m, d))
 
-# datestr(jdn): the calendar date as a string, "YYYY-MM-DD".
-let datestr = fn jdn -> (
-  let r = daterec(jdn);
-  fmt("{:.0f}", r.y) + "-" + fin_pad2(r.m) + "-" + fin_pad2(r.d))
-
-# today(): the current date as a serial day number (JDN), so date
-# arithmetic reads naturally: datestr(today() + 90), days to a maturity, ...
-let today = fn -> (
-  let t = now();
-  datenum(t.y, t.m, t.d))
-
-# days(y1,m1,d1, y2,m2,d2): actual days between two dates (HP-12C ΔDYS).
-let days = fn y1, m1, d1, y2, m2, d2 -> datenum(y2, m2, d2) - datenum(y1, m1, d1)
-
-# dateadd(y,m,d, k): the calendar date k days later, as {y, m, d} (HP-12C DATE).
-let dateadd = fn y, m, d, k -> daterec(datenum(y, m, d) + k)
-
-# dow(y,m,d): day of week, 1 = Monday .. 7 = Sunday.
-let dow = fn y, m, d -> mod(datenum(y, m, d), 7) + 1
-
-# days360(y1,m1,d1, y2,m2,d2): 30/360 US day count (bond conventions).
+# days360(y1,m1,d1, y2,m2,d2): 30/360 US day count (bond conventions):
+# every month is 30 days, with the month-end adjustments of the US rule.
+# e.g. days360(2024, 1, 31, 2024, 7, 31)        %= 180
 let days360 = fn y1, m1, d1, y2, m2, d2 -> (
   let dd1 = min(d1, 30);
   let dd2 = if (d2 == 31) && (dd1 == 30) then 30 else d2 end;

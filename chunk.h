@@ -78,6 +78,7 @@ typedef struct Chunk {
     uint32_t ndefaults;   /* trailing params with defaults; min arity = nparams - ndefaults */
     const char *fname; uint32_t fnamelen;   /* function name for backtraces
                                                (the let-binding; empty = anonymous) */
+    const char *doc; uint32_t doclen;       /* docstring span (into the kept source) */
 } Chunk;
 
 void     chunk_init(Chunk *c);

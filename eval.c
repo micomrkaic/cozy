@@ -1887,9 +1887,11 @@ static double hd_comp(Interp *I, Value v, size_t k, const char *who)
 static Value bi_hdual(Interp *I, Value *args, uint32_t n)
 {
     uint32_t rows = 0, cols = 0;
+    bool any_array = false;
     for (uint32_t i = 0; i < n; i++) {
         if (is_array(args[i])) {
             ArrObj *a = as_arr(args[i]);
+            any_array = true;
             if (a->rows * a->cols != 1) {
                 if (rows && (rows != a->rows || cols != a->cols))
                     runtime_error(I, "hdual: array arguments must share one shape");
@@ -1898,6 +1900,10 @@ static Value bi_hdual(Interp *I, Value *args, uint32_t n)
         } else if (!is_num(args[i]) && args[i].kind != VAL_BOOL)
             runtime_error(I, "hdual: expected numbers or arrays, got %s", type_name(args[i].kind));
     }
+    /* a 1-element ARRAY input keeps array shape (as dual does) — the n=1
+     * Hessian seeded hdual(x, e1, e1) must stay indexable; found by the
+     * package-docstring rite on maximize_newton over a 1-vector */
+    if (!rows && any_array) { rows = 1; cols = 1; }
     if (!rows) {                                        /* all scalars */
         double s12 = n >= 4 ? hd_comp(I, args[3], 0, "hdual") : 0.0;
         return val_hdual(hd_comp(I, args[0], 0, "hdual"), hd_comp(I, args[1], 0, "hdual"),
@@ -5071,6 +5077,96 @@ static void help_arity(FILE *out, BuiltinObj *b)
     else                                   fprintf(out, "%u to %u arguments", b->min_arity, b->max_arity);
 }
 
+/* ---- help for user/package functions (the docstring law) ------------
+ * Signature from the code (always right), description from the comment
+ * block captured above the let, examples from its "e.g." lines — the
+ * same shape as builtin help. Which shelf (package) a function came from
+ * is looked up by name. */
+static const char *help_shelf_of(const char *nm, uint32_t len)
+{
+    for (size_t gi = 0; gi < g_nlg; gi++)
+        if (lg_has(&g_lg[gi], nm, len)) return g_lg[gi].path;
+    return NULL;
+}
+/* strip the comment marker and one following space from a doc line */
+static const char *doc_line_text(const char *s, const char *e, uint32_t *len)
+{
+    while (s < e && (*s == ' ' || *s == '\t')) s++;
+    if (s < e && (*s == '%' || *s == '#')) s++;
+    if (s < e && *s == ' ') s++;
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r')) e--;
+    *len = (uint32_t)(e - s);
+    return s;
+}
+static void help_closure(FILE *out, CloObj *cl)
+{
+    const Chunk *c = cl->chunk;
+    const char *nm = c->fnamelen ? c->fname : "fn";
+    uint32_t nml = c->fnamelen ? c->fnamelen : 2;
+    /* parameter text: between "fn" and the first "->" of the lambda source */
+    const char *ps = NULL, *pe = NULL;
+    if (c->src && c->srclen > 2) {
+        const char *s = c->src, *end = c->src + c->srclen;
+        if (s + 2 <= end && !strncmp(s, "fn", 2)) {
+            s += 2;
+            const char *arrow = NULL;
+            for (const char *q = s; q + 1 < end; q++)
+                if (q[0] == '-' && q[1] == '>') { arrow = q; break; }
+            if (arrow) {
+                while (s < arrow && (*s == ' ' || *s == '\t')) s++;
+                pe = arrow;
+                while (pe > s && (pe[-1] == ' ' || pe[-1] == '\t' || pe[-1] == '\n')) pe--;
+                ps = s;
+            }
+        }
+    }
+    fprintf(out, "  %.*s(%.*s)\n", (int)nml, nm, ps ? (int)(pe - ps) : 0, ps ? ps : "");
+    /* description lines, then the provenance line, then examples */
+    bool any_desc = false;
+    const char *ex[32]; uint32_t exl[32]; int nex = 0;
+    if (c->doc && c->doclen) {
+        const char *p = c->doc, *end = c->doc + c->doclen;
+        bool first = true;
+        while (p < end) {
+            const char *nl = memchr(p, '\n', (size_t)(end - p));
+            const char *le = nl ? nl : end;
+            uint32_t L; const char *tx = doc_line_text(p, le, &L);
+            if (L >= 4 && !strncmp(tx, "e.g.", 4)) {
+                if (nex < 32) { const char *q = tx + 4; uint32_t ql = L - 4;
+                    while (ql && *q == ' ') { q++; ql--; }
+                    ex[nex] = q; exl[nex] = ql; nex++; }
+            } else if (L) {
+                /* a leading "name(...): " repeats the signature — drop it */
+                if (first && L > nml && !strncmp(tx, nm, nml) && tx[nml] == '(') {
+                    const char *colon = memchr(tx, ':', L);
+                    if (colon) { uint32_t skip = (uint32_t)(colon + 1 - tx);
+                        while (skip < L && tx[skip] == ' ') skip++;
+                        tx += skip; L -= skip; }
+                }
+                if (L) { fprintf(out, "      %.*s\n", (int)L, tx); any_desc = true; }
+                first = false;
+            }
+            p = nl ? nl + 1 : end;
+        }
+    }
+    (void)any_desc;
+    const char *shelf = c->fnamelen ? help_shelf_of(c->fname, c->fnamelen) : NULL;
+    uint32_t np = c->nparams, nd = c->ndefaults;
+    fprintf(out, "      %s, ", shelf ? "package function" : "your function");
+    if (nd) fprintf(out, "%u to %u arguments", np - nd, np);
+    else fprintf(out, "%u argument%s", np, np == 1 ? "" : "s");
+    if (shelf) fprintf(out, "  (%s)", shelf);
+    fputc('\n', out);
+    for (int k = 0; k < nex; k++) {
+        fprintf(out, "      %s", k == 0 ? "e.g.  " : "      ");
+        for (uint32_t i = 0; i < exl[k]; i++) {            /* '%=' is the verifier marker */
+            if (ex[k][i] == '%' && i + 1 < exl[k] && ex[k][i+1] == '=') { fputc('%', out); i++; }
+            else fputc(ex[k][i], out);
+        }
+        fputc('\n', out);
+    }
+}
+
 static Value bi_help(Interp *I, Value *args, uint32_t n)
 {
     (void)I;
@@ -5101,9 +5197,66 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
                 }
             }
         } else if (v.kind == VAL_CLOSURE) {
-            uint32_t np = as_clo(v)->chunk->nparams, nd = as_clo(v)->chunk->ndefaults;
-            if (nd) fprintf(vout(), "  a function you defined, taking %u to %u arguments\n", np - nd, np);
-            else fprintf(vout(), "  a function you defined, taking %u argument%s\n", np, np == 1 ? "" : "s");
+            help_closure(vout(), as_clo(v));
+        } else if (v.kind == VAL_STRING) {
+            /* help("name"): a global by name — the way to ask about a zero-
+             * argument function without autocalling it (help(demo) would run
+             * the demo); help("pkg"): list a loaded package's functions with
+             * their first doc line. */
+            StrObj *s = as_str(v);
+            EnvObj *g = I->globals;
+            Value *found = NULL;
+            for (uint32_t i = 0; g && i < g->count; i++)
+                if (g->namelens[i] == s->len && !memcmp(g->names[i], s->data, s->len))
+                    { found = &g->vals[i]; break; }
+            int gi = -1;
+            for (size_t k = 0; k < g_nlg && gi < 0; k++) {
+                const char *lp = g_lg[k].path; size_t ll = strlen(lp);
+                const char *base = strrchr(lp, '/'); base = base ? base + 1 : lp;
+                size_t bl = strlen(base);
+                if ((ll == s->len && !memcmp(lp, s->data, ll)) ||
+                    (bl == s->len && !memcmp(base, s->data, bl)) ||
+                    (bl == s->len + 3 && !memcmp(base, s->data, s->len) && !strcmp(base + s->len, ".cz")))
+                    gi = (int)k;
+            }
+            if (found && found->kind == VAL_CLOSURE) help_closure(vout(), as_clo(*found));
+            else if (found && found->kind == VAL_BUILTIN) { Value a2 = *found; bi_help(I, &a2, 1); }
+            else if (gi >= 0) {
+                fprintf(vout(), "  %s — %zu name%s\n", g_lg[gi].path, g_lg[gi].n, g_lg[gi].n == 1 ? "" : "s");
+                for (size_t m = 0; m < g_lg[gi].n; m++) {
+                    for (uint32_t i = 0; g && i < g->count; i++) {
+                        if (g->namelens[i] != g_lg[gi].lens[m] ||
+                            memcmp(g->names[i], g_lg[gi].names[m], g->namelens[i])) continue;
+                        if (g->vals[i].kind != VAL_CLOSURE) break;
+                        const Chunk *c = as_clo(g->vals[i])->chunk;
+                        /* first non-example doc line, minus a leading "name(...): " */
+                        const char *d = c->doc; uint32_t dl = c->doclen; uint32_t L = 0; const char *tx = "";
+                        while (d && dl) {
+                            const char *nl = memchr(d, '\n', dl);
+                            const char *le = nl ? nl : d + dl;
+                            tx = doc_line_text(d, le, &L);
+                            if (L && strncmp(tx, "e.g.", 4)) break;
+                            L = 0;
+                            if (!nl) break;
+                            dl -= (uint32_t)(le + 1 - d); d = le + 1;
+                        }
+                        if (L > c->fnamelen && !strncmp(tx, c->fname, c->fnamelen) && tx[c->fnamelen] == '(') {
+                            const char *colon = memchr(tx, ':', L);
+                            if (colon) {
+                                uint32_t sk = (uint32_t)(colon + 1 - tx);
+                                while (sk < L && tx[sk] == ' ') sk++;
+                                tx += sk; L -= sk;
+                            }
+                        }
+                        if (L >= 9 && !strncmp(tx, "internal", 8)) break;   /* helpers stay out */
+                        fprintf(vout(), "    %-16.*s %.*s\n", (int)g->namelens[i], g->names[i], (int)L, tx);
+                        break;
+                    }
+                }
+                fprintf(vout(), "  help(\"name\") or help(name) for any one of them\n");
+            }
+            else if (found) fprintf(vout(), "  %.*s: a %s value\n", (int)s->len, s->data, type_name(found->kind));
+            else fprintf(vout(), "  no name or loaded package called '%.*s' (who lists both)\n", (int)s->len, s->data);
         } else if (v.kind == VAL_ARRAY) {
             ArrObj *a = as_arr(v);
             fprintf(vout(), "  a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));

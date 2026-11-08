@@ -3282,7 +3282,7 @@ what is real; `dropmissing` hands the HP filter a clean column. Dates
 carry their own algebra: the closing check is `date - date`
 arithmetic, and `plot(t.date, t.gdp)` labels the axis with calendar
 dates on every backend. Entries 15 and 16 of the docket, doing one
-workday's job together (the ts package: `lag`, `diff`, `growth`,
+workday's job together (the ts package: `lag`, `change`, `growth`,
 `movavg`, `hpfilter`, `acf`, `pacf`, `arfit`).
 
 ## Appendix A. Finance (finance.cz)

@@ -143,6 +143,7 @@ test: vmtest $(BIN)
 	@bash tests/run_manual.sh
 	@bash tests/run_plot.sh
 	@bash tests/run_examples.sh
+	@bash tests/run_pkgdocs.sh
 	@bash tests/run_ascii_plot.sh
 	@bash tests/run_longline.sh
 	@timeout 30 python3 tests/run_completion.py || true

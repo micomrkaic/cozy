@@ -1,5 +1,45 @@
 # Cozy changelog
 
+## 0.1.22 — help for every function, by the docstring law
+
+### Added
+- **Package and user functions get builtin-grade help** (owner's
+  request, with the before/after transcript): the comment block
+  directly above `let NAME = fn ...` is NAME's docstring. The parser
+  captures it (a span into the source closures already keep), and
+  help(NAME) renders signature-from-code (defaults included),
+  description, provenance ("package function, 2 arguments
+  (packages/finance.cz)" or "your function"), and the block's e.g.
+  lines — the exact shape builtin help has.
+- **Every package example is executed by the suite**: `e.g. EXPR %=
+  EXPECTED` lines run after load() and must print EXPECTED
+  (tests/verify_pkgdocs.py, now in make test), and the same script
+  lints that every package function carries a description and an
+  example (or an `internal:` block). 150 examples across the eleven
+  packages, all verified; demo.cz's generator emits its own.
+  tools/pkgdoc_fill.py fills `%= ?` placeholders from the interpreter.
+- **help("pkg")** lists a loaded package's functions with their first
+  line; **help("name")** asks by name — the way to read about a
+  zero-argument function without autocalling it. data/cube.cz ships as
+  the smallest demonstration; the manual and package guide state the law.
+
+### Fixed (found by writing the examples — see LESSONS, "Documenting is
+### auditing")
+- **finance.cz shadowed the today and datestr builtins** (its JDN-era
+  date section predated the Date kind): loading finance broke
+  datestr(date(...)) and made today() return 2.46e6. The section now
+  rides on the Date kind — days, dateadd (returns a Date), dow, days360
+  — and datenum/daterec/datestr/today/fin_pad2 are gone. Conformance
+  edit recorded: 38_finance's date pins and PACKAGES.md's finance table
+  follow.
+- **ts.cz shadowed the diff builtin**: its NaN-headed difference is now
+  `change(x, k = 1)`.
+- **hdual collapsed a 1-element array to a scalar**, so the Hessian's
+  seeded pass was not indexable and minimize_newton failed in one
+  dimension; it now keeps array shape like dual does. Goldens added.
+- bond_* docstrings state n = YEARS to maturity, which the code and
+  goldens always meant (the old header comment said periods).
+
 ## 0.1.21 — make install builds the real thing
 
 ### Fixed
@@ -68,7 +108,7 @@
 ## 0.1.18 — the time-series workbench (entries 15+16, finished story)
 
 ### Added
-- **packages/ts.cz**: lag, diff, growth, movavg (same length, NaN
+- **packages/ts.cz**: lag, change, growth, movavg (same length, NaN
   heads — entry 15's "omit"/dropmissing machinery applies directly),
   hpfilter (Hodrick-Prescott by dense solve; lambda = 1600 default),
   acf/pacf (Durbin-Levinson), arfit (AR(p) least squares with

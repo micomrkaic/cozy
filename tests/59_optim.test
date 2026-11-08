@@ -38,3 +38,8 @@ load("packages/optim.cz"); (maximize[x = [0.0]] -(x[1] - 2)^2).x[1]
 2
 load("packages/optim.cz"); sum[k = 1:10] k^2
 385
+# n = 1 Newton: hdual on a 1-element array keeps array shape (docstring-rite catch)
+hdual([2.0], [1.0], [1.0])
+=> [2+1eps1+1eps2+0eps12]
+load("packages/optim.cz"); minimize_newton(fn x -> (x[1] - 5)^2, [0.0]).x[1]
+=> 5

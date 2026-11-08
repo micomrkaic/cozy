@@ -5,12 +5,17 @@
 # Both accept dense matrices too; anything with * and a column works.
 # See tests/57_sparselin.test.
 
+# internal: dot product of two columns.
 let sl_dot = fn x, y -> sum(x .* y)
+# internal: Euclidean norm of a column.
 let sl_norm = fn x -> sqrt(sum(x .* x))
 
-# cg(A, b): solve A x = b for symmetric positive definite A.
-# Plain CG from x0 = 0; stops at relative residual 1e-10 or 200*n steps.
+# cg(A, b): solve A x = b for symmetric positive definite A by conjugate
+# gradient, using only A * v — so sparse A never densifies (dense A works
+# too). From x0 = 0; stops at relative residual 1e-10 or 200 n steps.
 # Returns {x, iters, relres}.
+# e.g. cg([4, 1; 1, 3], [1; 2]).x'          %= [0.0909091, 0.636364]
+# e.g. cg(sparse(eye(3) * 2), [2; 4; 6]).x' %= [1, 2, 3]
 let cg = fn A, b -> (
   let b2 = sl_norm(b);
   if b2 == 0 then return {x = 0 * b, iters = 0, relres = 0} end;
@@ -32,10 +37,9 @@ let cg = fn A, b -> (
   end;
   {x = x, iters = it, relres = sqrt(rs) / b2})
 
-# powerit(A): dominant eigenpair {value, vector, iters} by power iteration
-# with a Rayleigh-quotient estimate. Deterministic start (normalized ones);
-# if the dominant eigenvector is orthogonal to ones, perturb the start
-# yourself, e.g. powerit_from(A, rand(size(A)[1], 1)).
+# powerit_from(A, x0): power iteration from the start vector x0 —
+# dominant eigenpair {value, vector, iters} by Rayleigh quotient.
+# e.g. format(4); powerit_from([2, 0; 0, 1], [1; 1]).value %= 2.000
 let powerit_from = fn A, x0 -> (
   let x = x0 / sl_norm(x0);
   let lam = 0;
@@ -54,6 +58,10 @@ let powerit_from = fn A, x0 -> (
   end;
   {value = lam, vector = x, iters = it})
 
+# powerit(A): dominant eigenpair {value, vector, iters} by power iteration
+# from normalized ones (perturb the start with powerit_from if the
+# dominant eigenvector is orthogonal to ones).
+# e.g. format(4); powerit([2, 1; 1, 2]).value %= 3.000
 let powerit = fn A -> (
   let n = size(A)[1];
   powerit_from(A, ones(n, 1)))

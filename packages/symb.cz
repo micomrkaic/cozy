@@ -16,22 +16,49 @@
 % the dispatchers with elseif, the feature this package's nested ends
 % helped motivate.)
 
-% ---- constructors ----
+% C(v): a constant node of the expression tree.
+% e.g. show(C(5))                           %= "5"
 let C = fn v -> {op = "const", v = v}
 let X = {op = "var"}
+% add(a, b): the sum node a + b.
+% e.g. show(add(X, C(1)))                   %= "(x + 1)"
 let add = fn a, b -> {op = "add", l = a, r = b}
+% mul(a, b): the product node a * b.
+% e.g. show(mul(C(2), X))                   %= "(2 * x)"
 let mul = fn a, b -> {op = "mul", l = a, r = b}
+% powc(a, n): the power node a^n for a numeric exponent n.
+% e.g. show(powc(X, 3))                     %= "x^3"
 let powc = fn a, n -> {op = "pow", l = a, n = n}
+% sinx(a): the sin node.
+% e.g. show(ddx(sinx(X)))                   %= "(cos(x) * 1)"
 let sinx = fn a -> {op = "sin", l = a}
+% cosx(a): the cos node.
+% e.g. show(ddx(cosx(X)))                   %= "((-sin(x)) * 1)"
 let cosx = fn a -> {op = "cos", l = a}
+% tanx(a): the tan node.
+% e.g. evalx(tanx(X), 0)                    %= 0
 let tanx = fn a -> {op = "tan", l = a}
+% expx(a): the exp node.
+% e.g. show(ddx(expx(X)))                   %= "(exp(x) * 1)"
 let expx = fn a -> {op = "exp", l = a}
+% logx(a): the natural-log node.
+% e.g. show(simp(ddx(logx(X))))             %= "(1 / x)"
 let logx = fn a -> {op = "log", l = a}
+% sub(a, b): a - b, desugared at construction to add(a, mul(C(-1), b)) so
+% the calculus needs no subtraction rule.
+% e.g. evalx(sub(X, C(1)), 5)               %= 4
 let sub = fn a, b -> add(a, mul(C(-1), b))
+% divx(a, b): a / b, desugared to mul(a, powc(b, -1)) — the quotient rule
+% falls out of the power and product rules.
+% e.g. evalx(divx(C(1), X), 4)              %= 0.25
 let divx = fn a, b -> mul(a, powc(b, -1))
+% sqrtx(a): the square root, as powc(a, 0.5).
+% e.g. evalx(sqrtx(X), 9)                   %= 3
 let sqrtx = fn a -> powc(a, 0.5)
 
-% ---- the derivative ----
+% ddx(e): the derivative of expression e with respect to x, by structural
+% recursion (product, power, and chain rules); simp tidies the result.
+% e.g. show(simp(ddx(powc(X, 3))))          %= "(3 * x^2)"
 let ddx = fn e -> (
   if e.op == "const" then C(0)
   elseif e.op == "var" then C(1)
@@ -46,7 +73,8 @@ let ddx = fn e -> (
   end
 )
 
-% ---- evaluation at a point ----
+% evalx(e, x): evaluate expression e at the number x.
+% e.g. evalx(add(powc(X, 2), C(1)), 3)      %= 10
 let evalx = fn e, x -> (
   if e.op == "const" then e.v
   elseif e.op == "var" then x
@@ -61,7 +89,8 @@ let evalx = fn e, x -> (
   end
 )
 
-% ---- substitution: replace the variable with another expression ----
+% subst(e, g): substitute the expression g for x throughout e.
+% e.g. show(subst(powc(X, 2), add(X, C(1)))) %= "(x + 1)^2"
 let subst = fn e, g -> (
   if e.op == "const" then e
   elseif e.op == "var" then g
@@ -72,7 +101,9 @@ let subst = fn e, g -> (
   end
 )
 
-% ---- simplifier: fold constants, strip identities, pull constants left ----
+% simp(e): algebraic simplification — constant folding, 0 and 1 identities,
+% power merging — applied bottom-up.
+% e.g. show(simp(add(mul(C(0), X), mul(C(1), X)))) %= "x"
 let simp = fn e -> (
   if e.op == "add" then (
     let a = simp(e.l); let b = simp(e.r);
@@ -119,9 +150,13 @@ let simp = fn e -> (
   end
 )
 
-% ---- pretty printer (division- and subtraction-aware) ----
+% internal: is e the constant -1 (a negated factor when printing)?
 let is_neg1 = fn e -> if e.op == "const" then e.v == -1 else false end
+% internal: render a denominator factor b^m for show.
 let showdenom = fn b, m -> if m == 1 then show(b) else show(b) + "^" + str(m) end
+% show(e): render an expression tree as a string, products and powers in
+% infix with parentheses.
+% e.g. show(add(mul(C(3), powc(X, 2)), C(1))) %= "((3 * x^2) + 1)"
 let show = fn e -> (
   if e.op == "const" then str(e.v)
   elseif e.op == "var" then "x"
@@ -152,26 +187,36 @@ let show = fn e -> (
   end
 )
 
-% ---- the k-th derivative, simplified as it goes ----
+% dn(e, k): the k-th derivative, simplified at every step.
+% e.g. show(dn(powc(X, 4), 2))              %= "(12 * x^2)"
 let dn = fn e, k -> if k <= 0 then simp(e) else dn(simp(ddx(e)), k - 1) end
 
-% ---- Taylor coefficients about 0: [c0, c1, ..., cn], f ~ sum ck x^k ----
+% taylor(e, n): Taylor coefficients of e about 0, [c0, c1, ..., cn], so
+% that e ~ sum ck x^k.
+% e.g. format(4); taylor(expx(X), 4)        %= [1.000, 1.000, 0.5000, 0.1667, 0.04167]
 let taylor = fn e, n -> (
   0:n ~> (fn k -> evalx(dn(e, k), 0) / (if k == 0 then 1 else prod[j = 1:k] j end))
 )
 
-% ---- the parser: recursive descent over s[i] ----
+% internal: raise a parse error with a message.
 let fail = fn msg -> num("symb parse error: " + msg)
+% internal: the i-th character of s, or "" past the end.
 let peek = fn s, i -> if i > length(s) then "" else s[i] end
+% internal: index of the first non-space at or after i.
 let skipws = fn s, i -> if peek(s, i) == " " then skipws(s, i + 1) else i end
+% internal: is c a digit?
 let isdig = fn c -> if c == "" then false else "0" <= c <= "9" end
+% internal: is c a lowercase letter?
 let isalp = fn c -> if c == "" then false else "a" <= c <= "z" end
+% internal: scan a number starting at i; returns {v, i}.
 let scannum = fn s, i -> (
   if isdig(peek(s, i)) then scannum(s, i + 1)
   elseif peek(s, i) == "." then scannum(s, i + 1)
   else i end
 )
+% internal: index just past an identifier starting at i.
 let scanid = fn s, i -> if isalp(peek(s, i)) then scanid(s, i + 1) else i end
+% internal: build the node for a named function applied to a.
 let mkfun = fn name, a -> (
   if name == "sin" then sinx(a)
   elseif name == "cos" then cosx(a)
@@ -182,8 +227,10 @@ let mkfun = fn name, a -> (
   else fail("unknown function " + name)
   end
 )
+% internal: a^b — powc for constant b, exp(b log a) otherwise.
 let mkpow = fn a, b -> if b.op == "const" then powc(a, b.v) else expx(mul(b, logx(a))) end
 
+% internal: parse a number, x, a function call, or a parenthesized expression.
 let parse_atom = fn s, i0 -> (
   let i = skipws(s, i0);
   let c = peek(s, i);
@@ -219,6 +266,7 @@ let parse_atom = fn s, i0 -> (
   end
 )
 
+% internal: parse right-associative ^.
 let parse_pow = fn s, i -> (
   let a = parse_atom(s, i);
   let j = skipws(s, a.i);
@@ -228,6 +276,7 @@ let parse_pow = fn s, i -> (
   ) else a end
 )
 
+% internal: fold * and / over factors.
 let term_loop = fn s, st -> (
   let j = skipws(s, st.i);
   let c = peek(s, j);
@@ -241,8 +290,10 @@ let term_loop = fn s, st -> (
   )
   else st end
 )
+% internal: parse a product of powers.
 let parse_term = fn s, i -> term_loop(s, parse_pow(s, i))
 
+% internal: fold + and - over terms.
 let expr_loop = fn s, st -> (
   let j = skipws(s, st.i);
   let c = peek(s, j);
@@ -256,20 +307,31 @@ let expr_loop = fn s, st -> (
   )
   else st end
 )
+% internal: parse a sum of terms.
 let parse_expr = fn s, i -> expr_loop(s, parse_term(s, i))
 
+% parse(src): parse a string like "x^3 + 5*sin(x)" into an expression
+% tree (numbers, x, + - * / ^, sin cos tan exp log sqrt, parentheses).
+% e.g. show(parse("x^2 + 1"))               %= "(x^2 + 1)"
 let parse = fn src -> (
   let r = parse_expr(src, 1);
   let j = skipws(src, r.i);
   if j > length(src) then r.e else fail("trailing input at position " + str(j)) end
 )
 
+% deriv(src): the derivative of the expression in the string src, as a
+% simplified string — the one-call front door.
+% e.g. deriv("x^3 + 5*sin(x)")              %= "((3 * x^2) + (5 * cos(x)))"
+% e.g. deriv("x^x")                         %= "(exp((x * log(x))) * (log(x) + (x / x)))"
 let deriv = fn src -> show(simp(ddx(parse(src))))
 
-% ---- back to function-space: symbolic results as callable functions ----
-% tofun lifts an expression tree into an ordinary function of x, so
-% symbolic results re-enter the whole numeric ecosystem: integral, fzero,
-% fminbnd, pipes, plots. ffun and dfun are the string conveniences.
+% tofun(e): the expression tree as a callable Cozy function of x.
+% e.g. tofun(powc(X, 2))(7)                 %= 49
 let tofun = fn e -> fn x -> evalx(e, x)
+% ffun(src): the string's expression as a callable function of x.
+% e.g. ffun("x^2 + 1")(3)                   %= 10
 let ffun = fn src -> tofun(parse(src))
+% dfun(src): the string's DERIVATIVE as a callable function of x — symbolic
+% differentiation feeding numeric work.
+% e.g. dfun("x^3")(2)                       %= 12
 let dfun = fn src -> tofun(simp(ddx(parse(src))))

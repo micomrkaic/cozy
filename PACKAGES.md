@@ -174,27 +174,26 @@ cozy> sum(s.principal)
 1000
 ```
 
-Dates, HP-12C style — actual day counts, date arithmetic, day of week, and
-the bond market's 30/360 convention. `datestr` returns a display string,
-`daterec` the `{y, m, d}` record, and `today()` a serial day number, so
-arithmetic reads naturally — `datestr(today() + 90)` is the date in 90 days:
+Dates, HP-12C style, on Cozy's Date kind: actual day counts, date
+arithmetic that lands on a real calendar date, day of week, and the bond
+market's 30/360 convention. `date()`, `datestr`, `today`, and
+`year`/`month`/`day` are builtins, so the package keeps only the three HP
+keystrokes that still read better as functions on y, m, d integers:
 
 ```
 cozy> load("packages/finance.cz")
 cozy> days(2026, 1, 1, 2026, 7, 9)
 189
-cozy> datestr(datenum(2026, 7, 17) + 90)
-"2026-10-15"
-cozy> daterec(datenum(2024, 2, 29))
-{y = 2024, m = 2, d = 29}
 cozy> dateadd(2024, 2, 28, 2)
-{y = 2024, m = 3, d = 1}
+2024-03-01
+cozy> dateadd(2024, 12, 31, 1) - date(2024, 12, 31)
+1
 cozy> dow(2026, 7, 9)
 4
 cozy> days360(2024, 1, 31, 2024, 7, 31)
 180
-cozy> daterec(today()).y >= 2026
-true
+cozy> year(dateadd(2024, 2, 28, 2))
+2024
 ```
 
 | Function | Worked example | Result |
@@ -212,12 +211,8 @@ true
 | `bond_mduration(face, crate, y, n, freq)` | `bond_mduration(100, 0.08, 0.06, 10, 1)` | `7.02360` |
 | `bond_convexity(face, crate, y, n, freq)` | `bond_convexity(100, 0.08, 0.06, 10, 1)` | `65.1716` |
 | `amort(principal, i, n)` | `amort(1000, 0.01, 3).balance[3]` | `4.26326e-12` |
-| `datenum(y, m, d)` | `datenum(2026, 7, 17)` | `2.46124e+06` |
-| `datestr(jdn)` | `datestr(datenum(2026, 7, 17) + 90)` | `"2026-10-15"` |
-| `daterec(jdn)` | `daterec(datenum(2026, 7, 17))` | `{y = 2026.00, m = 7.00000, d = 17.0000}` |
-| `dateadd(y, m, d, k)` | `dateadd(2024, 12, 31, 1)` | `{y = 2025.00, m = 1.00000, d = 1.00000}` |
-| `today()` | `today() == datenum(now().y, now().m, now().d)` | `true` |
-| `dow(y, m, d)` | `dow(2026, 7, 17)` | `5.00000` |
+| `dateadd(y, m, d, k)` | `dateadd(2024, 12, 31, 1)` | `2025-01-01` |
+| `dow(y, m, d)` | `dow(2026, 7, 17)` | `5` |
 | `days(y1,m1,d1, y2,m2,d2)` | `days(2026, 1, 1, 2026, 7, 17)` | `197.000` |
 | `days360(y1,m1,d1, y2,m2,d2)` | `days360(2024, 1, 31, 2024, 7, 31)` | `180` |
 
@@ -613,7 +608,7 @@ and all, because `max` on duals takes the one-sided derivative.
 
 ## 13. ts.cz — time series
 
-The dated-data workbench: `lag`, `diff`, `growth`, `movavg` return the
+The dated-data workbench: `lag`, `change`, `growth`, `movavg` return the
 SAME length with NaN heads, so entry 15's machinery applies directly —
 `mean(growth(y), "omit")` is the one-liner, `dropmissing` the row
 cleaner. `hpfilter(y, lambda = 1600)` splits trend from cycle by the
@@ -626,7 +621,7 @@ day of any time-series course. Defaults do the argument work:
 cozy> load("packages/ts.cz")
 cozy> growth([100.0; 102; 104])'
 [nan, 2, 1.96078]
-cozy> diff([1.0; 4; 9; 16], 1)'
+cozy> change([1.0; 4; 9; 16], 1)'
 [nan, 3, 5, 7]
 cozy> rng(3); let e = randn(400, 1); let y = zeros(400, 1); y[1] = e[1]; for i = 2:400 do y[i] = 0.6 * y[i-1] + e[i] end;
 cozy> format(2); acf(y, 3)'
@@ -653,6 +648,42 @@ The pattern the twelve packages follow: a file of `let` definitions,
 come from an independent implementation. Multi-line definitions are fine
 wherever a bracket is open. `save` your workspace, `load` it tomorrow — a
 package is just a workspace you chose to keep.
+
+**The docstring law.** The comment block directly above a definition —
+`%` or `#` lines, no blank line between — is that function's
+documentation, and `help` renders it exactly as it renders a builtin:
+the signature comes from the code, the description from the block, and
+lines beginning `e.g.` are examples. An example written as
+`e.g. EXPR %= EXPECTED` is executed by the suite after loading the
+package and must print EXPECTED (the builtins' marker and rule); write
+`%= ?` and `tools/pkgdoc_fill.py` fills the value in. Every package
+function must carry a block with a description and an example (helpers
+may carry a block starting `internal:` instead) — `make test` lints
+this. `help("pkg")` lists a loaded package's functions with their first
+line; `help("name")` asks by name, which is how you read about a
+zero-argument function without autocalling it.
+
+```
+cozy> load("packages/ts.cz")
+cozy> help(growth)
+  growth(x, k = 1)
+      percent growth over k periods, 100 (x / lag(x, k) - 1),
+      NaN-headed — mean(growth(y), "omit") is the average growth rate.
+      package function, 1 to 2 arguments  (packages/ts.cz)
+      e.g.  growth([100.0; 102; 104])'           % [nan, 2, 1.96078]
+            format(4); mean(growth([100.0; 0/0; 104; 106]), "omit") % 1.923
+cozy> help("ts")
+  packages/ts.cz — 8 names
+    lag              x shifted down k places; the first k entries are missing
+    change           the k-period change x - lag(x, k), NaN-headed and the
+    growth           percent growth over k periods, 100 (x / lag(x, k) - 1),
+    movavg           trailing k-period mean, NaN until k points exist.
+    hpfilter         Hodrick-Prescott trend/cycle split — solves
+    acf              sample autocorrelations at lags 1..K (the standard
+    pacf             partial autocorrelations at lags 1..K by the
+    arfit            AR(p) by least squares on lagged regressors. Returns
+  help("name") or help(name) for any one of them
+```
 
 **The namespace law** (design entry 7 — records are the module system).
 A package that wants a namespace packs its public API into a record:

@@ -490,6 +490,44 @@ cozy> g(10, null, 99)'
 [10, 20, 99]
 ```
 
+### Help for your own functions
+
+`help(f)` on a function you or a package defined shows its signature
+(taken from the code, defaults included), the comment block written
+directly above its `let` as the description, and that block's `e.g.`
+lines as examples — the same shape builtin help has. `help("name")`
+asks by name (the way to read about a zero-argument function without
+autocalling it), and `help("pkg")` lists a loaded package's functions
+with their first line. The package guide states the docstring law and
+how the suite verifies every package example.
+
+```
+cozy> let sq = fn x, p = 2 -> x^p
+<fn/1..2>
+cozy> help(sq)
+  sq(x, p = 2)
+      your function, 1 to 2 arguments
+```
+
+Write a comment block directly above a `let` in a file you load and it
+becomes the description; an `e.g.` line becomes the example (`data/cube.cz`
+ships as the smallest demonstration):
+
+```
+% cube(x): x to the third power.
+% e.g. cube(2)   %= 8
+let cube = fn x -> x^3
+```
+
+```
+cozy> load("data/cube.cz")
+cozy> help(cube)
+  cube(x)
+      x to the third power.
+      package function, 1 argument  (data/cube.cz)
+      e.g.  cube(2)   % 8
+```
+
 ### When something goes wrong
 
 A runtime error names the whole call chain, innermost frame first —

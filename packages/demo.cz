@@ -6,13 +6,20 @@
 %   demo()    the interactive tour: menu, pick a section, Enter advances
 %   (a at the menu plays everything; the suite pipes that path headless)
 
+% internal: print a line with braces escaped for the formatter.
 let praw = fn t -> print(strrep(strrep(t, "{", "{{"), "}", "}}"))
+% internal: is a value null?
 let isnil = fn v -> str(v) == "null"
 let ans = null
+% internal: echo a transcript line as the REPL would, evaluate it, keep ans.
 let dshow = fn s -> (praw("cozy> " + s); let v = eval(s); if !isnil(v) & !endswith(s, ";") then (ans = v; praw(str(v))) end; null)
+% internal: the Enter-to-advance pause between problems.
 let dwait = fn -> pause("        [ Enter for the next problem ] ")
+% internal: a problem heading, with numeric format reset to the default.
 let dhead = fn t -> (format(6); print(""); praw("  ── Problem " + t); print(""))
 
+% demo_sec1(): play section 1 of the book — 1. Basic calculations — straight through.
+% e.g. demo_sec1   % autocalls; the suite replays it headless
 let demo_sec1 = fn -> (
   print("");
   praw("  ═══ Section 1: 1. Basic calculations ═══");
@@ -39,6 +46,8 @@ let demo_sec1 = fn -> (
   dshow("[19.99, 45.50, 129] ~> eur");
   null)
 
+% demo_sec2(): play section 2 of the book — 2. Values and types — straight through.
+% e.g. demo_sec2   % autocalls; the suite replays it headless
 let demo_sec2 = fn -> (
   print("");
   praw("  ═══ Section 2: 2. Values and types ═══");
@@ -66,6 +75,8 @@ let demo_sec2 = fn -> (
   dshow("nan == nan");
   null)
 
+% demo_sec3(): play section 3 of the book — 3. Strings — straight through.
+% e.g. demo_sec3   % autocalls; the suite replays it headless
 let demo_sec3 = fn -> (
   print("");
   praw("  ═══ Section 3: 3. Strings ═══");
@@ -100,6 +111,8 @@ let demo_sec3 = fn -> (
   dshow("fields(r)");
   null)
 
+% demo_sec4(): play section 4 of the book — 4. Complex numbers — straight through.
+% e.g. demo_sec4   % autocalls; the suite replays it headless
 let demo_sec4 = fn -> (
   print("");
   praw("  ═══ Section 4: 4. Complex numbers ═══");
@@ -127,6 +140,8 @@ let demo_sec4 = fn -> (
   dshow("abs(ans - p)");
   null)
 
+% demo_sec5(): play section 5 of the book — 5. Matrices — straight through.
+% e.g. demo_sec5   % autocalls; the suite replays it headless
 let demo_sec5 = fn -> (
   print("");
   praw("  ═══ Section 5: 5. Matrices ═══");
@@ -169,6 +184,8 @@ let demo_sec5 = fn -> (
   dshow("who");
   null)
 
+% demo_sec6(): play section 6 of the book — 6. Reading and writing data — straight through.
+% e.g. demo_sec6   % autocalls; the suite replays it headless
 let demo_sec6 = fn -> (
   print("");
   praw("  ═══ Section 6: 6. Reading and writing data ═══");
@@ -190,6 +207,8 @@ let demo_sec6 = fn -> (
   dshow("w.temp |> {hi = max, lo = min, mu = mean}");
   null)
 
+% demo_sec7(): play section 7 of the book — 7. Writing your own functions — straight through.
+% e.g. demo_sec7   % autocalls; the suite replays it headless
 let demo_sec7 = fn -> (
   print("");
   praw("  ═══ Section 7: 7. Writing your own functions ═══");
@@ -212,6 +231,8 @@ let demo_sec7 = fn -> (
   dshow("body(bmi)");
   null)
 
+% demo_sec8(): play section 8 of the book — 8. Anonymous functions and pipes — straight through.
+% e.g. demo_sec8   % autocalls; the suite replays it headless
 let demo_sec8 = fn -> (
   print("");
   praw("  ═══ Section 8: 8. Anonymous functions and pipes ═══");
@@ -230,6 +251,8 @@ let demo_sec8 = fn -> (
   dshow("ans |> sum");
   null)
 
+% demo_sec9(): play section 9 of the book — 9. Records — straight through.
+% e.g. demo_sec9   % autocalls; the suite replays it headless
 let demo_sec9 = fn -> (
   print("");
   praw("  ═══ Section 9: 9. Records ═══");
@@ -254,6 +277,8 @@ let demo_sec9 = fn -> (
   dshow("fields(stats)'");
   null)
 
+% demo_sec10(): play section 10 of the book — 10. Calculus — straight through.
+% e.g. demo_sec10   % autocalls; the suite replays it headless
 let demo_sec10 = fn -> (
   print("");
   praw("  ═══ Section 10: 10. Calculus ═══");
@@ -343,6 +368,8 @@ let demo_sec10 = fn -> (
   dshow("4 * integral(fn x -> sqrt(1 - x ^ 2), 0, 1)");
   null)
 
+% demo_sec11(): play section 11 of the book — 11. Linear algebra — straight through.
+% e.g. demo_sec11   % autocalls; the suite replays it headless
 let demo_sec11 = fn -> (
   print("");
   praw("  ═══ Section 11: 11. Linear algebra ═══");
@@ -373,6 +400,8 @@ let demo_sec11 = fn -> (
   dshow("P.' * s");
   null)
 
+% demo_sec12(): play section 12 of the book — 12. Probability, statistics, and data — straight through.
+% e.g. demo_sec12   % autocalls; the suite replays it headless
 let demo_sec12 = fn -> (
   print("");
   praw("  ═══ Section 12: 12. Probability, statistics, and data ═══");
@@ -404,6 +433,8 @@ let demo_sec12 = fn -> (
   dshow("sum(-1.96 < z < 1.96) / 500");
   null)
 
+% demo_sec13(): play section 13 of the book — 13. Plotting — straight through.
+% e.g. demo_sec13   % autocalls; the suite replays it headless
 let demo_sec13 = fn -> (
   print("");
   praw("  ═══ Section 13: 13. Plotting ═══");
@@ -419,6 +450,8 @@ let demo_sec13 = fn -> (
   dshow("scatter_titled(x, 2 * x + noise, \"y = 2x + noise\")");
   null)
 
+% demo_sec14(): play section 14 of the book — 14. The Cozy idiom — straight through.
+% e.g. demo_sec14   % autocalls; the suite replays it headless
 let demo_sec14 = fn -> (
   print("");
   praw("  ═══ Section 14: 14. The Cozy idiom ═══");
@@ -463,6 +496,8 @@ let demo_sec14 = fn -> (
   dshow("-sin(pi / 3)");
   null)
 
+% demo_sec15(): play section 15 of the book — 15. The Cozy instruments — straight through.
+% e.g. demo_sec15   % autocalls; the suite replays it headless
 let demo_sec15 = fn -> (
   print("");
   praw("  ═══ Section 15: 15. The Cozy instruments ═══");
@@ -636,6 +671,7 @@ let demo_sec15 = fn -> (
   dshow("(fn x -> x) |> {a = s.a, b = s.b}");
   null)
 
+% internal: print the section menu.
 let demo_menu = fn -> (
   print("");
   print("  The Cozy tour — the book of examples, live.");
@@ -665,6 +701,7 @@ let demo_menu = fn -> (
 let demo_seclens = [4, 3, 5, 3, 4, 2, 3, 2, 3, 10, 4, 4, 3, 5, 10]
 let demo_cursec = 0
 let demo_curprob = 0
+% internal: play problem k2 of section s2.
 let demo_playprob = fn s2, k2 -> (
   if s2 == 1 & k2 == 1 then (dhead("1.1 — Splitting the bill");
     dshow("format(\"fixed\", 2)");
@@ -1231,6 +1268,8 @@ let demo_playprob = fn s2, k2 -> (
     null) end;
   null)
 
+% next(): advance the guided tour by one problem (bare Enter does this too).
+% e.g. next   % autocalls
 let next = fn -> (
   if demo_cursec == 0 then print("  no section running — demo15 (etc.) starts one")
   elseif demo_curprob >= demo_seclens[demo_cursec] then (print("  section finished — pick another (demo1..demo15)"); demo_cursec = 0)
@@ -1238,22 +1277,54 @@ let next = fn -> (
     if demo_curprob < demo_seclens[demo_cursec] then print("        [ Enter for the next problem ]") else (print("        [ section finished — demo for the menu ]"); demo_cursec = 0) end)
   end; null)
 
+% demo1(): start the guided tour at section 1 (15. The Cozy instruments); next advances.
+% e.g. demo1   % autocalls
 let demo1 = fn -> (demo_cursec = 1; demo_curprob = 0; next())
+% demo2(): start the guided tour at section 2 (15. The Cozy instruments); next advances.
+% e.g. demo2   % autocalls
 let demo2 = fn -> (demo_cursec = 2; demo_curprob = 0; next())
+% demo3(): start the guided tour at section 3 (15. The Cozy instruments); next advances.
+% e.g. demo3   % autocalls
 let demo3 = fn -> (demo_cursec = 3; demo_curprob = 0; next())
+% demo4(): start the guided tour at section 4 (15. The Cozy instruments); next advances.
+% e.g. demo4   % autocalls
 let demo4 = fn -> (demo_cursec = 4; demo_curprob = 0; next())
+% demo5(): start the guided tour at section 5 (15. The Cozy instruments); next advances.
+% e.g. demo5   % autocalls
 let demo5 = fn -> (demo_cursec = 5; demo_curprob = 0; next())
+% demo6(): start the guided tour at section 6 (15. The Cozy instruments); next advances.
+% e.g. demo6   % autocalls
 let demo6 = fn -> (demo_cursec = 6; demo_curprob = 0; next())
+% demo7(): start the guided tour at section 7 (15. The Cozy instruments); next advances.
+% e.g. demo7   % autocalls
 let demo7 = fn -> (demo_cursec = 7; demo_curprob = 0; next())
+% demo8(): start the guided tour at section 8 (15. The Cozy instruments); next advances.
+% e.g. demo8   % autocalls
 let demo8 = fn -> (demo_cursec = 8; demo_curprob = 0; next())
+% demo9(): start the guided tour at section 9 (15. The Cozy instruments); next advances.
+% e.g. demo9   % autocalls
 let demo9 = fn -> (demo_cursec = 9; demo_curprob = 0; next())
+% demo10(): start the guided tour at section 10 (15. The Cozy instruments); next advances.
+% e.g. demo10   % autocalls
 let demo10 = fn -> (demo_cursec = 10; demo_curprob = 0; next())
+% demo11(): start the guided tour at section 11 (15. The Cozy instruments); next advances.
+% e.g. demo11   % autocalls
 let demo11 = fn -> (demo_cursec = 11; demo_curprob = 0; next())
+% demo12(): start the guided tour at section 12 (15. The Cozy instruments); next advances.
+% e.g. demo12   % autocalls
 let demo12 = fn -> (demo_cursec = 12; demo_curprob = 0; next())
+% demo13(): start the guided tour at section 13 (15. The Cozy instruments); next advances.
+% e.g. demo13   % autocalls
 let demo13 = fn -> (demo_cursec = 13; demo_curprob = 0; next())
+% demo14(): start the guided tour at section 14 (15. The Cozy instruments); next advances.
+% e.g. demo14   % autocalls
 let demo14 = fn -> (demo_cursec = 14; demo_curprob = 0; next())
+% demo15(): start the guided tour at section 15 (15. The Cozy instruments); next advances.
+% e.g. demo15   % autocalls
 let demo15 = fn -> (demo_cursec = 15; demo_curprob = 0; next())
 
+% demo(): the interactive tour of the book — a menu of sections, Enter advances.
+% e.g. demo   % autocalls; q quits
 let demo = fn -> (
   let going = true;
   while going do

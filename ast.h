@@ -53,7 +53,9 @@ struct AstNode {
         struct { AstNode *callee; AstList args; } call;            /* + index (kind distinguishes) */
         struct { AstNode *target; const char *name; uint32_t namelen; } field;
         struct { AstList params; AstList defaults; AstNode *body;
-                 const char *src; uint32_t srclen; } lambda;   /* defaults: per-param,
+                 const char *src; uint32_t srclen;
+                 const char *doc; uint32_t doclen; } lambda;   /* doc: the comment
+                 block above `let name = fn` (parser), rendered by help */   /* defaults: per-param,
                  NULL items for none (entry 13); trailing-only, parser-enforced */
         struct { AstNode *cond, *then_e, *else_e; } iff;
         struct { const char *name; uint32_t namelen; AstNode *value, *body; } let;  /* body!=null: let..in expr */

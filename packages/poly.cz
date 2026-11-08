@@ -2,7 +2,9 @@
 # Coefficients are row vectors, highest power first (Octave convention):
 # [2, -3, 1] is 2x^2 - 3x + 1. Cross-checked against NumPy; see tests/37_poly.test.
 
-# companion(c): the companion matrix; its eigenvalues are the roots of c.
+# companion(c): the companion matrix of the polynomial c (row, highest
+# power first); its eigenvalues are c's roots.
+# e.g. companion([1, -3, 2])                %= [3, -2; 1, 0]
 let companion = fn c -> (
   assert(numel(c) >= 2, "companion: need a polynomial of degree >= 1");
   assert(c[1] != 0, "companion: leading coefficient must be nonzero");
@@ -15,10 +17,16 @@ let companion = fn c -> (
   end;
   C)
 
-# roots(c): all complex roots, via the companion matrix and eig.
+# roots(c): all roots of the polynomial c, real or complex, via the
+# companion matrix's eigenvalues.
+# e.g. roots([1, -3, 2])                    %= [1; 2]
+# e.g. roots([1, 0, 1])                     %= [-1i; 1i]
 let roots = fn c -> eig(companion(c)).values
 
-# polyval(c, x): evaluate at x (scalar or array, elementwise), Horner's rule.
+# polyval(c, x): evaluate the polynomial c at x (scalar or elementwise
+# on an array) by Horner's rule.
+# e.g. polyval([2, -3, 1], 2)               %= 3
+# e.g. polyval([1, 0, 0], [1, 2, 3])        %= [1, 4, 9]
 let polyval = fn c, x -> (
   let acc = 0 .* x;                   % zeros shaped like x (works for scalars too)
   for i = 1 : numel(c) do
@@ -26,8 +34,9 @@ let polyval = fn c, x -> (
   end;
   acc)
 
-# polyfit(x, y, n): least-squares polynomial of degree n through (x, y).
-# Vandermonde matrix + backslash (QR least squares for tall systems).
+# polyfit(x, y, n): least-squares polynomial of degree n through the
+# points (x, y), as a coefficient row, highest power first.
+# e.g. format(4); polyfit([0, 1, 2, 3], [1, 3, 7, 13], 2) %= [1.000, 1.000, 1.000]
 let polyfit = fn x, y, n -> (
   assert(numel(x) == numel(y), "polyfit: x and y must have the same length, got {} and {}", numel(x), numel(y));
   assert(numel(x) >= n + 1, "polyfit: need at least {} points for degree {}", n + 1, n);
@@ -38,17 +47,21 @@ let polyfit = fn x, y, n -> (
   end;
   (V \ reshape(y, m, 1))')
 
-# polyder(c): coefficients of the derivative.
+# polyder(c): the derivative polynomial.
+# e.g. polyder([1, -3, 2])                  %= [2, -3]
 let polyder = fn c -> (
   let n = numel(c) - 1;
   if n == 0 then [0] else c[1:n] .* (n : -1 : 1) end)
 
-# polyint(c, k): coefficients of the antiderivative, with constant term k.
+# polyint(c, k): the antiderivative polynomial with integration constant k.
+# e.g. polyint([2, 2], 0)                   %= [1, 2, 0]
 let polyint = fn c, k -> (
   let n = numel(c);
   [c ./ (n : -1 : 1), k])
 
-# conv(a, b): polynomial multiplication (coefficient convolution).
+# conv(a, b): polynomial multiplication (discrete convolution of the
+# coefficient rows).
+# e.g. conv([1, 1], [1, -1])                %= [1, 0, -1]
 let conv = fn a, b -> (
   let na = numel(a);
   let nb = numel(b);

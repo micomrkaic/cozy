@@ -1,0 +1,5 @@
+% cube.cz — the smallest possible package, to show the docstring law.
+
+% cube(x): x to the third power.
+% e.g. cube(2)   %= 8
+let cube = fn x -> x^3
