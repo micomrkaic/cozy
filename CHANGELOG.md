@@ -1,5 +1,35 @@
 # Cozy changelog
 
+## 0.1.24 — three DSGE models, live in the page
+
+### Added
+- **docs/dsge.html** (owner's request): three interactive demos of the
+  dsge package, solved in the browser by the wasm interpreter on every
+  slider move — nothing precomputed. (1) The stochastic growth model:
+  responses to a technology shock in small multiples, with the textbook
+  calibration as a grey reference, and steady-state ratios as tiles.
+  (2) The three-equation New Keynesian model: responses of the gap,
+  inflation and the policy rate to a policy or natural-rate shock.
+  (3) Its determinacy region over the policy rule: 1,152 calls of
+  `dsge.bk`, drawn a row per animation frame, with the analytic Taylor
+  principle overlaid; clicking the map moves the rule in (2). An
+  indeterminate rule dims the responses and says why.
+- Each demo shows its equations exactly as compiled, the Cozy code that
+  last ran, and its numbers as a table. Charts are inline SVG drawn by
+  the page (no libraries, no network), sized one unit per CSS pixel,
+  with a crosshair tooltip, keyboard reading, and light and dark themes.
+- **docs/dsge-standalone.html**: the same page as one file, the bundle
+  written inline — for saving, mailing, or opening from a disk.
+  tools/gen_dsge_page.py generates it; `make wasm` runs the generator
+  and `make test` checks the copy is current (--check).
+- The playground header links to the demos; the README names them.
+
+### Notes
+- Verified in a headless browser (not part of `make test`): the page's
+  first-period New Keynesian responses equal the packages guide's, and
+  every map cell agrees with kappa (phi_pi - 1) + (1 - beta) phi_x > 0
+  under a tilted calibration.
+
 ## 0.1.23 — dsge.cz, a mini Dynare
 
 ### Added

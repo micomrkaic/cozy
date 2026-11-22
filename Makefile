@@ -157,6 +157,7 @@ test: vmtest $(BIN)
 	@python3 tools/gen_demo.py --check
 	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
+	@python3 tools/gen_dsge_page.py --check
 	@bash tests/run_emacs.sh
 
 # Same corpus, every input run under AddressSanitizer/UBSan; fails on any leak.
@@ -267,6 +268,7 @@ wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 	  --embed-file packages --embed-file data --embed-file MANUAL.md --embed-file PACKAGES.md --embed-file BOOK.md \
 	  --embed-file CHANGELOG.md --embed-file LESSONS.md --embed-file DESIGN_NOTES.md \
 	  $(WASM_SRCS) $(WASM_OPTIM_SRCS) -o docs/cozy.js  # gnu2x: EM_ASM needs GNU extensions; docs+packages ride in the bundle
+	@python3 tools/gen_dsge_page.py
 	@echo "built docs/cozy.js ($$(wc -c < docs/cozy.js) bytes) — commit and push to update GitHub Pages"
 
 # wasm-ubuntu: the whole recipe for a stock Ubuntu 24 container (see

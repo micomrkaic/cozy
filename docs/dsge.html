@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DSGE models in the browser — Cozy</title>
+<meta name="description" content="Three interactive macroeconomic models solved live in your browser by Cozy's dsge package: the stochastic growth model, the New Keynesian model, and its determinacy region.">
+<meta property="og:title" content="DSGE models in the browser — Cozy">
+<meta property="og:image" content="og-card.png">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --code-bg: #f1f0ec;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --ref: #898781;
+    --good: #006300;
+    --warn-ink: #8a4b00;
+    --accent: #2a78d6;
+    --brand-a: #208bff;
+    --brand-b: #00a7b8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0b0e14;
+      --surface: #11151f;
+      --ink: #f0efec;
+      --ink-2: #c3c7d0;
+      --muted: #8a93a3;
+      --grid: #212838;
+      --axis: #323b4f;
+      --border: rgba(255, 255, 255, 0.10);
+      --code-bg: #0b0e14;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --ref: #8a93a3;
+      --good: #0ca30c;
+      --warn-ink: #fab219;
+      --accent: #3987e5;
+      --brand-a: #208bff;
+      --brand-b: #00c2d6;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  a { color: var(--accent); }
+  header.site {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px;
+    padding: 12px 16px; border-bottom: 1px solid var(--border);
+  }
+  .logo {
+    font: 700 17px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.5px;
+    background: linear-gradient(90deg, var(--brand-a), var(--brand-b));
+    -webkit-background-clip: text; background-clip: text; color: transparent; text-decoration: none;
+  }
+  header.site .where { color: var(--muted); font-size: 13px; }
+  header.site nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; }
+  header.site nav a {
+    color: var(--ink-2); text-decoration: none; font-size: 13px;
+    padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
+  }
+  header.site nav a:hover { color: var(--accent); border-color: var(--accent); }
+  html[data-standalone] .online-only { display: none; }
+  main { max-width: 1120px; margin: 0 auto; padding: 0 16px 56px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 36px 0 10px; letter-spacing: -0.01em; }
+  h2 { font-size: 22px; line-height: 1.25; margin: 0 0 6px; }
+  h3 { font-size: 15px; margin: 0 0 2px; }
+  p { margin: 0 0 12px; }
+  .lede { max-width: 68ch; color: var(--ink-2); }
+  .engine { font-size: 13px; color: var(--muted); margin: 0 0 8px; min-height: 20px; }
+  .engine b { color: var(--ink-2); font-weight: 600; }
+  section.demo { margin-top: 40px; }
+  section.demo > p { max-width: 72ch; color: var(--ink-2); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-top: 14px;
+  }
+  /* ---- controls: one row above the charts they scope ---- */
+  .controls { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: flex-end; }
+  .ctl { display: flex; flex-direction: column; gap: 2px; min-width: 150px; flex: 1 1 150px; max-width: 230px; }
+  .ctl label { font-size: 13px; color: var(--ink-2); display: flex; justify-content: space-between; gap: 8px; }
+  .ctl output { font-variant-numeric: tabular-nums; color: var(--ink); font-weight: 600; }
+  .ctl input[type=range] { width: 100%; accent-color: var(--accent); margin: 4px 0 0; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: 13px; padding: 6px 12px; border: 0; background: transparent;
+    color: var(--ink-2); cursor: pointer;
+  }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  .seg button:focus-visible, .linkbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .linkbtn {
+    font: inherit; font-size: 13px; background: none; border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 10px; color: var(--ink-2); cursor: pointer;
+  }
+  .linkbtn:hover { color: var(--accent); border-color: var(--accent); }
+  /* ---- stat tiles ---- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 14px; }
+  .tile { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--page); }
+  .tile .lab { font-size: 12.5px; color: var(--ink-2); }
+  .tile .val { font-size: 24px; font-weight: 600; line-height: 1.25; }
+  .tile .sub { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .status.good { color: var(--good); }
+  .status.bad { color: var(--warn-ink); }
+  /* ---- charts ---- */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--ink-2); margin: 14px 0 4px; }
+  .legend .key { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .line { width: 18px; height: 0; border-top: 2px solid var(--c); border-radius: 2px; }
+  .legend .box { width: 12px; height: 12px; border-radius: 3px; background: var(--c); }
+  .multiples { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px 22px; }
+  .panel h3 { font-weight: 600; }
+  .panel .unit { font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+  .twocol { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px 26px; margin-top: 14px; }
+  @media (max-width: 820px) { .twocol { grid-template-columns: minmax(0, 1fr); } }
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart { min-width: 0; }
+  .chart text { font: 12px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--muted); font-variant-numeric: tabular-nums; }
+  .chart .grid { stroke: var(--grid); stroke-width: 1; }
+  .chart .zero { stroke: var(--axis); stroke-width: 1; }
+  .chart .ser { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .ref { stroke: var(--ref); stroke-width: 1.5; }
+  .chart .cross { stroke: var(--axis); stroke-width: 1; }
+  .chart .dot { stroke: var(--surface); stroke-width: 2; }
+  .chart .lbl { fill: var(--ink-2); }
+  .chart .axis-title { fill: var(--muted); }
+  .chart .cell { stroke: var(--surface); stroke-width: 1; }
+  .chart .cell.hot { stroke: var(--ink); stroke-width: 1.5; }
+  .chart .boundary { stroke: var(--ink); stroke-width: 2; fill: none; stroke-linecap: round; }
+  .chart .boundary-halo { stroke: var(--surface); stroke-width: 5; fill: none; stroke-linecap: round; }
+  .chart .region-label { fill: #fff; font-weight: 600; font-size: 13px; }
+  .chart .marker { fill: var(--ink); stroke: var(--surface); stroke-width: 2; }
+  .chart .note { fill: var(--ink-2); }
+  .chart.stale svg { opacity: 0.35; }
+  .chart .overlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    text-align: center; padding: 20px; color: var(--ink-2); font-size: 14px;
+  }
+  .chart.stale .overlay { display: flex; }
+  .s1 { stroke: var(--series-1); } .s2 { stroke: var(--series-2); } .s3 { stroke: var(--series-3); }
+  .f1 { fill: var(--series-1); } .f2 { fill: var(--series-2); } .f3 { fill: var(--series-3); } .fref { fill: var(--ref); }
+  .fna { fill: var(--grid); }
+  #tip {
+    position: fixed; z-index: 20; pointer-events: none; display: none; max-width: 260px;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18); padding: 8px 10px; font-size: 12.5px; line-height: 1.4;
+  }
+  #tip .head { color: var(--ink-2); margin-bottom: 4px; }
+  #tip .row { display: flex; align-items: center; gap: 8px; }
+  #tip .row .line { width: 14px; border-top: 2px solid var(--c); flex: none; }
+  #tip .row .v { font-weight: 600; font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
+  #tip .row .n { color: var(--ink-2); }
+  #tip .row .v:first-child { min-width: 0; text-align: left; }
+  /* ---- disclosures: equations, code, table ---- */
+  details { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 10px; }
+  summary { cursor: pointer; font-size: 14px; color: var(--ink-2); }
+  summary:hover { color: var(--accent); }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+    overflow-x: auto; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0; white-space: pre;
+  }
+  .eqs { margin: 10px 0 0; padding: 0; list-style: none; }
+  .eqs li { display: grid; grid-template-columns: minmax(120px, 190px) minmax(0, 1fr); gap: 4px 14px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .eqs li:last-child { border-bottom: 0; }
+  .eqs .what { font-size: 13px; color: var(--ink-2); }
+  .eqs code { font-size: 13px; overflow-wrap: anywhere; }
+  @media (max-width: 560px) { .eqs li { grid-template-columns: minmax(0, 1fr); } }
+  .tablewrap { overflow-x: auto; margin-top: 10px; max-height: 320px; overflow-y: auto; }
+  table { border-collapse: collapse; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 3px 12px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--ink-2); font-weight: 600; position: sticky; top: 0; background: var(--surface); }
+  .fail { border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-top: 16px; color: var(--ink-2); }
+  footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--ink-2); font-size: 14px; max-width: 76ch; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="index.html">cozy</a>
+  <span class="where">DSGE models, solved in your browser</span>
+  <nav>
+    <a class="online-only" href="index.html">Playground</a>
+    <a href="https://github.com/micomrkaic/cozy/blob/main/PACKAGES.md#14-dsgecz--a-mini-dynare">Package guide</a>
+    <a href="https://github.com/micomrkaic/cozy/blob/main/packages/dsge.cz">Source</a>
+    <a class="online-only" href="dsge-standalone.html" download>Download as one file</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Three macro models, solved as you move the sliders</h1>
+  <p class="lede">Each model below is written the way Dynare's model block reads and handed to
+  Cozy's <code>dsge</code> package, which finds the steady state, linearises with exact
+  derivatives, and solves for the decision rule. Nothing is precomputed and nothing is sent
+  to a server: the interpreter runs in this page as WebAssembly, and every slider move
+  re-solves the model.</p>
+  <p class="engine" id="engine" role="status">Loading the Cozy engine…</p>
+  <div class="fail" id="fail" hidden></div>
+
+  <!-- ================= demo 1 ================= -->
+  <section class="demo" id="growth" aria-labelledby="growth-h">
+    <h2 id="growth-h">1. The stochastic growth model</h2>
+    <p>A household chooses consumption and capital; technology follows an AR(1). The charts
+    show what a one-percent technology shock does over twenty years, in percent deviations
+    from the steady state. The grey line is the textbook calibration, so you can see what
+    each parameter changes.</p>
+    <div class="card">
+      <div class="controls" id="g-controls"></div>
+      <div class="tiles" id="g-tiles"></div>
+      <div class="legend" aria-hidden="true">
+        <span class="key"><span class="line" style="--c: var(--series-1)"></span>Your calibration</span>
+        <span class="key"><span class="line" style="--c: var(--ref)"></span>Textbook calibration</span>
+      </div>
+      <div class="multiples" id="g-charts"></div>
+      <details>
+        <summary>The model, as written</summary>
+        <ul class="eqs" id="g-eqs"></ul>
+      </details>
+      <details>
+        <summary>The Cozy code that just ran</summary>
+        <pre id="g-code"></pre>
+      </details>
+      <details>
+        <summary>The numbers as a table</summary>
+        <div class="tablewrap" id="g-table"></div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ================= demos 2 and 3 ================= -->
+  <section class="demo" id="nk" aria-labelledby="nk-h">
+    <h2 id="nk-h">2. The New Keynesian model, and 3. where it has a unique solution</h2>
+    <p>Three equations: a Phillips curve, an IS curve and an interest-rate rule. The left
+    chart shows the responses to a shock under the rule you set. The right chart maps which
+    rules give a unique stable equilibrium; the dot is your rule, and you can click the map
+    to move it. Lower the response to inflation below about one and the model becomes
+    indeterminate: the Taylor principle.</p>
+    <div class="card">
+      <div class="controls" id="n-controls">
+        <div class="ctl" style="max-width: none; flex: 0 0 auto">
+          <label id="n-shock-lab">Shock</label>
+          <div class="seg" role="group" aria-labelledby="n-shock-lab">
+            <button type="button" data-shock="ev" aria-pressed="true">Monetary policy</button>
+            <button type="button" data-shock="en" aria-pressed="false">Natural rate</button>
+          </div>
+        </div>
+      </div>
+      <div class="tiles" id="n-tiles"></div>
+      <div class="twocol">
+        <div>
+          <h3>Responses to the shock</h3>
+          <div class="unit" style="font-size: 12px; color: var(--muted)">percentage points, by quarter after the shock</div>
+          <div class="legend" aria-hidden="true">
+            <span class="key"><span class="line" style="--c: var(--series-1)"></span>Output gap</span>
+            <span class="key"><span class="line" style="--c: var(--series-2)"></span>Inflation</span>
+            <span class="key"><span class="line" style="--c: var(--series-3)"></span>Policy rate</span>
+          </div>
+          <div class="chart" id="n-chart"><div class="overlay" id="n-overlay"></div></div>
+        </div>
+        <div>
+          <h3>Determinacy by policy rule</h3>
+          <div class="unit" style="font-size: 12px; color: var(--muted)">each cell is one solve of the model</div>
+          <div class="legend" aria-hidden="true">
+            <span class="key"><span class="box" style="--c: var(--series-1)"></span>Determinate</span>
+            <span class="key"><span class="box" style="--c: var(--series-2)"></span>Indeterminate</span>
+            <span class="key"><span class="line" style="--c: var(--ink)"></span>Taylor principle (analytic)</span>
+            <span class="key"><span class="box" style="--c: var(--ink); border-radius: 50%"></span>Your rule</span>
+          </div>
+          <div class="chart" id="n-map"></div>
+        </div>
+      </div>
+      <details>
+        <summary>The model, as written</summary>
+        <ul class="eqs" id="n-eqs"></ul>
+      </details>
+      <details>
+        <summary>The Cozy code that just ran</summary>
+        <pre id="n-code"></pre>
+      </details>
+      <details>
+        <summary>The numbers as a table</summary>
+        <div class="tablewrap" id="n-table"></div>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <p><strong>How it works.</strong> The equations are compiled into a residual function. The
+    steady state is found by Newton's method and the model is linearised around it, both with
+    dual numbers, so the derivatives are exact. The linear system is solved by cyclic
+    reduction, and the Blanchard-Kahn condition is read from the solution's own eigenvalues.
+    The package is cross-checked against an independent solver (SymPy derivatives and SciPy's
+    QZ decomposition) and against Gali's closed form for the New Keynesian model.</p>
+    <p>To use it yourself: <code>load("dsge")</code> in the <a href="https://micomrkaic.github.io/cozy/">playground</a>
+    or in a native Cozy session, then <code>help("dsge")</code>.</p>
+  </footer>
+</main>
+<div id="tip" role="presentation"></div>
+
+<script src="cozy.js"></script>
+<script>
+"use strict";
+(function () {
+  // ------------------------------------------------------------------
+  // The models. The equation strings below are exactly what Cozy compiles;
+  // the page shows them, and builds its Cozy source from them.
+  // ------------------------------------------------------------------
+  const GROWTH = {
+    name: "growth",
+    vars: "y c i k a", shocks: "e", sd: "{e = 0.01}",
+    params: { alpha: 0.33, beta: 0.99, delta: 0.025, rho: 0.95, sigma: 1 },
+    steady: "fn p -> (let k = (p.alpha / (1 / p.beta - 1 + p.delta))^(1 / (1 - p.alpha)); " +
+            "{y = k^p.alpha, c = k^p.alpha - p.delta * k, i = p.delta * k, k = k, a = 0.0})",
+    eqs: [
+      ["Euler equation", "c^(-sigma) = beta * c(+1)^(-sigma) * (alpha * exp(a(+1)) * k^(alpha - 1) + 1 - delta)"],
+      ["Production", "y = exp(a) * k(-1)^alpha"],
+      ["Capital accumulation", "k = (1 - delta) * k(-1) + i"],
+      ["Resource constraint", "y = c + i"],
+      ["Technology", "a = rho * a(-1) + e"]
+    ],
+    sliders: [
+      { key: "alpha", label: "Capital share α", min: 0.20, max: 0.45, step: 0.01, digits: 2 },
+      { key: "beta", label: "Discount factor β", min: 0.950, max: 0.995, step: 0.001, digits: 3 },
+      { key: "delta", label: "Depreciation δ", min: 0.010, max: 0.100, step: 0.005, digits: 3 },
+      { key: "rho", label: "Persistence ρ", min: 0, max: 0.99, step: 0.01, digits: 2 },
+      { key: "sigma", label: "Risk aversion σ", min: 0.5, max: 5, step: 0.1, digits: 1 }
+    ],
+    panels: [["Output", "y"], ["Consumption", "c"], ["Investment", "i"], ["Capital", "k"], ["Technology", "a"]],
+    T: 81
+  };
+  const NK = {
+    name: "nk",
+    vars: "x pi i rn v", shocks: "en ev", sd: "{en = 0.25, ev = 0.25}",
+    params: { beta: 0.99, sigma: 1, kappa: 0.1275, phi_pi: 1.5, phi_x: 0.125, rho_n: 0.9, rho_v: 0.5 },
+    init: "{x = 0.0, pi = 0.0, i = 0.0, rn = 0.0, v = 0.0}",
+    eqs: [
+      ["Phillips curve", "pi = beta * pi(+1) + kappa * x"],
+      ["IS curve", "x = x(+1) - (1 / sigma) * (i - pi(+1) - rn)"],
+      ["Interest-rate rule", "i = phi_pi * pi + phi_x * x + v"],
+      ["Natural rate", "rn = rho_n * rn(-1) + en"],
+      ["Policy disturbance", "v = rho_v * v(-1) + ev"]
+    ],
+    sliders: [
+      { key: "phi_pi", label: "Inflation response φπ", min: 0, max: 3, step: 0.05, digits: 2 },
+      { key: "phi_x", label: "Gap response φx", min: 0, max: 1, step: 0.025, digits: 3 },
+      { key: "rho", label: "Persistence ρ", min: 0, max: 0.95, step: 0.05, digits: 2 },
+      { key: "kappa", label: "Phillips slope κ", min: 0.02, max: 0.5, step: 0.0025, digits: 4 },
+      { key: "beta", label: "Discount factor β", min: 0.90, max: 0.999, step: 0.001, digits: 3 }
+    ],
+    series: [["Output gap", "x", 1], ["Inflation", "pi", 2], ["Policy rate", "i", 3]],
+    T: 17,
+    map: { nx: 48, ny: 24, xmax: 3, ymax: 1 }
+  };
+
+  // ------------------------------------------------------------------
+  // The engine bridge
+  // ------------------------------------------------------------------
+  let M = null;
+  const $ = id => document.getElementById(id);
+  const svgNS = "http://www.w3.org/2000/svg";
+  function el(name, attrs, parent, text) {
+    const n = document.createElementNS(svgNS, name);
+    for (const k in attrs) n.setAttribute(k, attrs[k]);
+    if (text !== undefined) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function html(name, cls, parent, text) {
+    const n = document.createElement(name);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+  function cozy(code) {
+    const n = M.lengthBytesUTF8(code) + 1, p = M._malloc(n);
+    M.stringToUTF8(code, p, n);
+    const out = M.UTF8ToString(M._cozy_eval(p));
+    M._free(p);
+    if (/^\s*error\b/m.test(out)) throw new Error(out.trim());
+    return out.trim();
+  }
+  // a Cozy expression whose value is js(matrix) -> an array of numbers (row-major)
+  function numbers(code) {
+    const s = cozy(code).replace(/^"|"$/g, "");
+    return s === "" ? [] : s.split(",").map(t => t === "inf" ? Infinity : t === "-inf" ? -Infinity : Number(t));
+  }
+  // a number as a Cozy literal: slider arithmetic leaves float dust, so round it away
+  const lit = v => { const r = Number(v.toFixed(6)); return Number.isInteger(r) ? r.toFixed(1) : String(r); };
+  const record = o => "{" + Object.keys(o).map(k => k + " = " + lit(o[k])).join(", ") + "}";
+  function modelSource(m) {
+    const eqs = m.eqs.map(e => '"' + e[1] + '"').join(";\n    ");
+    return "let " + m.name + " = dsge.model({\n  vars = \"" + m.vars + "\", shocks = \"" + m.shocks + "\",\n" +
+           "  params = " + record(m.params) + ",\n  sd = " + m.sd + ",\n" +
+           (m.steady ? "  steady = " + m.steady + ",\n" : "") + (m.init ? "  init = " + m.init + ",\n" : "") +
+           "  model = [\n    " + eqs + "]});";
+  }
+  // Cozy reads one line at a time, so the source is flattened before it is sent.
+  const oneLine = src => src.replace(/\s*\n\s*/g, " ");
+
+  // ------------------------------------------------------------------
+  // Small chart kit: inline SVG, colours from CSS custom properties
+  // ------------------------------------------------------------------
+  function niceTicks(lo, hi, want) {
+    if (!(hi > lo)) { hi = lo + 1; }
+    const raw = (hi - lo) / want, mag = Math.pow(10, Math.floor(Math.log10(raw)));
+    const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => (hi - lo) / s <= want + 0.5) || 10 * mag;
+    const out = [];
+    for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) out.push(Math.abs(v) < step * 1e-9 ? 0 : v);
+    return { ticks: out, step: step };
+  }
+  function tickFormat(step) {
+    const d = Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9)));
+    const dd = (step * Math.pow(10, d)) % 1 > 1e-9 ? d + 1 : d;
+    return v => v.toFixed(dd).replace(/^-0(\.0+)?$/, "0$1");
+  }
+  const sig = (v, n) => {
+    if (!isFinite(v)) return v > 0 ? "∞" : "–";
+    if (v === 0) return "0";
+    const a = Math.abs(v);
+    return a >= 100 ? v.toFixed(0) : a >= 10 ? v.toFixed(Math.max(0, n - 2)) : a >= 1 ? v.toFixed(n - 1) : v.toFixed(Math.min(6, n - Math.floor(Math.log10(a)) - 1));
+  };
+  const tip = $("tip");
+  function showTip(evt, head, rows) {
+    tip.textContent = "";
+    html("div", "head", tip, head);
+    rows.forEach(r => {
+      const row = html("div", "row", tip);
+      if (r.color) { const k = html("span", "line", row); k.style.setProperty("--c", r.color); }
+      html("span", "v", row, r.value);
+      html("span", "n", row, r.name);
+    });
+    tip.style.display = "block";
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = evt.clientX + 14, y = evt.clientY + 14;
+    if (x + w > window.innerWidth - 8) x = evt.clientX - w - 14;
+    if (y + h > window.innerHeight - 8) y = evt.clientY - h - 14;
+    tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+  }
+  const hideTip = () => { tip.style.display = "none"; };
+
+  // lineChart(host, opts): opts.series = [{name, cls, color, values, ref}], x = 0..n-1
+  function lineChart(host, o) {
+    const W = Math.max(220, Math.floor(host.clientWidth) || o.width), H = o.height, L = 44, R = 12, T = 10, B = o.xlabel ? 44 : 26;
+    const old = host.querySelector("svg"); if (old) old.remove();
+    const svg = el("svg", { viewBox: "0 0 " + W + " " + H, role: "img", "aria-label": o.aria });
+    host.insertBefore(svg, host.firstChild);
+    const n = o.series[0].values.length;
+    let lo = 0, hi = 0;
+    o.series.forEach(s => s.values.forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; }));
+    if (hi - lo < 1e-9) { hi = 1e-6; lo = -1e-6; }
+    const pad = (hi - lo) * 0.08; lo = lo < 0 ? lo - pad : 0; hi = hi > 0 ? hi + pad : 0;
+    const tk = niceTicks(lo, hi, o.yticks || 4), fy = tickFormat(tk.step);
+    lo = Math.min(lo, tk.ticks[0]); hi = Math.max(hi, tk.ticks[tk.ticks.length - 1]);
+    const X = i => L + (W - L - R) * i / (n - 1), Y = v => T + (H - T - B) * (hi - v) / (hi - lo);
+    tk.ticks.forEach(v => {
+      el("line", { class: v === 0 ? "zero" : "grid", x1: L, x2: W - R, y1: Y(v), y2: Y(v) }, svg);
+      el("text", { x: L - 8, y: Y(v) + 4, "text-anchor": "end" }, svg, fy(v));
+    });
+    const xstep = o.xstep || Math.max(1, Math.round((n - 1) / 4));
+    for (let i = 0; i < n; i += xstep) el("text", { x: X(i), y: H - B + 16, "text-anchor": "middle" }, svg, String(i));
+    if (o.xlabel) el("text", { class: "axis-title", x: (L + W - R) / 2, y: H - 2, "text-anchor": "middle" }, svg, o.xlabel);
+    o.series.forEach(s => {
+      const d = s.values.map((v, i) => (i ? "L" : "M") + X(i).toFixed(2) + " " + Y(v).toFixed(2)).join("");
+      el("path", { class: "ser " + s.cls, d: d }, svg);
+    });
+    // selective direct labels: each name sits beside its own line, at the first
+    // spot where its box touches no line and no other label (else the legend carries it)
+    if (o.labels) {
+      const boxes = [];
+      const yAt = (s, px) => { const f = Math.max(0, Math.min(n - 1, (px - L) / (W - L - R) * (n - 1))), i = Math.min(n - 2, Math.floor(f)); return Y(s.values[i] + (s.values[i + 1] - s.values[i]) * (f - i)); };
+      const clear = (bx, self) => {
+        if (bx.x0 < L + 2 || bx.x1 > W - R || bx.y0 < T || bx.y1 > H - B) return false;
+        if (boxes.some(q => bx.x0 < q.x1 + 6 && q.x0 < bx.x1 + 6 && bx.y0 < q.y1 + 2 && q.y0 < bx.y1 + 2)) return false;
+        for (let px = bx.x0 - 4; px <= bx.x1 + 4; px += 4)
+          for (const s of o.series) { const y = yAt(s, px); if (y > bx.y0 - 4 && y < bx.y1 + 4) return false; }
+        return true;
+      };
+      o.series.forEach(s => {
+        const w = s.name.length * 6.6 + 4;
+        for (let i = 0; i < n - 1; i++) for (const side of [-1, 1]) for (const dist of [9, 16, 24]) {
+          const px = X(i) + 6, py = Y(s.values[i]) + side * dist;
+          const bx = { x0: px, x1: px + w, y0: py - 9, y1: py + 5 };
+          if (!clear(bx, s)) continue;
+          boxes.push(bx);
+          el("line", { class: "cross", x1: X(i), y1: Y(s.values[i]), x2: px + 2, y2: py + (side < 0 ? 5 : -9) }, svg);
+          el("text", { class: "lbl", x: px + 2, y: py + 2 }, svg, s.name);
+          return;
+        }
+      });
+    }
+    // hover layer: the crosshair finds the x, one tooltip lists every series
+    const cross = el("line", { class: "cross", y1: T, y2: H - B, visibility: "hidden" }, svg);
+    const dots = o.series.map(s => el("circle", { class: "dot " + s.fill, r: 4, visibility: "hidden" }, svg));
+    const hit = el("rect", { x: L, y: T, width: W - L - R, height: H - T - B, fill: "transparent", tabindex: 0, "aria-label": o.aria + ". Use the arrow keys to read values." }, svg);
+    let cur = -1;
+    function at(i, evt) {
+      cur = Math.max(0, Math.min(n - 1, i));
+      cross.setAttribute("x1", X(cur)); cross.setAttribute("x2", X(cur)); cross.setAttribute("visibility", "visible");
+      o.series.forEach((s, j) => { dots[j].setAttribute("cx", X(cur)); dots[j].setAttribute("cy", Y(s.values[cur])); dots[j].setAttribute("visibility", "visible"); });
+      const b = svg.getBoundingClientRect();
+      const e = evt || { clientX: b.left + X(cur) / W * b.width, clientY: b.top + T / H * b.height };
+      showTip(e, o.tipHead(cur), o.series.map(s => ({ color: s.color, value: o.tipValue(s.values[cur]), name: s.name })));
+    }
+    function off() { cur = -1; cross.setAttribute("visibility", "hidden"); dots.forEach(d => d.setAttribute("visibility", "hidden")); hideTip(); }
+    hit.addEventListener("pointermove", e => {
+      const b = svg.getBoundingClientRect(), px = (e.clientX - b.left) / b.width * W;
+      at(Math.round((px - L) / (W - L - R) * (n - 1)), e);
+    });
+    hit.addEventListener("pointerleave", off);
+    hit.addEventListener("blur", off);
+    hit.addEventListener("keydown", e => {
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") { e.preventDefault(); at((cur < 0 ? 0 : cur) + (e.key === "ArrowRight" ? 1 : -1)); }
+      else if (e.key === "Escape") off();
+    });
+  }
+  function table(host, head, rows) {
+    host.textContent = "";
+    const t = html("table", null, host), hr = html("tr", null, html("thead", null, t));
+    head.forEach(h => html("th", null, hr, h));
+    const tb = html("tbody", null, t);
+    rows.forEach(r => { const tr = html("tr", null, tb); r.forEach(c => html("td", null, tr, c)); });
+  }
+  function equations(host, m) {
+    m.eqs.forEach(e => { const li = html("li", null, host); html("span", "what", li, e[0]); html("code", null, li, e[1]); });
+  }
+  function sliders(host, defs, state, onChange) {
+    defs.forEach(d => {
+      const box = html("div", "ctl"), lab = html("label", null, box), id = host.id + "-" + d.key;
+      lab.htmlFor = id;
+      html("span", null, lab, d.label);
+      const out = html("output", null, lab, state[d.key].toFixed(d.digits));
+      const inp = html("input", null, box);
+      inp.type = "range"; inp.id = id; inp.min = d.min; inp.max = d.max; inp.step = d.step; inp.value = state[d.key];
+      inp.addEventListener("input", () => { state[d.key] = Number(inp.value); out.textContent = state[d.key].toFixed(d.digits); onChange(d.key); });
+      d.set = v => { state[d.key] = v; inp.value = v; out.textContent = v.toFixed(d.digits); };
+      host.appendChild(box);
+    });
+  }
+  function resetButton(host, fn) {
+    const box = html("div", "ctl"); box.style.flex = "0 0 auto"; box.style.minWidth = "0";
+    const b = html("button", "linkbtn", box, "Reset"); b.type = "button"; b.addEventListener("click", fn);
+    host.appendChild(box);
+  }
+  function tile(host, label) {
+    const t = html("div", "tile", host);
+    html("div", "lab", t, label);
+    return { val: html("div", "val", t), sub: html("div", "sub", t) };
+  }
+  let lastMs = 0;
+  function timed(fn) { const t = performance.now(); const r = fn(); lastMs = performance.now() - t; return r; }
+  function engineLine(version) {
+    const e = $("engine"); e.textContent = "";
+    html("b", null, e, "Cozy " + version);
+    e.appendChild(document.createTextNode(" running in this page as WebAssembly · last solve " + lastMs.toFixed(1) + " ms"));
+  }
+
+  // ------------------------------------------------------------------
+  // Demo 1: the stochastic growth model
+  // ------------------------------------------------------------------
+  function growthDemo(version) {
+    const m = GROWTH, st = Object.assign({}, m.params);
+    const nv = m.panels.length;
+    function run(p) {
+      const code = "let s = dsge.solve(growth, " + record(p) + ");\n" +
+                   "let r = dsge.irf(s, \"e\", " + m.T + ");\n" +
+                   "js(100 * [r.y / s.ss.y, r.c / s.ss.c, r.i / s.ss.i, r.k / s.ss.k, r.a])";
+      const flat = numbers(oneLine(code));
+      const cols = m.panels.map((_, j) => Array.from({ length: m.T }, (_, t) => flat[t * nv + j]));
+      const extra = numbers("js([s.ybar; s.roots[1:2, 1]])");
+      return { code: code, cols: cols, ss: extra.slice(0, nv), roots: extra.slice(nv) };
+    }
+    const base = run(m.params);
+    const tiles = { ky: tile($("g-tiles"), "Capital to annual output"), cy: tile($("g-tiles"), "Consumption share of output"),
+                    iy: tile($("g-tiles"), "Investment share of output"), root: tile($("g-tiles"), "Half-life of a capital gap") };
+    const hosts = m.panels.map(p => {
+      const panel = html("div", "panel", $("g-charts"));
+      html("h3", null, panel, p[0]); html("div", "unit", panel, "% from steady state");
+      return html("div", "chart", panel);
+    });
+    // the two stable roots are the shock's persistence and capital's own root
+    const stats = (r, rho) => {
+      const kroot = Math.abs(r.roots[0] - rho) > Math.abs(r.roots[1] - rho) ? r.roots[0] : r.roots[1];
+      return { ky: r.ss[3] / r.ss[0] / 4, cy: r.ss[1] / r.ss[0], iy: r.ss[2] / r.ss[0], kroot: kroot };
+    };
+    const baseStats = stats(base, m.params.rho);
+    function draw() {
+      let r;
+      try { r = timed(() => run(st)); } catch (e) { $("g-code").textContent = String(e.message); return; }
+      const s = stats(r, st.rho);
+      const half = x => Math.log(0.5) / Math.log(x) / 4;
+      tiles.ky.val.textContent = s.ky.toFixed(2); tiles.ky.sub.textContent = "textbook " + baseStats.ky.toFixed(2);
+      tiles.cy.val.textContent = (100 * s.cy).toFixed(1) + "%"; tiles.cy.sub.textContent = "textbook " + (100 * baseStats.cy).toFixed(1) + "%";
+      tiles.iy.val.textContent = (100 * s.iy).toFixed(1) + "%"; tiles.iy.sub.textContent = "textbook " + (100 * baseStats.iy).toFixed(1) + "%";
+      tiles.root.val.textContent = half(s.kroot).toFixed(1) + " years"; tiles.root.sub.textContent = "root " + s.kroot.toFixed(4) + " · textbook " + half(baseStats.kroot).toFixed(1) + " years";
+      m.panels.forEach((p, j) => lineChart(hosts[j], {
+        width: 300, height: 170, xstep: 20, yticks: 4,
+        aria: p[0] + ": response to a one percent technology shock, percent from steady state, by quarter",
+        series: [{ name: "Textbook calibration", cls: "ref", fill: "fref", color: "var(--ref)", values: base.cols[j] },
+                 { name: "Your calibration", cls: "s1", fill: "f1", color: "var(--series-1)", values: r.cols[j] }],
+        tipHead: i => p[0] + " · quarter " + i, tipValue: v => sig(v, 3) + "%"
+      }));
+      $("g-code").textContent = "load(\"dsge\")\n" + modelSource(m) + "\n" + r.code.replace("js(", "").replace(/\)$/, "");
+      table($("g-table"), ["Quarter"].concat(m.panels.map(p => p[0] + " (%)")),
+            Array.from({ length: m.T }, (_, t) => [String(t)].concat(r.cols.map(c => sig(c[t], 4)))));
+      engineLine(version);
+    }
+    sliders($("g-controls"), m.sliders, st, draw);
+    resetButton($("g-controls"), () => { m.sliders.forEach(d => d.set(m.params[d.key])); draw(); });
+    equations($("g-eqs"), m);
+    draw();
+    return draw;
+  }
+
+  // ------------------------------------------------------------------
+  // Demos 2 and 3: the New Keynesian model and its determinacy region
+  // ------------------------------------------------------------------
+  function nkDemo(version) {
+    const m = NK, g = m.map;
+    const st = { phi_pi: m.params.phi_pi, phi_x: m.params.phi_x, rho: m.params.rho_v, kappa: m.params.kappa, beta: m.params.beta };
+    let shock = "ev";
+    const tiles = { verdict: tile($("n-tiles"), "Equilibrium"), roots: tile($("n-tiles"), "Unstable roots"),
+                    taylor: tile($("n-tiles"), "Taylor-principle value") };
+    const chart = $("n-chart"), overlay = $("n-overlay"), mapHost = $("n-map");
+    const over = () => {
+      const o = { phi_pi: st.phi_pi, phi_x: st.phi_x, kappa: st.kappa, beta: st.beta };
+      o[shock === "ev" ? "rho_v" : "rho_n"] = st.rho;
+      return o;
+    };
+    // ---- the map: an SVG grid of cells, filled a row at a time. It is rebuilt
+    // at the host's width (one SVG unit per CSS pixel) and refilled from counts.
+    const counts = new Array(g.nx * g.ny).fill(NaN);
+    const clsOf = u => "cell " + (isNaN(u) ? "fna" : u === 2 ? "f1" : u < 2 ? "f2" : "f3");
+    const verdictOf = u => isNaN(u) ? "not solved yet" : u === 2 ? "Determinate" : u < 2 ? "Indeterminate" : "No stable solution";
+    let G = null;
+    function buildMap() {
+      mapHost.textContent = "";
+      const MW = Math.max(260, Math.floor(mapHost.clientWidth) || 520), MH = Math.round(Math.min(340, Math.max(230, MW * 0.66)));
+      const L = 58, R = 12, T = 10, B = 44;
+      const cw = (MW - L - R) / g.nx, ch = (MH - T - B) / g.ny;
+      const PX = v => L + (MW - L - R) * v / g.xmax, PY = v => T + (MH - T - B) * (1 - v / g.ymax);
+      const svg = el("svg", { viewBox: "0 0 " + MW + " " + MH, role: "img",
+        "aria-label": "Determinacy of the New Keynesian model by the policy rule's response to inflation (horizontal) and to the output gap (vertical)" }, mapHost);
+      const cells = [];
+      for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++)
+        cells.push(el("rect", { class: clsOf(counts[j * g.nx + i]), x: L + i * cw, y: T + (g.ny - 1 - j) * ch, width: cw, height: ch }, svg));
+      for (let v = 0; v <= g.xmax + 1e-9; v += 0.5) el("text", { x: PX(v), y: MH - B + 16, "text-anchor": "middle" }, svg, v.toFixed(1));
+      for (let v = 0; v <= g.ymax + 1e-9; v += 0.25) el("text", { x: L - 8, y: PY(v) + 4, "text-anchor": "end" }, svg, v.toFixed(2));
+      el("text", { class: "axis-title", x: (L + MW - R) / 2, y: MH - 6, "text-anchor": "middle" }, svg, "Inflation response φπ");
+      const cy = (T + MH - B) / 2;
+      el("text", { class: "axis-title", x: 13, y: cy, "text-anchor": "middle", transform: "rotate(-90 13 " + cy + ")" }, svg, "Gap response φx");
+      // region names sit on a plate of the region's own colour, so the cell gaps do not cut the text
+      const plate = (cls, w) => el("rect", { class: cls, width: w, height: 22, rx: 4 }, svg);
+      const plateDet = plate("f1", 100), plateInd = plate("f2", 112);
+      const labDet = el("text", { class: "region-label", "text-anchor": "middle" }, svg, "Determinate");
+      const labInd = el("text", { class: "region-label", "text-anchor": "middle" }, svg, "Indeterminate");
+      const halo = el("path", { class: "boundary-halo" }, svg), line = el("path", { class: "boundary" }, svg);
+      const marker = el("circle", { class: "marker", r: 6 }, svg);
+      const hit = el("rect", { x: L, y: T, width: MW - L - R, height: MH - T - B, fill: "transparent", style: "cursor: crosshair" }, svg);
+      let hot = null;
+      const cellAt = e => {
+        const b = svg.getBoundingClientRect();
+        const i = Math.floor(((e.clientX - b.left) / b.width * MW - L) / cw), j = g.ny - 1 - Math.floor(((e.clientY - b.top) / b.height * MH - T) / ch);
+        return (i < 0 || i >= g.nx || j < 0 || j >= g.ny) ? null : { k: j * g.nx + i, fx: (i + 0.5) * g.xmax / g.nx, fy: (j + 0.5) * g.ymax / g.ny };
+      };
+      hit.addEventListener("pointermove", e => {
+        const c = cellAt(e); if (hot) hot.classList.remove("hot"); hot = null;
+        if (!c) { hideTip(); return; }
+        hot = cells[c.k]; hot.classList.add("hot");
+        showTip(e, "φπ = " + c.fx.toFixed(2) + ", φx = " + c.fy.toFixed(3),
+                [{ value: verdictOf(counts[c.k]), name: "" }, { value: isNaN(counts[c.k]) ? "–" : counts[c.k] + " of 2", name: "unstable roots" }]);
+      });
+      hit.addEventListener("pointerleave", () => { if (hot) hot.classList.remove("hot"); hot = null; hideTip(); });
+      hit.addEventListener("click", e => {
+        const c = cellAt(e); if (!c) return;
+        m.sliders[0].set(Number((Math.round(c.fx / 0.05) * 0.05).toFixed(2))); m.sliders[1].set(Number((Math.round(c.fy / 0.025) * 0.025).toFixed(3)));
+        drawResponses();
+      });
+      G = { cells: cells, PX: PX, PY: PY, L: L, labDet: labDet, labInd: labInd, plateDet: plateDet, plateInd: plateInd, halo: halo, line: line, marker: marker };
+      placeBoundary(); placeMarker();
+    }
+    // the analytic boundary: kappa (phi_pi - 1) + (1 - beta) phi_x = 0
+    function placeBoundary() {
+      const top = 1 - (1 - st.beta) * g.ymax / st.kappa;            // phi_pi on the line at phi_x = ymax
+      const d = "M" + G.PX(1) + " " + G.PY(0) + "L" + G.PX(Math.max(0, top)) + " " + G.PY(top < 0 ? st.kappa / (1 - st.beta) : g.ymax);
+      G.halo.setAttribute("d", d); G.line.setAttribute("d", d);
+      const mid = Math.max(0, 1 - (1 - st.beta) * 0.5 * g.ymax / st.kappa); // the line at half height
+      const put = (lab, pl, w, x, show) => {
+        const y = G.PY(0.5 * g.ymax);
+        lab.setAttribute("x", x); lab.setAttribute("y", y + 4); pl.setAttribute("x", x - w / 2); pl.setAttribute("y", y - 11);
+        lab.setAttribute("visibility", show ? "visible" : "hidden"); pl.setAttribute("visibility", show ? "visible" : "hidden");
+      };
+      put(G.labInd, G.plateInd, 112, G.PX(mid / 2), G.PX(mid) - G.L > 124);
+      put(G.labDet, G.plateDet, 100, G.PX((mid + g.xmax) / 2), G.PX(g.xmax) - G.PX(mid) > 112);
+    }
+    function placeMarker() { G.marker.setAttribute("cx", G.PX(st.phi_pi)); G.marker.setAttribute("cy", G.PY(st.phi_x)); }
+    let mapJob = 0;
+    function drawMap() {
+      const job = ++mapJob;
+      placeBoundary();
+      let j = 0;
+      (function row() {
+        if (job !== mapJob) return;
+        const until = performance.now() + 12;
+        while (j < g.ny && performance.now() < until) {
+          const fy = (j + 0.5) * g.ymax / g.ny;
+          const us = numbers("js(map(fn f -> dsge.bk(nk, {phi_pi = f, phi_x = " + lit(fy) + ", kappa = " + lit(st.kappa) + ", beta = " + lit(st.beta) +
+                             "}).unstable, linspace(" + lit(0.5 * g.xmax / g.nx) + ", " + lit(g.xmax - 0.5 * g.xmax / g.nx) + ", " + g.nx + ")))");
+          for (let i = 0; i < g.nx; i++) { const k = j * g.nx + i; counts[k] = us[i]; G.cells[k].setAttribute("class", clsOf(us[i])); }
+          j++;
+        }
+        if (j < g.ny) requestAnimationFrame(row);
+      })();
+    }
+    function drawResponses() {
+      const o = over(), rec = record(o);
+      placeMarker();
+      let code = "let b = dsge.bk(nk, " + rec + "); [b.unstable, b.forward]";
+      let u;
+      try { u = timed(() => numbers("let b = dsge.bk(nk, " + rec + "); js([b.unstable, b.forward])"))[0]; }
+      catch (e) { $("n-code").textContent = String(e.message); return; }
+      const tv = st.kappa * (st.phi_pi - 1) + (1 - st.beta) * st.phi_x;
+      const ok = u === 2;
+      tiles.verdict.val.textContent = "";
+      const s = html("span", "status " + (ok ? "good" : "bad"), tiles.verdict.val, (ok ? "✓ " : "⚠ ") + verdictOf(u));
+      s.style.fontSize = "19px";
+      tiles.verdict.sub.textContent = ok ? "one stable path" : u < 2 ? "many stable paths" : "every path explodes";
+      tiles.roots.val.textContent = u + " of 2"; tiles.roots.sub.textContent = "one per forward-looking variable is needed";
+      tiles.taylor.val.textContent = (tv >= 0 ? "+" : "−") + Math.abs(tv).toFixed(4); tiles.taylor.sub.textContent = "κ(φπ − 1) + (1 − β)φx, positive when determinate";
+      if (ok) {
+        const run = "let s = dsge.solve(nk, " + rec + ");\nlet r = dsge.irf(s, \"" + shock + "\", " + m.T + ");\n";
+        const flat = timed(() => numbers(oneLine(run + "js([r.x, r.pi, r.i])")));
+        const cols = m.series.map((_, j) => Array.from({ length: m.T }, (_, t) => flat[t * 3 + j]));
+        chart.classList.remove("stale");
+        lineChart(chart, {
+          width: 520, height: 340, xstep: 4, yticks: 6, labels: true, xlabel: "Quarters after the shock",
+          aria: "Responses of the output gap, inflation and the policy rate to a " + (shock === "ev" ? "monetary policy" : "natural rate") + " shock",
+          series: m.series.map((d, j) => ({ name: d[0], cls: "s" + d[2], fill: "f" + d[2], color: "var(--series-" + d[2] + ")", values: cols[j] })),
+          tipHead: i => "Quarter " + i, tipValue: v => sig(v, 3) + " pp"
+        });
+        code += "\n" + run + "[r.x, r.pi, r.i]";
+        table($("n-table"), ["Quarter"].concat(m.series.map(d => d[0] + " (pp)")),
+              Array.from({ length: m.T }, (_, t) => [String(t)].concat(cols.map(c => sig(c[t], 4)))));
+      } else {
+        chart.classList.add("stale");
+        overlay.textContent = u < 2
+          ? "No unique solution under this rule: " + u + " unstable root" + (u === 1 ? "" : "s") + " for 2 forward-looking variables. Raise the response to inflation, or click a blue cell on the map."
+          : "No stable solution under this rule.";
+        code += "\n% dsge.solve(nk, ...) would refuse: the model is " + (u < 2 ? "indeterminate" : "explosive");
+        $("n-table").textContent = "No responses: the model has no unique stable solution under this rule.";
+      }
+      $("n-code").textContent = "load(\"dsge\")\n" + modelSource(m) + "\n" + code;
+      engineLine(version);
+    }
+    let mapTimer = 0;
+    sliders($("n-controls"), m.sliders, st, key => {
+      drawResponses();
+      if (key === "kappa" || key === "beta") { clearTimeout(mapTimer); mapTimer = setTimeout(drawMap, 120); }
+    });
+    resetButton($("n-controls"), () => {
+      const d = { phi_pi: m.params.phi_pi, phi_x: m.params.phi_x, rho: shock === "ev" ? m.params.rho_v : m.params.rho_n, kappa: m.params.kappa, beta: m.params.beta };
+      m.sliders.forEach(s => s.set(d[s.key])); drawResponses(); drawMap();
+    });
+    document.querySelectorAll("#n-controls .seg button").forEach(b => b.addEventListener("click", () => {
+      shock = b.dataset.shock;
+      document.querySelectorAll("#n-controls .seg button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+      m.sliders[2].set(shock === "ev" ? m.params.rho_v : m.params.rho_n);
+      drawResponses();
+    }));
+    equations($("n-eqs"), m);
+    buildMap();
+    drawResponses();
+    drawMap();
+    return () => { buildMap(); drawResponses(); };
+  }
+
+  // ------------------------------------------------------------------
+  function fail(msg) {
+    $("engine").textContent = "";
+    const f = $("fail"); f.hidden = false;
+    f.textContent = "The Cozy engine could not start in this browser, so the charts cannot be drawn. " + msg;
+  }
+  if (typeof Cozy !== "function") { fail("The interpreter file (cozy.js) did not load."); return; }
+  Cozy().then(function (mod) {
+    M = mod; M._cozy_init();
+    const version = M.UTF8ToString(M._cozy_version()).split(" ")[0];
+    cozy('load("dsge")');
+    cozy('let js = fn M -> strjoin(map(fn x -> fmt("{:.10g}", x), M), ",");');
+    cozy(oneLine(modelSource(GROWTH)));
+    cozy(oneLine(modelSource(NK)));
+    const redraw = [growthDemo(version), nkDemo(version)];
+    // charts are drawn at one SVG unit per CSS pixel, so a new width means a redraw
+    let lastW = window.innerWidth, timer = 0;
+    window.addEventListener("resize", () => {
+      if (window.innerWidth === lastW) return;
+      lastW = window.innerWidth; clearTimeout(timer); timer = setTimeout(() => redraw.forEach(f => f()), 150);
+    });
+    document.documentElement.setAttribute("data-ready", "1");
+  }).catch(function (e) { fail(String(e && e.message || e)); });
+})();
+</script>
+</body>
+</html>

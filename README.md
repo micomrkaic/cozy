@@ -6,6 +6,8 @@
 language, REPL, and tools, with every example verified against the
 interpreter. **[Try it in the browser](https://micomrkaic.github.io/cozy/)** —
 the same interpreter, compiled to WebAssembly, with the books built in.
+**[DSGE demos](https://micomrkaic.github.io/cozy/dsge.html)** — three macro
+models solved live in the page by the `dsge` package.
 
 A **functional matrix language** with Octave-flavoured syntax, implemented in
 C23 — the successor to [Neutrino](heritage/), built for numerical weight:
