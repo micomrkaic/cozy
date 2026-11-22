@@ -1,5 +1,25 @@
 # Cozy changelog
 
+## 0.1.26 — the playground lists every package
+
+### Fixed
+- **dsge and ts were missing from the playground's Packages pane**
+  (owner's report, with the screenshot): the pane was drawn from a
+  hand-written `var PKGS = [...]` in docs/index.html, last edited at
+  twelve packages. The line is now GENERATED from packages/*.cz by
+  tools/gen_page_pkgs.py, and `make test` runs it with --check — the
+  generator pattern, applied where it was missing.
+- **Unticking a package now unloads it by path** —
+  `clear("packages/dsge.cz")`, not `clear("dsge")`. clear() looks for a
+  variable before a package, and dsge.cz defines a record named dsge, so
+  the short form removed the record and left the other thirty names
+  loaded, the box still ticked. The path is unambiguous for every
+  package; dsge.cz's header says the same for the prompt.
+
+### Notes
+- Verified in a headless browser: fourteen boxes; ticking dsge loads it
+  and dsge.solve answers; unticking leaves no packages/dsge.cz in who.
+
 ## 0.1.25 — the dsge guide fits the page; PDFs rebuilt
 
 ### Changed

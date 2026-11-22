@@ -158,6 +158,7 @@ test: vmtest $(BIN)
 	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
 	@python3 tools/gen_dsge_page.py --check
+	@python3 tools/gen_page_pkgs.py --check
 	@bash tests/run_emacs.sh
 
 # Same corpus, every input run under AddressSanitizer/UBSan; fails on any leak.

@@ -30,6 +30,8 @@
 % dsge.solve, dsge.irf, dsge.simulate, dsge.moments, dsge.vardecomp, and the
 % ready-made models dsge.rbc and dsge.nk. The functions behind it (dsge_*)
 % and the helpers (dg_*) are ordinary globals: keep() must spare them.
+% To unload the package, clear("packages/dsge.cz"): clear("dsge") finds the
+% record first and removes only that.
 
 % internal: can the one-character string ch start a name?
 let dg_alpha = fn ch -> ((ch >= "a") && (ch <= "z")) || ((ch >= "A") && (ch <= "Z")) || (ch == "_") || (ch > "~")
