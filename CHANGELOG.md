@@ -1,5 +1,42 @@
 # Cozy changelog
 
+## 0.1.29 — help, with or without quotes
+
+### Changed
+- **help(x) and help("name") now agree** (owner's objection: why
+  `help("dsge")` but `help(dsge.solve)`?). The split was real — a bare
+  argument is a value, a quoted one a name — but two cases fell through
+  it: `help(dsge)` said only "a Record value", and `help("dsge.solve")`
+  said there was no such name.
+  - **help on a record lists its fields**, one line each: a function
+    with the first line of its docstring (minus the "name(args): "
+    lead), anything else with what it is. A record used as a namespace
+    thereby has a table of contents: `help(dsge)`, `help(norm)`. Handed
+    the value, help finds the global that holds that very record, so
+    the lines read `dsge.solve`, not `.solve`.
+  - **A dotted name is a path into a record**: `help("dsge.solve")`
+    shows what `help(dsge.solve)` shows; a wrong field says which
+    record lacks it.
+  - **help("dsge") shows the record**, with one more line naming the
+    package of the same name. A package without a record of its own
+    (`help("ts")`) lists as before.
+  The rule that remains: the quoted form always works; the bare form
+  works when the thing is a value (a package file is not, and a
+  zero-argument function would run).
+
+### Fixed
+- **help("norm") after load("dist") described the builtin norm**, not
+  the record that shadows it: the lookup scanned the builtins first.
+  It now takes the user's binding first, as a bare name does.
+
+### Notes
+- dsge.cz's docstrings open with a line that stands alone, since that
+  line is now a row of `help(dsge)`; the packages guide shows the
+  listing and tells package authors to do the same.
+- help's output is multi-line, so it is pinned by manual transcripts
+  (MANUAL "Help for your own functions", PACKAGES section 14), not by
+  the one-line goldens.
+
 ## 0.1.28 — the manual pages in color under any PAGER
 
 ### Fixed

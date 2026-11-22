@@ -31,7 +31,7 @@
     { "pretty", "pretty on|off", "aligned multi-line matrix display (default on in the REPL)", "repl", "pretty off                        % single-line matrices" },
     { "more", "more on|off", "page long output through $PAGER", "repl", "more on                           % long results go through less" },
     { "who", "who | who(\"functions\", \"sorted\")", "list the workspace; filter by \"records\"/\"functions\"/\"vars\", add \"sorted\" for name order", "core", "who(\"functions\")                  % only your fn bindings\nwho(\"sorted\")                     % everything, alphabetical" },
-    { "help", "help / help(f)", "help lists every builtin; help(f) describes one", "core", "help(sum)                         % details and examples for one builtin" },
+    { "help", "help / help(x) / help(\"name\")", "help lists every builtin; help(x) describes a function, or lists a record's fields; help(\"name\") asks by name: a function, a loaded package, or a path such as \"norm.cdf\"", "core", "help(sum)                         % details and examples for one builtin" },
     { "system", "system(cmd)", "run a shell command string; return its exit status", "core", "system(\"date\")                    % run a shell command, returns its exit status" },
     { "dis", "dis(f)", "disassemble a function's bytecode (compiler/VM introspection)", "core", "dis(fn x -> x + 1)                % prints the compiled bytecode" },
     { "fzero", "fzero(f, a, b)", "root of f in [a, b] (Brent; f(a), f(b) must differ in sign)", "solve", "format(6); fzero(cos, 1, 2)       %= 1.57080\nfzero(fn x -> x^3 - 2*x - 5, 2, 3)" },

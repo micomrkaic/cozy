@@ -5167,6 +5167,95 @@ static void help_closure(FILE *out, CloObj *cl)
     }
 }
 
+/* The first description line of a function's docstring (examples skipped),
+ * without a leading "name(args): " — whatever name the block wrote there,
+ * so "norm.pdf(x, mu, sigma): normal density" gives "normal density". */
+static const char *help_doc_summary(const Chunk *c, uint32_t *len)
+{
+    const char *d = c->doc; uint32_t dl = c->doclen; uint32_t L = 0; const char *tx = "";
+    while (d && dl) {
+        const char *nl = memchr(d, '\n', dl);
+        const char *le = nl ? nl : d + dl;
+        tx = doc_line_text(d, le, &L);
+        if (L && strncmp(tx, "e.g.", 4)) break;
+        L = 0;
+        if (!nl) break;
+        dl -= (uint32_t)(le + 1 - d); d = le + 1;
+    }
+    const char *paren = memchr(tx, '(', L), *sp = memchr(tx, ' ', L);
+    if (paren && paren > tx && (!sp || sp > paren)) {            /* starts "name(" */
+        const char *close = memchr(paren, ')', L - (uint32_t)(paren - tx));
+        if (close && close + 1 < tx + L && close[1] == ':') {
+            uint32_t sk = (uint32_t)(close + 2 - tx);
+            while (sk < L && tx[sk] == ' ') sk++;
+            tx += sk; L -= sk;
+        }
+    }
+    *len = L;
+    return tx;
+}
+
+/* A global by name, the user's binding first: a package may shadow a builtin
+ * (dist.cz's norm record over the vector norm), and help must describe the
+ * one a bare name would reach. */
+static Value *help_global(Interp *I, const char *nm, uint32_t len)
+{
+    EnvObj *g = I->globals;
+    if (!g) return NULL;
+    for (uint32_t i = g->count; i-- > g->n_protected; )
+        if (g->namelens[i] == len && !memcmp(g->names[i], nm, len)) return &g->vals[i];
+    for (uint32_t i = 0; i < g->n_protected && i < g->count; i++)
+        if (g->namelens[i] == len && !memcmp(g->names[i], nm, len)) return &g->vals[i];
+    return NULL;
+}
+
+/* help on a record: its fields, one line each — a function with the first
+ * line of its docstring, anything else with what it is. This is the face of
+ * a record namespace (dsge, norm): help(dsge) lists what dsge.* offers.
+ * `name` is how the caller spelled the record; when help was handed the
+ * value itself, the global that holds this very record supplies the name. */
+static void help_record(Interp *I, FILE *out, RecObj *r, const char *name, uint32_t namelen)
+{
+    EnvObj *g = I->globals;
+    if (!name)
+        for (uint32_t i = 0; g && i < g->count; i++)
+            if (g->vals[i].kind == VAL_RECORD && as_rec(g->vals[i]) == r)
+                { name = g->names[i]; namelen = g->namelens[i]; break; }
+    uint32_t nf = 0; int first = -1;
+    for (uint32_t i = 0; i < r->count; i++)
+        if (r->vals[i].kind == VAL_CLOSURE || r->vals[i].kind == VAL_BUILTIN) { if (first < 0) first = (int)i; nf++; }
+    fputs("  ", out);
+    if (name) fprintf(out, "%.*s — ", (int)namelen, name);
+    if (nf == r->count && nf) fprintf(out, "a record of %u function%s\n", nf, nf == 1 ? "" : "s");
+    else fprintf(out, "a record of %u field%s%s", r->count, r->count == 1 ? "" : "s", nf ? "" : "\n");
+    if (nf != r->count && nf) fprintf(out, ", %u of them function%s\n", nf, nf == 1 ? "" : "s");
+    for (uint32_t i = 0; i < r->count; i++) {
+        char label[96];
+        snprintf(label, sizeof label, "%.*s%s%.*s", name ? (int)namelen : 0, name ? name : "",
+                 name ? "." : "", (int)r->keylens[i], r->keys[i]);
+        Value f = r->vals[i];
+        fprintf(out, "    %-16s ", label);
+        if (f.kind == VAL_CLOSURE) {
+            uint32_t L; const char *tx = help_doc_summary(as_clo(f)->chunk, &L);
+            if (L) fprintf(out, "%.*s\n", (int)L, tx); else fputs("a function\n", out);
+        } else if (f.kind == VAL_BUILTIN) {
+            const BuiltinDoc *d = builtin_info(as_blt(f)->name);
+            fprintf(out, "%s\n", d ? d->desc : "a builtin");
+        } else if (f.kind == VAL_ARRAY) {
+            ArrObj *a = as_arr(f);
+            fprintf(out, "a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));
+        } else if (f.kind == VAL_RECORD) {
+            fprintf(out, "a record of %u field%s\n", as_rec(f)->count, as_rec(f)->count == 1 ? "" : "s");
+        } else {
+            fprintf(out, "a %s value\n", type_name(f.kind));
+        }
+    }
+    if (first >= 0 && name)
+        fprintf(out, "  help(%.*s.%.*s) or help(\"%.*s.%.*s\") for any one of them\n",
+                (int)namelen, name, (int)r->keylens[first], r->keys[first],
+                (int)namelen, name, (int)r->keylens[first], r->keys[first]);
+}
+
 static Value bi_help(Interp *I, Value *args, uint32_t n)
 {
     (void)I;
@@ -5205,10 +5294,45 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
              * their first doc line. */
             StrObj *s = as_str(v);
             EnvObj *g = I->globals;
-            Value *found = NULL;
-            for (uint32_t i = 0; g && i < g->count; i++)
-                if (g->namelens[i] == s->len && !memcmp(g->names[i], s->data, s->len))
-                    { found = &g->vals[i]; break; }
+            /* help("a.b"): a dotted name is a path into a record — whatever
+             * help(a.b) describes, so quoted and bare forms agree. A package
+             * file ("dsge.cz", "packages/dsge.cz") is not a path. */
+            const char *dot = memchr(s->data, '.', s->len);
+            bool is_file = memchr(s->data, '/', s->len) ||
+                           (s->len > 3 && !memcmp(s->data + s->len - 3, ".cz", 3));
+            if (dot && !is_file) {
+                const char *p = s->data, *end = s->data + s->len;
+                uint32_t hl = (uint32_t)(dot - p);
+                Value *cur = help_global(I, p, hl);
+                if (!cur) {
+                    fprintf(vout(), "  no name called '%.*s' (who lists your names)\n", (int)hl, p);
+                    return val_null();
+                }
+                p = dot + 1;
+                for (;;) {
+                    const char *nd = memchr(p, '.', (size_t)(end - p));
+                    uint32_t kl = (uint32_t)((nd ? nd : end) - p);
+                    Value *next = NULL;
+                    if (cur->kind == VAL_RECORD) {
+                        RecObj *r = as_rec(*cur);
+                        for (uint32_t i = 0; i < r->count; i++)
+                            if (r->keylens[i] == kl && !memcmp(r->keys[i], p, kl)) { next = &r->vals[i]; break; }
+                    }
+                    if (!next) {
+                        fprintf(vout(), "  '%.*s' has no field '%.*s'%s\n", (int)(p - 1 - s->data), s->data, (int)kl, p,
+                                cur->kind == VAL_RECORD ? " (help on the record lists its fields)" : " (it is not a record)");
+                        return val_null();
+                    }
+                    cur = next;
+                    if (!nd) break;
+                    p = nd + 1;
+                }
+                if (cur->kind == VAL_RECORD) help_record(I, vout(), as_rec(*cur), s->data, s->len);
+                else if (cur->kind == VAL_STRING) fprintf(vout(), "  %.*s: a String value\n", (int)s->len, s->data);
+                else { Value a2 = *cur; bi_help(I, &a2, 1); }
+                return val_null();
+            }
+            Value *found = help_global(I, s->data, s->len);
             int gi = -1;
             for (size_t k = 0; k < g_nlg && gi < 0; k++) {
                 const char *lp = g_lg[k].path; size_t ll = strlen(lp);
@@ -5221,6 +5345,14 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
             }
             if (found && found->kind == VAL_CLOSURE) help_closure(vout(), as_clo(*found));
             else if (found && found->kind == VAL_BUILTIN) { Value a2 = *found; bi_help(I, &a2, 1); }
+            else if (found && found->kind == VAL_RECORD) {
+                /* a record namespace: the record is the face, also when a
+                 * package shares its name (dsge the record, dsge.cz the file) */
+                help_record(I, vout(), as_rec(*found), s->data, s->len);
+                if (gi >= 0)
+                    fprintf(vout(), "  (also the loaded package %s: who(\"%.*s\") lists its %zu names)\n",
+                            g_lg[gi].path, (int)s->len, s->data, g_lg[gi].n);
+            }
             else if (gi >= 0) {
                 fprintf(vout(), "  %s — %zu name%s\n", g_lg[gi].path, g_lg[gi].n, g_lg[gi].n == 1 ? "" : "s");
                 for (size_t m = 0; m < g_lg[gi].n; m++) {
@@ -5263,6 +5395,8 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
         } else if (v.kind == VAL_SPARSE) {
             SpObj *s = as_sp(v);
             fprintf(vout(), "  sparse %ux%u, nnz = %u\n", s->rows, s->cols, s->nnz);
+        } else if (v.kind == VAL_RECORD) {
+            help_record(I, vout(), as_rec(v), NULL, 0);
         } else {
             fprintf(vout(), "  a %s value\n", type_name(v.kind));
         }

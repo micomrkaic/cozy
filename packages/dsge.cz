@@ -178,10 +178,11 @@ let dg_table = fn Y, names -> (
   r
 )
 
-% dsge.model(spec): compile a model. spec is a record: vars and shocks are
-% space-separated name lists, params a record of values, model a string
-% column of equations in Dynare's notation (x(+1), x(-1); "lhs = rhs" or a
-% bare expression meaning "= 0"). Optional: sd, a record of shock standard
+% dsge.model(spec): compile a model from a spec record.
+% In the spec, vars and shocks are space-separated name lists, params a
+% record of values, and model a string column of equations in Dynare's
+% notation (x(+1), x(-1); "lhs = rhs" or a bare expression meaning
+% "= 0"). Optional: sd, a record of shock standard
 % deviations (default 1); init, a record of starting values for the
 % steady-state search (default 1); steady, a function of the parameter
 % record returning the steady state as a record, used instead of the search.
@@ -399,8 +400,8 @@ let dg_core = fn A, B, C -> (
   {found = cr.found, P = cr.P, roots = roots, nstable = sum(roots < 1 + 1e-6)}
 )
 
-% dsge.steady(m, over = {}): the steady state as a record of values by variable
-% name — the model's steady function if it has one, else Newton's method
+% dsge.steady(m, over = {}): the steady state, as a record by variable name.
+% It comes from the model's steady function if it has one, else Newton's method
 % from init with exact derivatives. over is a record of parameter values to
 % use instead of the model's own.
 % e.g. format(6); dsge.steady(dsge.model(dsge.rbc())).k %= 28.3484
@@ -413,8 +414,8 @@ let dsge_steady = fn m, over = {} -> (
   r
 )
 
-% dsge.bk(m, over = {}): the Blanchard-Kahn check, without raising an error —
-% a record {ok, verdict, unstable, forward, roots}. verdict is
+% dsge.bk(m, over = {}): the Blanchard-Kahn check, as a value not an error.
+% Returns a record {ok, verdict, unstable, forward, roots}. verdict is
 % "determinate" (a unique stable solution), "indeterminate" (many: too few
 % unstable roots) or "explosive" (none: too many); unstable roots are
 % counted against the forward-looking variables as Dynare's check does,
@@ -435,8 +436,8 @@ let dsge_bk = fn m, over = {} -> (
    roots = c.roots[n - nb + 1 : n + nf, 1]}
 )
 
-% dsge.solve(m, over = {}): steady state and first-order solution. Returns a
-% record: ss (steady state by name), P and Q with y = P y(-1) + Q e in
+% dsge.solve(m, over = {}): steady state and first-order solution.
+% Returns a record: ss (steady state by name), P and Q with y = P y(-1) + Q e in
 % deviations from the steady state (rows and columns in the order of
 % m.vars and m.shocks), roots (moduli, as dsge.bk gives them), sd, params and
 % the model. An error explains which Blanchard-Kahn condition fails if the
@@ -472,10 +473,10 @@ let dg_shock = fn s, name -> (
   j
 )
 
-% dsge.irf(s, shock, T = 40): impulse responses to a one-standard-deviation
-% innovation in the named shock — a record of columns, one per variable,
-% T periods long, row 1 being the period of the shock. Values are
-% deviations from the steady state.
+% dsge.irf(s, shock, T = 40): impulse responses to one named shock.
+% The innovation is one standard deviation. Returns a record of columns,
+% one per variable, T periods long, row 1 being the period of the shock.
+% Values are deviations from the steady state.
 % e.g. let r = dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e", 20); format(6); r.a[1] %= 0.0100000
 % e.g. let r = dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e", 20); format(6); r.a[2] %= 0.00950000
 % e.g. length(dsge.irf(dsge.solve(dsge.model(dsge.nk())), "ev").pi) %= 40
@@ -488,9 +489,10 @@ let dsge_irf = fn s, shock, T = 40 -> (
   dg_table(Y, s.model.vars)
 )
 
-% dsge.simulate(s, T = 200): a simulated path of T periods from the steady
-% state, shocks drawn from the session's generator (rng to reproduce) —
-% a record of columns in LEVELS, one per variable.
+% dsge.simulate(s, T = 200): a simulated path of T periods, in levels.
+% It starts from the steady state, with shocks drawn from the session's
+% generator (rng to reproduce). Returns a record of columns, one per
+% variable, in LEVELS rather than deviations.
 % e.g. rng(1); length(dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50).c) %= 50
 % e.g. rng(1); let x = dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50); max(abs(x.y - x.c - x.i)) < 1e-12 %= true
 let dsge_simulate = fn s, T = 200 -> (
@@ -521,11 +523,11 @@ let dg_lyap = fn P, W -> (
   (S + S') / 2
 )
 
-% dsge.moments(s, K = 5): theoretical moments of the solved model — a record
-% {vars, mean, sd, var, corr, acorr}: steady-state means, standard
-% deviations, the covariance and correlation matrices, and autocorrelations
-% at lags 1..K (one row per variable). A variable that never moves has
-% nan correlations.
+% dsge.moments(s, K = 5): theoretical moments of the solved model.
+% Returns a record {vars, mean, sd, var, corr, acorr}: steady-state
+% means, standard deviations, the covariance and correlation matrices, and
+% autocorrelations at lags 1..K (one row per variable). A variable that
+% never moves has nan correlations.
 % e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.sd[5] %= 0.03203
 % e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.acorr[5, 1] %= 0.9500
 % e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.corr[1, 2] %= 0.9308
@@ -542,8 +544,8 @@ let dsge_moments = fn s, K = 5 -> (
   {vars = s.model.vars, mean = s.ybar, sd = sdv, var = S, corr = S ./ den, acorr = ac}
 )
 
-% dsge.vardecomp(s): the unconditional variance decomposition in percent — one
-% row per variable (in the order of the model's vars), one column per
+% dsge.vardecomp(s): the unconditional variance decomposition, in percent.
+% One row per variable (in the order of the model's vars), one column per
 % shock; each row sums to 100.
 % e.g. dsge.vardecomp(dsge.solve(dsge.model(dsge.rbc())))[1, 1] %= 100
 % e.g. let v = dsge.vardecomp(dsge.solve(dsge.model(dsge.nk()))); format(4); sum(v[1, :]) %= 100.0
@@ -558,10 +560,11 @@ let dsge_vardecomp = fn s -> (
   100 * V ./ (sum(V, 2) * ones(1, k))
 )
 
-% dsge.rbc(): the stochastic growth model as a ready-made spec for dsge —
-% output y, consumption c, investment i, capital k, log technology a, one
-% technology shock e; quarterly calibration, CRRA utility. Its steady
-% state is found by Newton's method from the init values.
+% dsge.rbc(): the stochastic growth model, a ready-made spec.
+% Variables are output y, consumption c, investment i, capital k and log
+% technology a, with one technology shock e; quarterly calibration, CRRA
+% utility. Its steady state is found by Newton's method from the init
+% values.
 % e.g. dsge.rbc().vars                      %= "y c i k a"
 % e.g. numel(dsge.rbc().model)              %= 5
 let dsge_rbc = fn -> {
@@ -577,8 +580,8 @@ let dsge_rbc = fn -> {
            "a = rho * a(-1) + e"]
 }
 
-% dsge.nk(): the three-equation New Keynesian model (Gali 2015, ch. 3) as
-% a ready-made spec — output gap x, inflation pi, the policy rate i, and
+% dsge.nk(): the three-equation New Keynesian model, a ready-made spec.
+% From Gali (2015, ch. 3): output gap x, inflation pi, the policy rate i, and
 % two AR(1) disturbances: the natural rate rn (shock en) and a monetary
 % policy disturbance v (shock ev). Determinate exactly when
 % kappa (phi_pi - 1) + (1 - beta) phi_x > 0, the Taylor principle.

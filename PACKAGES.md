@@ -710,6 +710,27 @@ cozy> dsge.vardecomp(s)[1:3, :]
 [77.96, 22.04; 98.70, 1.300; 98.89, 1.105]
 ```
 
+The package's face is one record, so `help(dsge)` — or `help("dsge")`,
+the two agree — is its table of contents, and `help(dsge.solve)` the
+page for one function:
+
+```
+cozy> load("packages/dsge.cz")
+cozy> help(dsge)
+  dsge — a record of 10 functions
+    dsge.model       compile a model from a spec record.
+    dsge.steady      the steady state, as a record by variable name.
+    dsge.bk          the Blanchard-Kahn check, as a value not an error.
+    dsge.solve       steady state and first-order solution.
+    dsge.irf         impulse responses to one named shock.
+    dsge.simulate    a simulated path of T periods, in levels.
+    dsge.moments     theoretical moments of the solved model.
+    dsge.vardecomp   the unconditional variance decomposition, in percent.
+    dsge.rbc         the stochastic growth model, a ready-made spec.
+    dsge.nk          the three-equation New Keynesian model, a ready-made spec.
+  help(dsge.model) or help("dsge.model") for any one of them
+```
+
 A model with no unique stable solution is refused with the count that
 decides it:
 
@@ -805,7 +826,9 @@ cozy> help("ts")
 **The namespace law** (design entry 7 — records are the module system).
 A package that wants a namespace packs its public API into a record:
 `{cdf = fn ..., pdf = fn ...}` — `fields(pkg)` is then the manifest and
-`getfield(pkg, name)` the dynamic door, and sibling fields may call each
+`getfield(pkg, name)` the dynamic door, `help(pkg)` lists the fields with
+the first line of each function's docstring (so write that line to stand
+alone), and sibling fields may call each
 other through the record's own global name (functions resolve globals at
 CALL time, so `p.isod` inside `p.isev` works). The same late binding is
 also the one trap: **a record namespace hides the face, never the body.**

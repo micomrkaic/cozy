@@ -68,7 +68,7 @@ apply to scripts — they are REPL features.
 
 | Command | Effect |
 |---|---|
-| `help` / `help(f)` | catalogue of all builtins / details plus usage examples for one |
+| `help` / `help(x)` / `help("name")` | catalogue of all builtins / details plus usage examples for one function, or the fields of a record / the same, asked by name |
 | `who` | your variables, with type and shape; `who("records")`, `who("functions")`, `who("vars")`, add `"sorted"` |
 | `whov` / `whof` / `whor` / `whos` | shorthands: vars, functions, records, everything-sorted |
 | `version` | the interpreter version, as a string |
@@ -500,6 +500,32 @@ asks by name (the way to read about a zero-argument function without
 autocalling it), and `help("pkg")` lists a loaded package's functions
 with their first line. The package guide states the docstring law and
 how the suite verifies every package example.
+
+**With or without quotes.** `help(x)` is handed a value and describes
+it; `help("name")` is handed a name and looks it up. The two agree
+wherever both make sense: a record lists its fields, one line each — so
+a record used as a namespace shows what it offers — and a dotted name
+is a path into a record, quoted or not. The quoted form is the one that
+always works: a package (`help("ts")`) is a file, not a value, and a
+zero-argument function would run if written bare.
+
+```
+cozy> load("packages/dist.cz")
+cozy> help(norm)
+  norm — a record of 4 functions
+    norm.pdf         normal density at x.
+    norm.cdf         normal distribution function.
+    norm.inv         normal quantile (the inverse CDF), 0 < p < 1.
+    norm.rand        a column of n normal draws (seeded by rng).
+  help(norm.pdf) or help("norm.pdf") for any one of them
+cozy> help("norm.cdf")
+  dist_norm_cdf(x, mu, sigma)
+      norm.cdf(x, mu, sigma): normal distribution function.
+      package function, 3 arguments  (packages/dist.cz)
+      e.g.  norm.cdf(1.96, 0, 1)                 % 0.975002
+cozy> help("norm.nope")
+  'norm' has no field 'nope' (help on the record lists its fields)
+```
 
 ```
 cozy> let sq = fn x, p = 2 -> x^p
@@ -1280,7 +1306,7 @@ cozy> clear("scatter"); who
 | `whor \| whor("sorted")` | your records only (shorthand for who("records")) |
 | `whos` | the whole workspace, sorted by name (who("sorted")) |
 | `who \| who("functions", "sorted")` | list the workspace; filter by "records"/"functions"/"vars", add "sorted" for name order |
-| `help / help(f)` | help lists every builtin; help(f) describes one |
+| `help / help(x) / help("name")` | help lists every builtin; help(x) describes a function, or lists a record's fields; help("name") asks by name: a function, a loaded package, or a path such as "norm.cdf" |
 | `system(cmd)` | run a shell command string; return its exit status |
 | `dis(f)` | disassemble a function's bytecode (compiler/VM introspection) |
 | `format / format(n) / format(mode, digits)` | number display: format(n) sets SIGNIFICANT digits; format("fixed", d) / format("sci", d) / format("auto", d) set the mode and digits explicitly; format() shows the current setting |
