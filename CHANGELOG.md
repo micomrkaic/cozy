@@ -1,5 +1,25 @@
 # Cozy changelog
 
+## 0.1.25 — the dsge guide fits the page; PDFs rebuilt
+
+### Changed
+- **PACKAGES.md section 14 reflowed for print**: the three transcripts
+  that ran off the PDF page are rewritten in shorter lines (the model
+  record built from named pieces; two periods of responses instead of
+  four; the bisected Taylor edge as a named predicate), and the
+  worked-example table now uses `m` and `s` so its cells no longer
+  overprint each other. Same content, every transcript re-captured.
+- The indeterminacy error ends "; many stable paths" (was "...satisfy
+  the model") — one line of an 80-odd column transcript.
+
+### Fixed
+- **MANUAL.pdf, BOOK.pdf and PACKAGES.pdf rebuilt** (make pdfs): they
+  still carried 0.1.22's text — no dsge section, the old package list.
+  The 0.1.23 and 0.1.24 rites skipped this step for want of XeLaTeX in
+  the session container; `apt-get install texlive-xetex lmodern
+  texlive-latex-recommended texlive-fonts-recommended` supplies it on
+  Debian and Ubuntu.
+
 ## 0.1.24 — three DSGE models, live in the page
 
 ### Added

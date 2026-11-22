@@ -657,7 +657,8 @@ cozy> let euler = "1 / c = beta / c(+1) * (alpha * exp(a(+1)) * k^(alpha - 1) + 
 cozy> let budget = "c + k = exp(a) * k(-1)^alpha + (1 - delta) * k(-1)";
 cozy> let tech = "a = rho * a(-1) + e";
 cozy> let par = {alpha = 0.33, beta = 0.99, delta = 0.025, rho = 0.95};
-cozy> let m = dsge.model({vars = "c k a", shocks = "e", params = par, sd = {e = 0.01}, init = {c = 2.0, k = 30.0, a = 0.0}, model = [euler; budget; tech]});
+cozy> let sd = {e = 0.01}; let eqs = [euler; budget; tech];
+cozy> let m = dsge.model({vars = "c k a", shocks = "e", params = par, sd = sd, model = eqs});
 cozy> format(4); dsge.steady(m)
 {c = 2.307, k = 28.35, a = 0.000}
 cozy> let s = dsge.solve(m); s.P
@@ -692,13 +693,16 @@ principle is one `fzero` over `dsge.bk(...).ok`:
 ```
 cozy> load("packages/dsge.cz")
 cozy> let nk = dsge.model(dsge.nk()); let s = dsge.solve(nk);
-cozy> format(4); let r = dsge.irf(s, "ev", 4); [r.x, r.pi, r.i]
-[-0.2849, -0.07193, 0.1065; -0.1425, -0.03597, 0.05324; -0.07123, -0.01798, 0.02662; -0.03561, -0.008992, 0.01331]
+cozy> format(4); let r = dsge.irf(s, "ev", 2); [r.x, r.pi, r.i]
+[-0.2849, -0.07193, 0.1065; -0.1425, -0.03597, 0.05324]
 cozy> dsge.bk(nk).roots'
 [0.5000, 0.9000, 1.153, 1.153]
-cozy> dsge.bk(nk, {phi_pi = 0.9})
-{ok = false, verdict = "indeterminate", unstable = 1, forward = 2, roots = [0.5000; 0.9000; 0.9616; 1.302]}
-cozy> let edge = fn phi_x -> fzero(fn f -> (if dsge.bk(nk, {phi_pi = f, phi_x = phi_x}).ok then 1 else -1 end), 0.5, 1.5); edge(0.125)
+cozy> let b = dsge.bk(nk, {phi_pi = 0.9}); b.verdict
+"indeterminate"
+cozy> [b.unstable, b.forward]
+[1, 2]
+cozy> let ok = fn f -> if dsge.bk(nk, {phi_pi = f}).ok then 1 else -1 end;
+cozy> fzero(ok, 0.5, 1.5)
 0.9902
 cozy> 1 - (1 - 0.99) * 0.125 / 0.1275
 0.9902
@@ -711,7 +715,7 @@ decides it:
 
 ```
 cozy> load("packages/dsge.cz")
-error: dsge: indeterminacy — 1 unstable root(s) for 2 forward-looking variable(s); many stable paths satisfy the model
+error: dsge: indeterminacy — 1 unstable root(s) for 2 forward-looking variable(s); many stable paths
 cozy> dsge.solve(dsge.model(dsge.nk()), {phi_pi = 0.9})
 ```
 
@@ -740,16 +744,18 @@ SymPy derivatives and SciPy's ordered QZ, `tests/ref_dsge.py` — on the
 growth model, Hansen's model with labour, and the New Keynesian model
 (`tests/71_dsge.test`).
 
+In the table, `m` is `dsge.model(dsge.nk())` and `s` is `dsge.solve(m)`.
+
 | Function | Worked example | Result |
 |---|---|---|
 | `dsge.model(spec)` | `dsge.model(dsge.rbc()).n` | `5` |
-| `dsge.steady(m, over)` | `dsge.steady(dsge.model(dsge.nk())).pi` | `0.00000` |
-| `dsge.bk(m, over)` | `dsge.bk(dsge.model(dsge.nk())).verdict` | `"determinate"` |
-| `dsge.solve(m, over)` | `size(dsge.solve(dsge.model(dsge.rbc())).Q)` | `[5, 1]` |
-| `dsge.irf(s, shock, T)` | `length(dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e").k)` | `40` |
-| `dsge.simulate(s, T)` | `rng(1); length(dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50).c)` | `50` |
-| `dsge.moments(s, K)` | `size(dsge.moments(dsge.solve(dsge.model(dsge.rbc()))).corr)` | `[5, 5]` |
-| `dsge.vardecomp(s)` | `dsge.vardecomp(dsge.solve(dsge.model(dsge.rbc())))[1, 1]` | `100.000` |
+| `dsge.steady(m, over)` | `dsge.steady(m).pi` | `0.00000` |
+| `dsge.bk(m, over)` | `dsge.bk(m).verdict` | `"determinate"` |
+| `dsge.solve(m, over)` | `size(dsge.solve(m).Q)` | `[5, 2]` |
+| `dsge.irf(s, shock, T)` | `length(dsge.irf(s, "ev").x)` | `40` |
+| `dsge.simulate(s, T)` | `rng(1); length(dsge.simulate(s, 50).x)` | `50` |
+| `dsge.moments(s, K)` | `size(dsge.moments(s).corr)` | `[5, 5]` |
+| `dsge.vardecomp(s)` | `round(sum(dsge.vardecomp(s)[1, :]))` | `100.000` |
 | `dsge.rbc(), dsge.nk()` | `dsge.nk().shocks` | `"en ev"` |
 
 ## Writing your own

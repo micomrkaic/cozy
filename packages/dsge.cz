@@ -450,7 +450,7 @@ let dsge_solve = fn m, over = {} -> (
   let nf = sum(m.lead > 0); let nb = sum(m.lag > 0);
   let unst = 2 * n - c.nstable - (n - nf);
   if c.nstable > n then
-    error("dsge: indeterminacy — {} unstable root(s) for {} forward-looking variable(s); many stable paths satisfy the model", unst, nf)
+    error("dsge: indeterminacy — {} unstable root(s) for {} forward-looking variable(s); many stable paths", unst, nf)
   end;
   if c.nstable < n then
     error("dsge: no stable solution — {} unstable root(s) for {} forward-looking variable(s); every path explodes", unst, nf)
