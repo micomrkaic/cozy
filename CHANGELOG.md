@@ -1,5 +1,63 @@
 # Cozy changelog
 
+## 0.1.23 — dsge.cz, a mini Dynare
+
+### Added
+- **packages/dsge.cz** (owner's request): write a DSGE model the way
+  Dynare's model block reads — `x(+1)`, `x(-1)`, parameters by name, one
+  equation per string — and get its steady state, first-order solution,
+  impulse responses, simulations, theoretical moments and variance
+  decomposition. `dsge.model(spec)` compiles the equations once into a
+  residual function (a small tokenizer rewrites the timing notation and
+  `eval` compiles the result); `dsge.steady`, `dsge.bk` and `dsge.solve`
+  take the model plus an optional record of parameter overrides, so
+  calibration loops re-solve without recompiling. `dsge.irf` and
+  `dsge.simulate` return records of columns (the `readtable` table
+  shape).
+- **A record namespace** (the namespace law, owner's choice): the public
+  face is the record `dsge` — model, steady, bk, solve, irf, simulate,
+  moments, vardecomp, rbc, nk — so short names like `solve` and `irf`
+  never enter the workspace. The functions behind it are `dsge_*` and
+  the helpers `dg_*`, ordinary globals that `keep()` must spare.
+- **Exact derivatives throughout**: the steady state is damped Newton
+  on `f(y, y, y, 0) = 0` and the linearisation is one dual-number pass
+  per column — no step size anywhere.
+- **Cyclic reduction** (Dynare's `dr = cycle_reduction`) solves
+  `A P^2 + B P + C = 0`: linear solves only, so the package runs on the
+  tier0 kernels and in the browser. The Blanchard-Kahn count is read
+  from the solution's own eigenvalues (the roots of the factor it leaves
+  behind); when no solvent is found, a shift-and-invert eigenproblem on
+  the companion pencil supplies the count for the error message. Unit
+  roots count as stable, as in Dynare.
+- **`dsge.bk` returns the verdict as a value** ("determinate",
+  "indeterminate", "explosive") instead of raising, so a determinacy
+  region is something to compute: the packages guide bisects the Taylor
+  principle with `fzero` over `dsge.bk(...).ok` and recovers the analytic
+  edge.
+- **Two ready-made models**: `dsge.rbc()` (stochastic growth) and
+  `dsge.nk()` (the three-equation New Keynesian model, Gali's
+  calibration).
+- **Cross-checked against an independent solver**: tests/ref_dsge.py
+  (SymPy derivatives, SciPy's fsolve, ordered QZ and Lyapunov solver —
+  nothing shared with the package) on the growth model, Hansen's
+  eight-variable model with labour, and the New Keynesian model, whose
+  responses also match Gali's closed form. tests/71_dsge.test holds the
+  references as closeness assertions (backend-invariant by construction)
+  plus twenty-one teaching-error cases.
+
+### Notes
+- Scope is first order, one lead and one lag per variable, independent
+  shocks; the errors name the way through (an auxiliary variable for
+  longer leads and lags, an AR(1) variable for a lagged shock).
+- Decision-rule zeros are written `0.0 - x` rather than `-x`: a negated
+  zero prints as `-0`, which would make transcripts backend-dependent.
+- The packages guide gains section 14 and its worked-example table
+  (registered in tools/gen_package_tables.py); README and the man page
+  list the package.
+- Conformance edits for the longer package list: the `ls("packages")`
+  transcripts in MANUAL.md and BOOK.md Problem 3.4 (whose count of names
+  containing "s" goes from 7 to 8), and demo.cz regenerated from the book.
+
 ## 0.1.22 — help for every function, by the docstring law
 
 ### Added

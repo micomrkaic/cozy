@@ -103,6 +103,17 @@ SPECS = {
     ("dfun: derivative as a function", "abs(dfun(\"x^3\")(2) - 12) < 1e-12"),
     ("FTC: integral of dfun is the change", "abs(integral(dfun(\"x^3\"), 1, 2) - 7) < 1e-6"),
   ]),
+  "dsge": ("load(\"packages/dsge.cz\"); format(6)", [
+    ("dsge.model(spec)",               "dsge.model(dsge.rbc()).n"),
+    ("dsge.steady(m, over)",          "dsge.steady(dsge.model(dsge.nk())).pi"),
+    ("dsge.bk(m, over)",              "dsge.bk(dsge.model(dsge.nk())).verdict"),
+    ("dsge.solve(m, over)",           "size(dsge.solve(dsge.model(dsge.rbc())).Q)"),
+    ("dsge.irf(s, shock, T)",         "length(dsge.irf(dsge.solve(dsge.model(dsge.rbc())), \"e\").k)"),
+    ("dsge.simulate(s, T)",           "rng(1); length(dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50).c)"),
+    ("dsge.moments(s, K)",            "size(dsge.moments(dsge.solve(dsge.model(dsge.rbc()))).corr)"),
+    ("dsge.vardecomp(s)",             "dsge.vardecomp(dsge.solve(dsge.model(dsge.rbc())))[1, 1]"),
+    ("dsge.rbc(), dsge.nk()",    "dsge.nk().shocks"),
+  ]),
 }
 
 def esc(t): return t.replace("|", "\\|")

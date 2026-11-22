@@ -1,0 +1,601 @@
+% dsge.cz — a mini Dynare: write a dynamic stochastic general equilibrium
+% model the way Dynare's model block reads, and get its steady state, its
+% first-order solution, impulse responses, simulations and moments.
+%
+%   let m = dsge.model({vars = "c k a", shocks = "e",
+%                 params = {alpha = 0.33, beta = 0.99, ...},
+%                 model = ["c^(-sigma) = beta * c(+1)^(-sigma) * (...)";
+%                          "c + k = exp(a) * k(-1)^alpha + (1 - delta) * k(-1)";
+%                          "a = rho * a(-1) + e"]})
+%   let s = dsge.solve(m)             % steady state + decision rule
+%   dsge.irf(s, "e", 40)              % a record of columns, one per variable
+%
+% Timing is Dynare's: x is decided today, x(-1) yesterday, x(+1) is
+% tomorrow's value in expectation — so a stock chosen today for use
+% tomorrow enters production as k(-1). One lead and one lag per variable.
+%
+% How it works. The equations are compiled once into a residual function
+% f(v, p) of v = [y(+1); y; y(-1); shocks]. The steady state solves
+% f(y, y, y, 0) = 0 by Newton's method, and the model is linearised around
+% it; both Jacobians are EXACT — dual numbers, no differencing. The linear
+% system A y(+1) + B y + C y(-1) + D e = 0 is solved for the decision rule
+% y = P y(-1) + Q e by cyclic reduction (Dynare's dr = cycle_reduction),
+% which needs only linear solves, so the same code runs in the browser.
+% The Blanchard-Kahn count is read from the solution's own eigenvalues.
+% Variables are deviations from the steady state — log deviations if you
+% write the model in logs. Cross-checked against an ordered-QZ solver
+% (SciPy) and Gali's closed form; see tests/71_dsge.test.
+%
+% The public face is the record dsge: dsge.model, dsge.steady, dsge.bk,
+% dsge.solve, dsge.irf, dsge.simulate, dsge.moments, dsge.vardecomp, and the
+% ready-made models dsge.rbc and dsge.nk. The functions behind it (dsge_*)
+% and the helpers (dg_*) are ordinary globals: keep() must spare them.
+
+% internal: can the one-character string ch start a name?
+let dg_alpha = fn ch -> ((ch >= "a") && (ch <= "z")) || ((ch >= "A") && (ch <= "Z")) || (ch == "_") || (ch > "~")
+% internal: is the one-character string ch a digit?
+let dg_digit = fn ch -> (ch >= "0") && (ch <= "9")
+
+% The functions a model equation may call (all differentiate exactly).
+let dg_funcs = ["exp", "log", "ln", "log10", "log2", "sqrt", "cbrt", "abs", "sign", "min", "max",
+                "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh", "tanh",
+                "asinh", "acosh", "atanh", "erf", "erfc", "gamma", "lgamma"]
+
+% internal: position of the string s in the string array names, 0 if absent.
+let dg_find = fn names, s -> (
+  let k = 0;
+  for i = 1 : numel(names) do if names[i] == s then (k = i) end end;
+  k
+)
+
+% internal: the words of a space- or comma-separated list, as a string row.
+let dg_words = fn s -> (
+  let t = trim(strrep(strrep(s, ",", " "), ";", " "));
+  while contains(t, "  ") do t = strrep(t, "  ", " ") end;
+  if t == "" then error("dsge: an empty list of names") end;
+  strsplit(t, " ")
+)
+
+% internal: refuse names that cannot be model names.
+let dg_checknames = fn names, what -> (
+  let bad = ["let", "in", "fn", "if", "then", "else", "elseif", "end", "for", "while", "do",
+             "break", "continue", "return", "true", "false", "null", "where"];
+  for i = 1 : numel(names) do (
+    let nm = names[i];
+    if dg_find(bad, nm) > 0 then error("dsge: '{}' is a reserved word and cannot name a {}", nm, what) end;
+    if !dg_alpha(nm[1]) then error("dsge: '{}' is not a valid {} name", nm, what) end;
+    if contains(nm, "__") then error("dsge: {} names may not contain '__' (got '{}')", what, nm) end;
+    for j = 1 : i - 1 do
+      if names[j] == nm then error("dsge: the {} '{}' is listed twice", what, nm) end
+    end
+  ) end;
+  true
+)
+
+% internal: the time shift written inside x( ... ), e.g. "+1" -> 1; anything
+% that is not a signed whole number is an error naming the equation.
+let dg_shift = fn inner, name, eqno -> (
+  let L = length(inner);
+  let sgn = 1; let i = 1;
+  if (L >= 1) && ((inner[1] == "+") || (inner[1] == "-")) then (
+    if inner[1] == "-" then (sgn = -1) end;
+    i = 2
+  ) end;
+  let ok = i <= L;
+  for j = i : L do if !dg_digit(inner[j]) then (ok = false) end end;
+  if !ok then
+    error("dsge: equation {}: '{}({})' is not a time shift — write {}(+1) or {}(-1), and use * to multiply",
+          eqno, name, inner, name, name)
+  end;
+  sgn * num(inner[i : L])
+)
+
+% internal: rewrite one side of an equation from Dynare's notation into
+% Cozy source: x(+1) -> x__f, x(-1) -> x__b, x stays x. Returns the text and
+% which variables appeared with a lead and with a lag.
+let dg_rewrite = fn s, vars, shocks, pnames, eqno -> (
+  let nv = numel(vars);
+  let lead = zeros(1, nv); let lag = zeros(1, nv);
+  let out = ""; let L = length(s); let i = 1;
+  while i <= L do (
+    let ch = s[i];
+    if dg_digit(ch) || ((ch == ".") && (i < L) && dg_digit(s[min(i + 1, L)])) then (
+      let j = i;
+      while (j <= L) && (dg_digit(s[min(j, L)]) || (s[min(j, L)] == ".")) do j = j + 1 end;
+      if (j < L) && ((s[j] == "e") || (s[j] == "E")) then (
+        let k = j + 1;
+        if (k < L) && ((s[k] == "+") || (s[k] == "-")) then (k = k + 1) end;
+        if dg_digit(s[k]) then (
+          while (k <= L) && dg_digit(s[min(k, L)]) do k = k + 1 end;
+          j = k
+        ) end
+      ) end;
+      out = out + s[i : j - 1];
+      i = j
+    ) elseif dg_alpha(ch) then (
+      let j = i;
+      while (j <= L) && (dg_alpha(s[min(j, L)]) || dg_digit(s[min(j, L)])) do j = j + 1 end;
+      let name = s[i : j - 1];
+      let k = j;
+      while (k <= L) && (s[min(k, L)] == " ") do k = k + 1 end;
+      let call = (k <= L) && (s[min(k, L)] == "(");
+      let iv = dg_find(vars, name);
+      let ie = dg_find(shocks, name);
+      let shift = 0;
+      if ((iv > 0) || (ie > 0)) && call then (
+        let c = k + 1;
+        while (c <= L) && (s[min(c, L)] != ")") do c = c + 1 end;
+        if c > L then error("dsge: equation {}: unclosed '(' after {}", eqno, name) end;
+        shift = dg_shift(strrep(s[k + 1 : c - 1], " ", ""), name, eqno);
+        j = c + 1
+      ) end;
+      if iv > 0 then (
+        if shift == 0 then (out = out + name)
+        elseif shift == 1 then ( out = out + name + "__f"; lead[iv] = 1 )
+        elseif shift == -1 then ( out = out + name + "__b"; lag[iv] = 1 )
+        else error("dsge: equation {}: {}({}) — only one lead or lag is supported; define an auxiliary variable (say {}1 = {}({})) and shift that",
+                   eqno, name, shift, name, name, sign(shift))
+        end
+      ) elseif ie > 0 then (
+        if shift != 0 then error("dsge: equation {}: the shock {} cannot carry a lead or lag; give it an AR(1) variable instead", eqno, name) end;
+        out = out + name
+      ) elseif dg_find(pnames, name) > 0 then (
+        out = out + name
+      ) elseif call && (dg_find(dg_funcs, name) > 0) then (
+        out = out + name
+      ) else
+        error("dsge: equation {}: '{}' is not a variable, a shock, a parameter or a function a model may use", eqno, name)
+      end;
+      i = j
+    ) else (
+      out = out + ch;
+      i = i + 1
+    ) end
+  ) end;
+  {text = out, lead = lead, lag = lag}
+)
+
+% internal: a record of values -> a column in the order of names; missing
+% names take the fallback, unknown ones are an error.
+let dg_col = fn r, names, fallback, what -> (
+  let n = numel(names);
+  let out = fallback * ones(n, 1);
+  let fr = fields(r);
+  for i = 1 : numel(fr) do (
+    let k = dg_find(names, fr[i]);
+    if k == 0 then error("dsge: {} names '{}', which is not in the model", what, fr[i]) end;
+    out[k] = getfield(r, fr[i])
+  ) end;
+  out
+)
+
+% internal: the columns of Y as a record of columns named by names (a table).
+let dg_table = fn Y, names -> (
+  let r = {};
+  for i = 1 : numel(names) do r = setfield(r, names[i], Y[:, i]) end;
+  r
+)
+
+% dsge.model(spec): compile a model. spec is a record: vars and shocks are
+% space-separated name lists, params a record of values, model a string
+% column of equations in Dynare's notation (x(+1), x(-1); "lhs = rhs" or a
+% bare expression meaning "= 0"). Optional: sd, a record of shock standard
+% deviations (default 1); init, a record of starting values for the
+% steady-state search (default 1); steady, a function of the parameter
+% record returning the steady state as a record, used instead of the search.
+% Returns the model record that dsge.steady, dsge.bk and dsge.solve take.
+% e.g. let m = dsge.model(dsge.rbc()); [m.n, m.k] %= [5, 1]
+% e.g. dsge.model(dsge.rbc()).vars                %= ["y", "c", "i", "k", "a"]
+% e.g. dsge.model({vars = "x", shocks = "e", params = {r = 0.5}, model = ["x = r * x(-1) + e"]}).lag %= [1]
+let dsge_model = fn spec -> (
+  let fs = fields(spec);
+  let need = ["vars", "shocks", "params", "model"];
+  for i = 1 : 4 do
+    if dg_find(fs, need[i]) == 0 then error("dsge: the model record needs a '{}' field", need[i]) end
+  end;
+  let known = ["vars", "shocks", "params", "model", "sd", "init", "steady"];
+  for i = 1 : numel(fs) do
+    if dg_find(known, fs[i]) == 0 then
+      error("dsge: unknown field '{}' (the fields are vars, shocks, params, model, sd, init, steady)", fs[i])
+    end
+  end;
+  let vars = dg_words(spec.vars);
+  let shocks = dg_words(spec.shocks);
+  let pnames = fields(spec.params);
+  let n = numel(vars); let k = numel(shocks); let np = numel(pnames);
+  dg_checknames(vars, "variable"); dg_checknames(shocks, "shock"); dg_checknames(pnames, "parameter");
+  for i = 1 : k do
+    if dg_find(vars, shocks[i]) > 0 then error("dsge: '{}' is both a variable and a shock", shocks[i]) end
+  end;
+  for i = 1 : np do
+    if (dg_find(vars, pnames[i]) > 0) || (dg_find(shocks, pnames[i]) > 0) then
+      error("dsge: '{}' is both a parameter and a variable or shock", pnames[i])
+    end
+  end;
+  let parts = strsplit(strjoin(spec.model, ";"), ";");
+  let eqs = parts[map(fn q -> trim(q) != "", parts)];
+  let neq = numel(eqs);
+  if neq != n then error("dsge: {} equations for {} variables — a model needs one equation per variable", neq, n) end;
+  let lead = zeros(1, n); let lag = zeros(1, n);
+  let body = "";
+  for q = 1 : neq do (
+    let sides = strsplit(eqs[q], "=");
+    if numel(sides) > 2 then error("dsge: equation {} has more than one '='", q) end;
+    let lhs = dg_rewrite(trim(sides[1]), vars, shocks, pnames, q);
+    lead = max(lead, lhs.lead); lag = max(lag, lhs.lag);
+    let res = "(" + lhs.text + ")";
+    if numel(sides) == 2 then (
+      let rhs = dg_rewrite(trim(sides[2]), vars, shocks, pnames, q);
+      lead = max(lead, rhs.lead); lag = max(lag, rhs.lag);
+      res = res + " - (" + rhs.text + ")"
+    ) end;
+    body = body + (if q > 1 then "; " else "" end) + res
+  ) end;
+  let src = "fn v__, p__ -> (";
+  for i = 1 : np do src = src + "let " + pnames[i] + " = p__." + pnames[i] + "; " end;
+  for i = 1 : n do (
+    if lead[i] > 0 then (src = src + "let " + vars[i] + "__f = v__[" + str(i) + "]; ") end;
+    src = src + "let " + vars[i] + " = v__[" + str(n + i) + "]; ";
+    if lag[i] > 0 then (src = src + "let " + vars[i] + "__b = v__[" + str(2 * n + i) + "]; ") end
+  ) end;
+  for i = 1 : k do src = src + "let " + shocks[i] + " = v__[" + str(3 * n + i) + "]; " end;
+  src = src + "[" + body + "])";
+  let hasinit = dg_find(fs, "init") > 0;
+  let hassd = dg_find(fs, "sd") > 0;
+  let hassteady = dg_find(fs, "steady") > 0;
+  {vars = vars, shocks = shocks, pnames = pnames, params = spec.params, n = n, k = k,
+   lead = lead, lag = lag, eqs = eqs, src = src, f = eval(src),
+   init = dg_col(if hasinit then spec.init else {} end, vars, 1.0, "init"),
+   sd = dg_col(if hassd then spec.sd else {} end, shocks, 1.0, "sd"),
+   hassteady = hassteady,
+   steadyfn = if hassteady then spec.steady else (fn p -> {}) end}
+)
+
+% internal: the model's parameters with the overrides in over applied.
+let dg_params = fn m, over -> (
+  let p = m.params;
+  let fo = fields(over);
+  for i = 1 : numel(fo) do (
+    if dg_find(m.pnames, fo[i]) == 0 then error("dsge: '{}' is not a parameter of this model", fo[i]) end;
+    p = setfield(p, fo[i], getfield(over, fo[i]))
+  ) end;
+  p
+)
+
+% internal: the size of a residual — its largest entry, or inf if any entry
+% is not a finite real number (so a search never steps there).
+let dg_size = fn r -> if any(isnan(real(r))) || any(isinf(real(r))) || any(imag(r) != 0) then inf else max(abs(r)) end
+
+% internal: smallest over largest singular value (0 for a singular matrix).
+let dg_rcond = fn M -> (
+  if any(isnan(M)) || any(isinf(M)) then return 0.0 end;
+  let sv = svd(M).S;
+  if max(sv) == 0 then 0.0 else min(sv) / max(sv) end
+)
+
+% internal: the steady state as a column — from the model's steady function
+% if it has one (checked against the equations), else by damped Newton from
+% init with the exact dual-number Jacobian.
+let dg_ss = fn m, p -> (
+  let n = m.n;
+  let z = zeros(m.k, 1);
+  let g = fn y -> m.f([y; y; y; z], p);
+  if m.hassteady then (
+    let y = dg_col(m.steadyfn(p), m.vars, 0.0 / 0.0, "steady");
+    if any(isnan(y)) then error("dsge: the steady function must give a value for every variable") end;
+    let nr = dg_size(g(y));
+    if !(nr < 1e-8) then error("dsge: the steady function does not solve the model (largest residual {})", nr) end;
+    return y
+  ) end;
+  let y = m.init;
+  let r = g(y);
+  let nr = dg_size(r);
+  if nr == inf then error("dsge: the equations cannot be evaluated at the starting values — set init") end;
+  let it = 0;
+  while (nr > 1e-12) && (it < 200) do (
+    let J = zeros(n, n);
+    let v = [y; y; y; z];
+    for i = 1 : n do (
+      let seed = 0.0 * v;
+      seed[i] = 1.0; seed[n + i] = 1.0; seed[2 * n + i] = 1.0;
+      J[:, i] = dualeps(m.f(dual(v, seed), p))
+    ) end;
+    if dg_rcond(J) < 1e-13 then
+      error("dsge: the steady state is not locally unique here (singular Jacobian) — try other init values, or supply it with a steady function in the model record")
+    end;
+    let d = -(J \ r);
+    let t = 1.0;
+    let yn = y + d; let rn = g(yn); let nn = dg_size(rn);
+    while (!(nn < nr)) && (t > 1e-12) do (
+      t = t / 2; yn = y + t * d; rn = g(yn); nn = dg_size(rn)
+    ) end;
+    if !(nn < nr) then (it = 200) else ( y = yn; r = rn; nr = nn; it = it + 1 ) end
+  ) end;
+  if !(nr < 1e-9) then
+    error("dsge: no steady state found from these starting values (residual {}) — set init, or supply a steady function in the model record", nr)
+  end;
+  y
+)
+
+% internal: steady state and the exact Jacobians A (leads), B (current),
+% C (lags), D (shocks) of the residual there — one dual pass per column.
+let dg_lin = fn m, p -> (
+  let n = m.n; let k = m.k;
+  let y = dg_ss(m, p);
+  let v = [y; y; y; zeros(k, 1)];
+  let use = find([m.lead, ones(1, n), m.lag, ones(1, k)] > 0);
+  let J = zeros(n, 3 * n + k);
+  for c = 1 : numel(use) do (
+    let j = use[c];
+    let seed = 0.0 * v;
+    seed[j] = 1.0;
+    J[:, j] = dualeps(m.f(dual(v, seed), p))
+  ) end;
+  {y = y, A = J[:, 1 : n], B = J[:, n + 1 : 2 * n], C = J[:, 2 * n + 1 : 3 * n],
+   D = J[:, 3 * n + 1 : 3 * n + k]}
+)
+
+% internal: cyclic reduction for A P^2 + B P + C = 0 — the solvent built
+% from the n smallest roots. Returns {found, P}; found is false if a pivot
+% matrix went singular, the iteration left the finite numbers, or the
+% result does not satisfy the equation.
+let dg_cr = fn A, B, C -> (
+  let n = size(B)[1];
+  let A0 = C; let A1 = B; let A2 = A; let Ah = B;
+  let state = 0; let it = 0;
+  while (state == 0) && (it < 60) do (
+    if dg_rcond(A1) < 1e-14 then (state = 2)
+    else (
+      let K0 = A1 \ A0; let K2 = A1 \ A2;
+      let dA = A2 * K0;
+      A1 = A1 - A0 * K2 - dA;
+      Ah = Ah - dA;
+      let N0 = -(A0 * K0); let N2 = -(A2 * K2);
+      A0 = N0; A2 = N2;
+      it = it + 1;
+      if dg_size(Ah) == inf then (state = 2)
+      elseif max(abs(dA)) <= 1e-15 * max(1.0, max(abs(Ah))) then (state = 1)
+      end
+    ) end
+  ) end;
+  if (state != 1) || (dg_rcond(Ah) < 1e-14) then return {found = false, P = zeros(n, n)} end;
+  let P = 0.0 - (Ah \ C);                  % 0.0 - x, not -x: no negative zeros
+  let res = dg_size(A * P * P + B * P + C);
+  {found = res <= 1e-8 * max(1.0, max(abs(B))), P = P}
+)
+
+% internal: the moduli of all 2n roots of lambda^2 A + lambda B + C, by a
+% shift-and-invert eigenproblem on the companion pencil (infinite roots
+% come out as inf). Used only when cyclic reduction finds no solvent.
+let dg_roots = fn A, B, C -> (
+  let n = size(B)[1];
+  let Z = zeros(n, n); let I = eye(n);
+  let M = [Z, I; -C, -B]; let N = [I, Z; Z, A];
+  let shifts = [1.6180339887, -1.3247179572, 0.7390851332, 2.5029078750];
+  let s = 0.0; let best = -1.0;
+  for i = 1 : 4 do (
+    let rc = dg_rcond(M - shifts[i] * N);
+    if rc > best then ( best = rc; s = shifts[i] ) end
+  ) end;
+  if best < 1e-14 then error("dsge: the model is singular — some combination of its equations does not involve the variables at all") end;
+  let th = eig((M - s * N) \ N).values;
+  let tiny = abs(th) < 1e-12;
+  sort(pick(tiny, inf, abs(s + 1 ./ pick(tiny, 1.0, th))))
+)
+
+% internal: solve the linearised model. Returns the decision rule if cyclic
+% reduction finds one, the sorted moduli of all 2n roots, and how many are
+% stable (unit roots count as stable, as in Dynare).
+let dg_core = fn A, B, C -> (
+  let n = size(B)[1];
+  let cr = dg_cr(A, B, C);
+  let roots = if cr.found then (
+      let mu = abs(eig((A * cr.P + B) \ A).values);
+      let zero = mu < 1e-12;
+      sort([abs(eig(cr.P).values); pick(zero, inf, 1 ./ pick(zero, 1.0, mu))])
+    ) else dg_roots(A, B, C) end;
+  {found = cr.found, P = cr.P, roots = roots, nstable = sum(roots < 1 + 1e-6)}
+)
+
+% dsge.steady(m, over = {}): the steady state as a record of values by variable
+% name — the model's steady function if it has one, else Newton's method
+% from init with exact derivatives. over is a record of parameter values to
+% use instead of the model's own.
+% e.g. format(6); dsge.steady(dsge.model(dsge.rbc())).k %= 28.3484
+% e.g. format(6); dsge.steady(dsge.model(dsge.rbc()), {beta = 0.98}).k %= 19.3038
+% e.g. dsge.steady(dsge.model(dsge.nk())).pi           %= 0
+let dsge_steady = fn m, over = {} -> (
+  let y = dg_ss(m, dg_params(m, over));
+  let r = {};
+  for i = 1 : m.n do r = setfield(r, m.vars[i], y[i]) end;
+  r
+)
+
+% dsge.bk(m, over = {}): the Blanchard-Kahn check, without raising an error —
+% a record {ok, verdict, unstable, forward, roots}. verdict is
+% "determinate" (a unique stable solution), "indeterminate" (many: too few
+% unstable roots) or "explosive" (none: too many); unstable roots are
+% counted against the forward-looking variables as Dynare's check does,
+% and roots are the moduli, sorted. Use it to map a determinacy region.
+% e.g. dsge.bk(dsge.model(dsge.nk())).verdict          %= "determinate"
+% e.g. dsge.bk(dsge.model(dsge.nk()), {phi_pi = 0.9}).verdict %= "indeterminate"
+% e.g. let b = dsge.bk(dsge.model(dsge.rbc())); [b.unstable, b.forward] %= [2, 2]
+let dsge_bk = fn m, over = {} -> (
+  let p = dg_params(m, over);
+  let L = dg_lin(m, p);
+  let c = dg_core(L.A, L.B, L.C);
+  let n = m.n;
+  let nf = sum(m.lead > 0); let nb = sum(m.lag > 0);
+  let verdict = if c.nstable == n then (if c.found then "determinate" else "unsolved" end)
+                elseif c.nstable > n then "indeterminate" else "explosive" end;
+  {ok = verdict == "determinate", verdict = verdict,
+   unstable = 2 * n - c.nstable - (n - nf), forward = nf,
+   roots = c.roots[n - nb + 1 : n + nf, 1]}
+)
+
+% dsge.solve(m, over = {}): steady state and first-order solution. Returns a
+% record: ss (steady state by name), P and Q with y = P y(-1) + Q e in
+% deviations from the steady state (rows and columns in the order of
+% m.vars and m.shocks), roots (moduli, as dsge.bk gives them), sd, params and
+% the model. An error explains which Blanchard-Kahn condition fails if the
+% model has no unique stable solution. over overrides parameters.
+% e.g. let s = dsge.solve(dsge.model(dsge.rbc())); format(6); s.P[4, 4] %= 0.962061
+% e.g. let s = dsge.solve(dsge.model(dsge.rbc())); size(s.Q) %= [5, 1]
+% e.g. let s = dsge.solve(dsge.model(dsge.nk())); format(6); s.Q[2, 2] %= -0.287729
+let dsge_solve = fn m, over = {} -> (
+  let p = dg_params(m, over);
+  let L = dg_lin(m, p);
+  let c = dg_core(L.A, L.B, L.C);
+  let n = m.n;
+  let nf = sum(m.lead > 0); let nb = sum(m.lag > 0);
+  let unst = 2 * n - c.nstable - (n - nf);
+  if c.nstable > n then
+    error("dsge: indeterminacy — {} unstable root(s) for {} forward-looking variable(s); many stable paths satisfy the model", unst, nf)
+  end;
+  if c.nstable < n then
+    error("dsge: no stable solution — {} unstable root(s) for {} forward-looking variable(s); every path explodes", unst, nf)
+  end;
+  if !c.found then error("dsge: the solver could not compute the decision rule for this model") end;
+  let Q = 0.0 - ((L.A * c.P + L.B) \ L.D);
+  let ss = {};
+  for i = 1 : n do ss = setfield(ss, m.vars[i], L.y[i]) end;
+  {model = m, params = p, ss = ss, ybar = L.y, P = c.P, Q = Q,
+   roots = c.roots[n - nb + 1 : n + nf, 1], sd = m.sd}
+)
+
+% internal: the position of a shock given by name.
+let dg_shock = fn s, name -> (
+  let j = dg_find(s.model.shocks, name);
+  if j == 0 then error("dsge: '{}' is not a shock of this model (the shocks are {})", name, strjoin(s.model.shocks, ", ")) end;
+  j
+)
+
+% dsge.irf(s, shock, T = 40): impulse responses to a one-standard-deviation
+% innovation in the named shock — a record of columns, one per variable,
+% T periods long, row 1 being the period of the shock. Values are
+% deviations from the steady state.
+% e.g. let r = dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e", 20); format(6); r.a[1] %= 0.0100000
+% e.g. let r = dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e", 20); format(6); r.a[2] %= 0.00950000
+% e.g. length(dsge.irf(dsge.solve(dsge.model(dsge.nk())), "ev").pi) %= 40
+let dsge_irf = fn s, shock, T = 40 -> (
+  let j = dg_shock(s, shock);
+  let n = s.model.n;
+  let Y = zeros(T, n);
+  let y = s.Q[:, j] * s.sd[j];
+  for t = 1 : T do ( Y[t, :] = y'; y = s.P * y ) end;
+  dg_table(Y, s.model.vars)
+)
+
+% dsge.simulate(s, T = 200): a simulated path of T periods from the steady
+% state, shocks drawn from the session's generator (rng to reproduce) —
+% a record of columns in LEVELS, one per variable.
+% e.g. rng(1); length(dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50).c) %= 50
+% e.g. rng(1); let x = dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50); max(abs(x.y - x.c - x.i)) < 1e-12 %= true
+let dsge_simulate = fn s, T = 200 -> (
+  let n = s.model.n; let k = s.model.k;
+  let Y = zeros(T, n);
+  let y = zeros(n, 1);
+  for t = 1 : T do (
+    y = s.P * y + s.Q * (s.sd .* randn(k, 1));
+    Y[t, :] = (s.ybar + y)'
+  ) end;
+  dg_table(Y, s.model.vars)
+)
+
+% internal: the unconditional covariance of y = P y(-1) + w, var(w) = W,
+% by doubling (S = W + P W P' + P^2 W P^2' + ...).
+let dg_lyap = fn P, W -> (
+  if max(abs(eig(P).values)) > 1 - 1e-9 then
+    error("dsge: the model has a unit root, so its variables have no unconditional variance")
+  end;
+  let S = W; let M = P; let it = 0; let moving = true;
+  while moving && (it < 200) do (
+    let dS = M * S * M';
+    S = S + dS;
+    M = M * M;
+    it = it + 1;
+    moving = max(abs(dS)) > 1e-15 * max(1e-300, max(abs(S)))
+  ) end;
+  (S + S') / 2
+)
+
+% dsge.moments(s, K = 5): theoretical moments of the solved model — a record
+% {vars, mean, sd, var, corr, acorr}: steady-state means, standard
+% deviations, the covariance and correlation matrices, and autocorrelations
+% at lags 1..K (one row per variable). A variable that never moves has
+% nan correlations.
+% e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.sd[5] %= 0.03203
+% e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.acorr[5, 1] %= 0.9500
+% e.g. let q = dsge.moments(dsge.solve(dsge.model(dsge.rbc()))); format(4); q.corr[1, 2] %= 0.9308
+let dsge_moments = fn s, K = 5 -> (
+  let n = s.model.n;
+  let QS = s.Q .* (ones(n, 1) * s.sd');
+  let S = dg_lyap(s.P, QS * QS');
+  let d = diag(S);
+  let sdv = sqrt(max(d, 0.0));
+  let den = sdv * sdv';
+  let ac = zeros(n, K);
+  let G = S;
+  for j = 1 : K do ( G = s.P * G; ac[:, j] = diag(G) ./ d ) end;
+  {vars = s.model.vars, mean = s.ybar, sd = sdv, var = S, corr = S ./ den, acorr = ac}
+)
+
+% dsge.vardecomp(s): the unconditional variance decomposition in percent — one
+% row per variable (in the order of the model's vars), one column per
+% shock; each row sums to 100.
+% e.g. dsge.vardecomp(dsge.solve(dsge.model(dsge.rbc())))[1, 1] %= 100
+% e.g. let v = dsge.vardecomp(dsge.solve(dsge.model(dsge.nk()))); format(4); sum(v[1, :]) %= 100.0
+% e.g. let v = dsge.vardecomp(dsge.solve(dsge.model(dsge.nk()))); format(4); v[2, 1] %= 98.70
+let dsge_vardecomp = fn s -> (
+  let n = s.model.n; let k = s.model.k;
+  let V = zeros(n, k);
+  for j = 1 : k do (
+    let q = s.Q[:, j] * s.sd[j];
+    V[:, j] = diag(dg_lyap(s.P, q * q'))
+  ) end;
+  100 * V ./ (sum(V, 2) * ones(1, k))
+)
+
+% dsge.rbc(): the stochastic growth model as a ready-made spec for dsge —
+% output y, consumption c, investment i, capital k, log technology a, one
+% technology shock e; quarterly calibration, CRRA utility. Its steady
+% state is found by Newton's method from the init values.
+% e.g. dsge.rbc().vars                      %= "y c i k a"
+% e.g. numel(dsge.rbc().model)              %= 5
+let dsge_rbc = fn -> {
+  vars = "y c i k a",
+  shocks = "e",
+  params = {alpha = 0.33, beta = 0.99, delta = 0.025, rho = 0.95, sigma = 1.0},
+  sd = {e = 0.01},
+  init = {y = 3.0, c = 2.0, i = 1.0, k = 30.0, a = 0.0},
+  model = ["c^(-sigma) = beta * c(+1)^(-sigma) * (alpha * exp(a(+1)) * k^(alpha - 1) + 1 - delta)";
+           "y = exp(a) * k(-1)^alpha";
+           "k = (1 - delta) * k(-1) + i";
+           "y = c + i";
+           "a = rho * a(-1) + e"]
+}
+
+% dsge.nk(): the three-equation New Keynesian model (Gali 2015, ch. 3) as
+% a ready-made spec — output gap x, inflation pi, the policy rate i, and
+% two AR(1) disturbances: the natural rate rn (shock en) and a monetary
+% policy disturbance v (shock ev). Determinate exactly when
+% kappa (phi_pi - 1) + (1 - beta) phi_x > 0, the Taylor principle.
+% e.g. dsge.nk().shocks                     %= "en ev"
+% e.g. dsge.nk().params.phi_pi              %= 1.5
+let dsge_nk = fn -> {
+  vars = "x pi i rn v",
+  shocks = "en ev",
+  params = {beta = 0.99, sigma = 1.0, kappa = 0.1275, phi_pi = 1.5, phi_x = 0.125,
+            rho_n = 0.9, rho_v = 0.5},
+  sd = {en = 0.25, ev = 0.25},
+  init = {x = 0.0, pi = 0.0, i = 0.0, rn = 0.0, v = 0.0},
+  model = ["pi = beta * pi(+1) + kappa * x";
+           "x = x(+1) - (1 / sigma) * (i - pi(+1) - rn)";
+           "i = phi_pi * pi + phi_x * x + v";
+           "rn = rho_n * rn(-1) + en";
+           "v = rho_v * v(-1) + ev"]
+}
+
+let dsge = {model = dsge_model, steady = dsge_steady, bk = dsge_bk, solve = dsge_solve,
+            irf = dsge_irf, simulate = dsge_simulate, moments = dsge_moments,
+            vardecomp = dsge_vardecomp, rbc = dsge_rbc, nk = dsge_nk}

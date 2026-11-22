@@ -641,6 +641,117 @@ acf decays geometrically while the pacf cuts off after lag one — and
 `arfit` recovers the coefficient. Dates never appear in this package:
 the date column is the axis you plot against, not a thing to filter.
 
+## 14. dsge.cz — a mini Dynare
+
+Write a dynamic stochastic general equilibrium model the way Dynare's
+model block reads — `x(+1)` for tomorrow's value in expectation, `x(-1)`
+for yesterday's, parameters by name — and get its steady state, its
+first-order solution, impulse responses, simulations and moments. Timing
+is Dynare's: a stock chosen today for use tomorrow enters production as
+`k(-1)`. The stochastic growth model, three equations for consumption,
+capital and technology:
+
+```
+cozy> load("packages/dsge.cz")
+cozy> let euler = "1 / c = beta / c(+1) * (alpha * exp(a(+1)) * k^(alpha - 1) + 1 - delta)";
+cozy> let budget = "c + k = exp(a) * k(-1)^alpha + (1 - delta) * k(-1)";
+cozy> let tech = "a = rho * a(-1) + e";
+cozy> let par = {alpha = 0.33, beta = 0.99, delta = 0.025, rho = 0.95};
+cozy> let m = dsge.model({vars = "c k a", shocks = "e", params = par, sd = {e = 0.01}, init = {c = 2.0, k = 30.0, a = 0.0}, model = [euler; budget; tech]});
+cozy> format(4); dsge.steady(m)
+{c = 2.307, k = 28.35, a = 0.000}
+cozy> let s = dsge.solve(m); s.P
+[0.000, 0.04804, 0.7075; 0.000, 0.9621, 2.157; 0.000, 0.000, 0.9500]
+cozy> s.Q'
+[0.7447, 2.271, 1.000]
+cozy> s.roots'
+[0.9500, 0.9621, 1.050, inf]
+cozy> let r = dsge.irf(s, "e", 40); 100 * r.c[[1, 10, 40]]
+[0.7447, 1.155, 0.8784]
+cozy> dsge.moments(s).sd'
+[0.07782, 1.257, 0.03203]
+cozy> dsge.steady(m, {beta = 0.98}).k
+19.30
+```
+
+`dsge.model(spec)` compiles the equations once; `dsge.steady`, `dsge.bk` and
+`dsge.solve` take
+the model plus an optional record of parameter overrides, so a
+calibration loop re-solves without recompiling. `solve` returns the
+decision rule `y = P y(-1) + Q e` in deviations from the steady state
+(log deviations if the model is written in logs), rows and columns in
+the order of `vars` and `shocks`. `dsge.irf` and `dsge.simulate` return records of
+columns — the same table shape `readtable` gives — and `dsge.moments` and
+`dsge.vardecomp` are the theoretical second moments, not simulated ones.
+
+`dsge.bk` is the Blanchard-Kahn check as a value rather than an error, which
+makes determinacy something to compute with. In the three-equation New
+Keynesian model (`dsge.nk()`, Gali's textbook calibration) the Taylor
+principle is one `fzero` over `dsge.bk(...).ok`:
+
+```
+cozy> load("packages/dsge.cz")
+cozy> let nk = dsge.model(dsge.nk()); let s = dsge.solve(nk);
+cozy> format(4); let r = dsge.irf(s, "ev", 4); [r.x, r.pi, r.i]
+[-0.2849, -0.07193, 0.1065; -0.1425, -0.03597, 0.05324; -0.07123, -0.01798, 0.02662; -0.03561, -0.008992, 0.01331]
+cozy> dsge.bk(nk).roots'
+[0.5000, 0.9000, 1.153, 1.153]
+cozy> dsge.bk(nk, {phi_pi = 0.9})
+{ok = false, verdict = "indeterminate", unstable = 1, forward = 2, roots = [0.5000; 0.9000; 0.9616; 1.302]}
+cozy> let edge = fn phi_x -> fzero(fn f -> (if dsge.bk(nk, {phi_pi = f, phi_x = phi_x}).ok then 1 else -1 end), 0.5, 1.5); edge(0.125)
+0.9902
+cozy> 1 - (1 - 0.99) * 0.125 / 0.1275
+0.9902
+cozy> dsge.vardecomp(s)[1:3, :]
+[77.96, 22.04; 98.70, 1.300; 98.89, 1.105]
+```
+
+A model with no unique stable solution is refused with the count that
+decides it:
+
+```
+cozy> load("packages/dsge.cz")
+error: dsge: indeterminacy — 1 unstable root(s) for 2 forward-looking variable(s); many stable paths satisfy the model
+cozy> dsge.solve(dsge.model(dsge.nk()), {phi_pi = 0.9})
+```
+
+**Discussion.** A contractionary policy shock lowers the output gap and
+inflation and raises the rate, each decaying at the shock's own
+persistence — and the numbers are Gali's closed form, which the golden
+tests check to twelve digits. The bisected determinacy edge agrees with
+the analytic one, `kappa (phi_pi - 1) + (1 - beta) phi_x = 0`: a response
+to the output gap lets the inflation coefficient dip slightly below one.
+
+**How it works.** The equations are rewritten into a residual function
+`f(v, p)` of `v = [y(+1); y; y(-1); shocks]` and compiled with `eval`.
+The steady state solves `f(y, y, y, 0) = 0` by damped Newton, and the
+model is linearised there; both Jacobians are exact, one dual-number
+pass per column, so there is no step size to choose. The linear system
+`A y(+1) + B y + C y(-1) + D e = 0` gives the matrix quadratic
+`A P^2 + B P + C = 0`, solved by cyclic reduction — Dynare's
+`dr = cycle_reduction` — which needs only linear solves and therefore
+runs unchanged on the zero-dependency kernels and in the browser. The
+remaining roots are the eigenvalues of the factor the solution leaves
+behind, so the Blanchard-Kahn count is read from the solution itself;
+unit roots count as stable, as in Dynare. Scope: first order, one lead
+and one lag per variable (add an auxiliary variable for more),
+independent shocks. Cross-checked against an independent solver —
+SymPy derivatives and SciPy's ordered QZ, `tests/ref_dsge.py` — on the
+growth model, Hansen's model with labour, and the New Keynesian model
+(`tests/71_dsge.test`).
+
+| Function | Worked example | Result |
+|---|---|---|
+| `dsge.model(spec)` | `dsge.model(dsge.rbc()).n` | `5` |
+| `dsge.steady(m, over)` | `dsge.steady(dsge.model(dsge.nk())).pi` | `0.00000` |
+| `dsge.bk(m, over)` | `dsge.bk(dsge.model(dsge.nk())).verdict` | `"determinate"` |
+| `dsge.solve(m, over)` | `size(dsge.solve(dsge.model(dsge.rbc())).Q)` | `[5, 1]` |
+| `dsge.irf(s, shock, T)` | `length(dsge.irf(dsge.solve(dsge.model(dsge.rbc())), "e").k)` | `40` |
+| `dsge.simulate(s, T)` | `rng(1); length(dsge.simulate(dsge.solve(dsge.model(dsge.rbc())), 50).c)` | `50` |
+| `dsge.moments(s, K)` | `size(dsge.moments(dsge.solve(dsge.model(dsge.rbc()))).corr)` | `[5, 5]` |
+| `dsge.vardecomp(s)` | `dsge.vardecomp(dsge.solve(dsge.model(dsge.rbc())))[1, 1]` | `100.000` |
+| `dsge.rbc(), dsge.nk()` | `dsge.nk().shocks` | `"en ev"` |
+
 ## Writing your own
 
 The pattern the twelve packages follow: a file of `let` definitions,
