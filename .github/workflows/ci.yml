@@ -28,11 +28,11 @@ jobs:
           cd /tmp && printf 'load("ts")\nlength(ls("packages")) > 10\n' | "$HOME/.local/bin/cozy" | grep -q true
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: deps
-        run: brew install nlopt
+        run: brew install nlopt coreutils
       - name: accelerate+nlopt suite
         run: make clean && make BACKEND=accelerate OPTIM=nlopt -j4 && make BACKEND=accelerate OPTIM=nlopt test
       - name: tier0 suite
