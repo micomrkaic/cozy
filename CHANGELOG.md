@@ -1,5 +1,27 @@
 # Cozy changelog
 
+## 0.1.27 — the PDFs print their Greek
+
+### Fixed
+- **Blank characters in the three PDFs**: Latin Modern, the books'
+  typeface, has no Greek letters, no Unicode super/subscripts and no
+  integral, prime, ring or approximately-equal sign, so XeLaTeX printed
+  86 "Missing character" warnings and left 86 blanks — pi nineteen
+  times, the beta and theta of the unicode-identifier examples, the
+  exponent of 10^-5. doc/pdf_glyphs.tex (passed to pandoc by `make pdfs`)
+  now draws each of the 25 characters with TeX's own math and
+  super/subscript machinery: no new font, the typeface unchanged, zero
+  warnings. In code blocks each substitute sits in a box one character
+  wide, so columns stay aligned.
+- The integral and the prime needed care: unicode-math gives those two a
+  math-only meaning at \begin{document}, so the header redefines them
+  there — unicode-math's meaning in math mode, the text form elsewhere.
+
+### Notes
+- A character outside the 25 will still print blank and still warn;
+  add a line to doc/pdf_glyphs.tex when a book starts using one.
+  `make pdfs` output is the place to look (the verdict is the log).
+
 ## 0.1.26 — the playground lists every package
 
 ### Fixed

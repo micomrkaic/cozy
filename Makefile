@@ -165,11 +165,15 @@ test: vmtest $(BIN)
 test-asan: vmtest-asan
 	@bash tests/run.sh --asan
 
+# doc/pdf_glyphs.tex supplies the characters Latin Modern lacks (Greek,
+# super/subscripts, a few math signs); without it they print as blanks.
+PDF_GLYPHS = -H doc/pdf_glyphs.tex
+
 # Regenerate MANUAL.pdf from MANUAL.md (needs pandoc + xelatex; the styling
 # header is optional). On a full TeX Live / MacTeX install the stock template
 # works as-is.
 manual:
-	pandoc MANUAL.md -o MANUAL.pdf --pdf-engine=xelatex --toc --toc-depth=2 \
+	pandoc MANUAL.md -o MANUAL.pdf --pdf-engine=xelatex --toc --toc-depth=2 $(PDF_GLYPHS) \
 	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
 
 # All three books. The verdict is the exit code: never pipe these through
@@ -177,8 +181,8 @@ manual:
 # behind a > /dev/null (LESSONS: the pandoc that failed in silence).
 pdfs: manual
 	pandoc BOOK.md -o BOOK.pdf --pdf-engine=xelatex --resource-path=.:docs \
-	  --toc --toc-depth=1 -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
-	pandoc PACKAGES.md -o PACKAGES.pdf --pdf-engine=xelatex --toc --toc-depth=1 \
+	  --toc --toc-depth=1 $(PDF_GLYPHS) -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
+	pandoc PACKAGES.md -o PACKAGES.pdf --pdf-engine=xelatex --toc --toc-depth=1 $(PDF_GLYPHS) \
 	  -V geometry:margin=2.4cm -V fontsize=10pt -V colorlinks=true
 
 run:    $(BIN); ./$(BIN)

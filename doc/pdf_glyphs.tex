@@ -1,0 +1,54 @@
+% pdf_glyphs.tex — characters the books use that Latin Modern does not have.
+% Passed to pandoc with -H by `make pdfs`. Without it XeLaTeX prints
+% "Missing character" for each of these and leaves a blank in the PDF.
+% Each one is drawn with TeX's own math or super/subscript machinery, so no
+% extra font is needed and the books keep their typeface.
+\usepackage{newunicodechar}
+\makeatletter
+% \cozyglyph{X}: X as it stands in running text; in typewriter text (code
+% blocks, inline code) X centred in a box one character wide, so columns
+% of code stay aligned.
+\newcommand{\cozyglyph}[1]{%
+  \begingroup\edef\cozy@tt{\ttdefault}%
+  \ifx\f@family\cozy@tt\endgroup\makebox[\fontcharwd\font`0][c]{#1}%
+  \else\endgroup #1\fi}
+\makeatother
+% Greek
+\newunicodechar{α}{\cozyglyph{\ensuremath{\alpha}}}
+\newunicodechar{β}{\cozyglyph{\ensuremath{\beta}}}
+\newunicodechar{ε}{\cozyglyph{\ensuremath{\varepsilon}}}
+\newunicodechar{θ}{\cozyglyph{\ensuremath{\theta}}}
+\newunicodechar{λ}{\cozyglyph{\ensuremath{\lambda}}}
+\newunicodechar{μ}{\cozyglyph{\ensuremath{\mu}}}
+\newunicodechar{π}{\cozyglyph{\ensuremath{\pi}}}
+\newunicodechar{σ}{\cozyglyph{\ensuremath{\sigma}}}
+\newunicodechar{φ}{\cozyglyph{\ensuremath{\varphi}}}
+% symbols
+\newunicodechar{ℓ}{\cozyglyph{\ensuremath{\ell}}}
+\newunicodechar{∘}{\cozyglyph{\ensuremath{\circ}}}
+\newunicodechar{≈}{\cozyglyph{\ensuremath{\approx}}}
+% superscripts and subscripts
+\newunicodechar{⁵}{\cozyglyph{\textsuperscript{5}}}
+\newunicodechar{⁶}{\cozyglyph{\textsuperscript{6}}}
+\newunicodechar{⁸}{\cozyglyph{\textsuperscript{8}}}
+\newunicodechar{⁺}{\cozyglyph{\textsuperscript{+}}}
+\newunicodechar{⁻}{\cozyglyph{\textsuperscript{\ensuremath{-}}}}
+\newunicodechar{ⁿ}{\cozyglyph{\textsuperscript{n}}}
+\newunicodechar{ᵀ}{\cozyglyph{\textsuperscript{T}}}
+\newunicodechar{ᵏ}{\cozyglyph{\textsuperscript{k}}}
+\newunicodechar{ᵢ}{\cozyglyph{\textsubscript{i}}}
+\newunicodechar{₀}{\cozyglyph{\textsubscript{0}}}
+\newunicodechar{₂}{\cozyglyph{\textsubscript{2}}}
+% The integral sign and the prime are special: unicode-math (which pandoc's
+% template loads) gives these two characters a meaning that works only in
+% math mode, and it does so at \begin{document}, after this file is read.
+% So they are redefined there too: unicode-math's meaning in math mode, the
+% text form below everywhere else.
+\makeatletter
+\newcommand{\cozy@retext}[3]{% #1 character, #2 name for the saved meaning, #3 text form
+  \begingroup\lccode`\~=`#1\relax\lowercase{\endgroup\let#2=~}%
+  \newunicodechar{#1}{\ifmmode\expandafter#2\else\cozyglyph{#3}\fi}}
+\AtBeginDocument{%
+  \cozy@retext{∫}{\cozy@um@int}{\ensuremath{\int}}%
+  \cozy@retext{′}{\cozy@um@prime}{\ensuremath{{}^{\prime}}}}
+\makeatother
