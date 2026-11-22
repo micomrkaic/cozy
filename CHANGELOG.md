@@ -1,5 +1,34 @@
 # Cozy changelog
 
+## 0.1.30 — Cozy as a library
+
+### Added
+- **`make lib` builds build/libcozy.a, and cozy.h declares the API**
+  (owner's request: the SDL simulations of econ-sims were cut off from
+  the dsge package; this is the bridge). embed.c is the native twin of
+  wasm_api.c — one persistent session, source in as text — with what a
+  C host needs on the way back: `cozy_eval` returns what the source
+  printed, `cozy_ok` says whether it ran clean, and **`cozy_matrix`
+  hands a numeric global over as doubles**, row-major, so a host never
+  parses printed digits. `cozy_scalar` and `cozy_string` read the other
+  two kinds a host wants.
+- **A package can ride inside the host**: `cozy_eval` takes a whole
+  file's text, so a program can carry dsge.cz as a string and need
+  neither load() nor a packages directory — the way a browser build, or
+  a binary run from anywhere, uses a package.
+- doc/embed_example.c solves the New Keynesian model and reads P and Q
+  into C; the manual's new section shows it, and tests/run_embed.sh
+  (part of `make test`, under whatever BACKEND and OPTIM are in force)
+  compiles and runs it together with tests/embed_test.c — 24 checks of
+  the API: text out, errors flagged and survived, float, integer and
+  logical arrays as doubles, complex refused, four results held at once,
+  Gali's closed form read back from a model solved inside the library.
+
+### Notes
+- One session per process, not thread-safe: the same contract as the
+  browser API. embed.c compiles under Emscripten too (it supplies the
+  pause stub a wasm build needs), so a wasm host can link the same file.
+
 ## 0.1.29 — help, with or without quotes
 
 ### Changed

@@ -71,6 +71,16 @@ Dynare: models in Dynare's notation, solved to first order with exact
 derivatives), and
 **demo** — the guided tour: load it and watch the greatest hits compute live.
 
+## As a library
+
+`make lib` builds `build/libcozy.a`, and `cozy.h` declares a small session
+API: open, evaluate source text, read results back as text or directly as
+doubles. A C program can use Cozy, and its packages, as its numerical
+engine; see "Embedding Cozy in a C program" in the manual and
+`doc/embed_example.c`. The macro simulations in
+[econ-sims](https://github.com/micomrkaic/econ-sims) are built this way:
+C draws, the `dsge` package solves.
+
 ## Build
 
 Requires a C23-capable compiler (gcc 13+ / clang 16+) and `libm`.

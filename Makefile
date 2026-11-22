@@ -129,6 +129,13 @@ $(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
 # Headless test driver: same VM as `cozy`, but reads stdin line by line and
 # echoes each result (no readline), so piping a script in gives one result per
 # line. Handy for batch/regression testing and ASan runs.
+# Cozy as a library (cozy.h, embed.c): the interpreter's core plus a string-in,
+# numbers-out session API, for C programs that want the language as their
+# numerical engine. Link with -lm, plus whatever BACKEND and OPTIM add.
+lib: build/libcozy.a
+build/libcozy.a: $(CORE_O) $(OBJDIR)/embed.o
+	rm -f $@ && ar rcs $@ $^
+
 vmtest: $(CORE_O) $(OBJDIR)/vmtest.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
 
@@ -152,6 +159,7 @@ test: vmtest $(BIN)
 	@sh tests/run_packeur.sh ./vmtest 2>/dev/null || sh tests/run_packeur.sh ./cozy
 	@bash tests/run_io.sh
 	@python3 tests/run_pager.py
+	@CC="$(CC)" STD=$(STD) BACKEND=$(BACKEND) OPTIM=$(OPTIM) EMBED_LIBS="$(LINALG_LIBS) $(OPTIM_LIBS)" bash tests/run_embed.sh
 	@python3 tests/run_doclint.py
 	@python3 tools/check_release.py
 	@python3 tools/gen_pkg_hints.py --check
@@ -330,4 +338,4 @@ test-wasm-ubuntu:
 wasm-docker:
 	docker run --rm -u "$$(id -u)" -v "$$PWD":/src -w /src cozy-wasm make wasm-ubuntu
 
-.PHONY: run repl sample ast tokens clean test test-asan wasm wasm-ubuntu wasm-docker test-wasm test-wasm-ubuntu manual pdfs stress install install-files uninstall
+.PHONY: lib run repl sample ast tokens clean test test-asan wasm wasm-ubuntu wasm-docker test-wasm test-wasm-ubuntu manual pdfs stress install install-files uninstall

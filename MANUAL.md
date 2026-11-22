@@ -1233,6 +1233,60 @@ themselves; `tests/dis/` pins the emitted bytecode for core constructs.
 this by default: plots appear in the page's Plots panel, and "download new
 files" saves them.
 
+## Embedding Cozy in a C program
+
+`make lib` builds `build/libcozy.a`: the interpreter without its REPL,
+behind the six functions of `cozy.h`. A C program opens a session, hands
+it Cozy source as text, and reads results back — printed, as the REPL
+would show them, or as numbers. The numbers do not go through text:
+`cozy_matrix` hands over a global's elements as doubles, row-major.
+
+```c
+#include <stdio.h>
+#include "cozy.h"
+
+int main(void)
+{
+    cozy_open();
+    cozy_eval("load(\"dsge\")");
+    cozy_eval("let s = dsge.solve(dsge.model(dsge.nk()), {phi_pi = 1.5});"
+              "let P = s.P; let Q = s.Q;");
+    if (!cozy_ok()) { fputs(cozy_output(), stderr); return 1; }
+
+    int n, k, rows, cols;
+    const double *P = cozy_matrix("P", &n, &cols);     /* y = P y(-1) + Q e */
+    const double *Q = cozy_matrix("Q", &rows, &k);
+    printf("inflation's response to a policy shock: %.6f\n", Q[1 * k + 1]);
+    printf("persistence of the natural rate:        %.6f\n", P[3 * n + 3]);
+    return 0;
+}
+```
+
+    make lib
+    cc -I. doc/embed_example.c build/libcozy.a -lm -o embed_example
+
+| Function | What it does |
+|---|---|
+| `cozy_open()` | start the session; once, first |
+| `cozy_eval(source)` | run a line, several statements or a whole file's text; returns what it printed |
+| `cozy_ok()` | whether the last `cozy_eval` ran without a parse or runtime error |
+| `cozy_output()` | the text the last `cozy_eval` returned |
+| `cozy_matrix(name, &rows, &cols)` | a numeric global as doubles, row-major; a scalar is 1 x 1; `NULL` if absent or not real numeric |
+| `cozy_scalar(name, &value)` | a numeric global as one double |
+| `cozy_string(name)` | a string global |
+| `cozy_version()` | the interpreter's version |
+
+There is one session per process and it is not thread-safe. A returned
+matrix belongs to the library; four may be held at once before the oldest
+buffer is reused, so copy what must last. Because `cozy_eval` accepts a
+whole file's text, a host can carry a package inside itself — as a string
+compiled into the program — and need neither `load` nor a packages
+directory at run time; that is how a program built for the browser, or one
+meant to run from anywhere, uses a package. A build with `BACKEND=openblas`
+or `OPTIM=nlopt` makes a library that needs those libraries at link time
+too. The example above is `doc/embed_example.c`, which `make test` compiles
+and runs (`tests/run_embed.sh`), along with a test of every function.
+
 ## Editors
 
 **Emacs.** `editors/cozy-mode.el` provides a major mode for `.cz` files:
