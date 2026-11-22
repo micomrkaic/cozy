@@ -193,6 +193,26 @@ static void on_sigint(int sig) { (void)sig; siglongjmp(g_sigint_jmp, 1); }
 /* ------------------------------------------------------------------ */
 static bool g_more;              /* paging enabled? (default off) */
 
+/* Open the user's pager for writing ($PAGER, else less). What we page is
+ * colored, and less prints color escapes as literal ESC[1;36m noise unless
+ * it is told -R — which a bare PAGER=less, the commonest setting there is,
+ * does not say. So -R is appended to $LESS for the pager we start (the last
+ * option wins; other pagers do not read the variable). Once per session. */
+static FILE *open_pager(void)
+{
+    static bool less_told;
+    if (!less_told) {
+        less_told = true;
+        const char *cur = getenv("LESS");
+        char buf[1024];
+        snprintf(buf, sizeof buf, "%s%s-R", cur ? cur : "", cur && *cur ? " " : "");
+        setenv("LESS", buf, 1);
+    }
+    const char *pager = getenv("PAGER");
+    if (!pager || !*pager) pager = "less";
+    return popen(pager, "w");
+}
+
 static void page_output(const char *buf, size_t sz)
 {
     if (!buf || sz == 0) return;
@@ -202,9 +222,7 @@ static void page_output(const char *buf, size_t sz)
     struct winsize ws;
     if (ioctl(fileno(stdout), TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) rows = ws.ws_row;
     if ((int)lines < rows) { fwrite(buf, 1, sz, stdout); return; }
-    const char *pager = getenv("PAGER");
-    if (!pager || !*pager) pager = "less";
-    FILE *p = popen(pager, "w");
+    FILE *p = open_pager();
     if (!p) { fwrite(buf, 1, sz, stdout); return; }
     fwrite(buf, 1, sz, p);
     pclose(p);
@@ -480,8 +498,7 @@ int repl_run(void)
                 }
                 bool tty = isatty(fileno(stdout));
                 if (tty) {
-                    const char *pager = getenv("PAGER");
-                    FILE *pp = popen(pager && *pager ? pager : "less -R", "w");
+                    FILE *pp = open_pager();
                     if (pp) {
                         md_render(mf, pp, true);
                         pclose(pp);

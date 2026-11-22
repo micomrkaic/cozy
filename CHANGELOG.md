@@ -1,5 +1,21 @@
 # Cozy changelog
 
+## 0.1.28 — the manual pages in color under any PAGER
+
+### Fixed
+- **`manual` printed its colors as text** (owner's report, with the
+  screenshot: `ESC[1;36mContentsESC[0m` down the page). The REPL pipes
+  the rendered books to $PAGER and fell back to `less -R` only when the
+  variable was unset; with a bare `PAGER=less` — the commonest setting
+  there is — less was never told -R and showed every escape literally.
+  The REPL now appends -R to $LESS for the pager it starts (once per
+  session; the last option wins, and pagers other than less do not read
+  the variable), so the manual, `manual packages`, `manual book` and
+  `more on` output page in color whatever PAGER and LESS say.
+- tests/run_pager.py drives ./cozy on a pty: the pager's environment
+  with LESS unset and preset, and the real case, PAGER=less. It fails on
+  0.1.27 in all three and is part of `make test`.
+
 ## 0.1.27 — the PDFs print their Greek
 
 ### Fixed
