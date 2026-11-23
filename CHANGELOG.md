@@ -1,5 +1,69 @@
 # Cozy changelog
 
+## 0.1.33 — occasionally binding constraints
+
+### Added
+- **`dsge.occbin(ref, alt, opts)` solves a model with one occasionally
+  binding constraint** (owner's request): the piecewise-linear method
+  of Guerrieri and Iacoviello (2015), which Dynare ships as OccBin.
+  `ref` is the model while the constraint is slack, `alt` the model
+  while it binds — the same variables and shocks, an equation or two
+  different. `opts.shocks` is a record of innovation columns by shock
+  name, each a surprise; `opts.bind` is a function of the path (a
+  record of columns in levels) saying where the constraint is violated,
+  `opts.relax` where it lets go (default: where bind is false). The
+  result holds `path` and `linear` (with and without the constraint, as
+  records of columns like dsge.simulate's), `binding` (the periods in
+  which it binds) and `iterations`.
+  - Both regimes are linearised at the reference steady state with the
+    package's exact dual-number Jacobians; the binding regime keeps the
+    constant by which that steady state violates it. For a guessed set
+    of binding periods the rules x(s) = P(s) x(s-1) + d(s) are solved
+    backward from the last one, the path is run forward, and bind and
+    relax are evaluated on it; the guess is replaced by what the path
+    implies until the two agree. Each period starts from the previous
+    period's guess, moved up by one.
+  - What cannot be solved is said: a guess that will not settle (with
+    the period), a constraint still binding at the horizon, a binding
+    regime that leaves the variables undetermined, a reference regime
+    without a unique stable solution.
+  - **Validated against Dynare 6.0's OccBin** on two models and the same
+    surprise shocks (tests/ref_occbin.py runs Dynare; tests/77_occbin
+    .test pins its numbers): the New Keynesian model with a floor on the
+    policy rate — the rate on the floor for eight quarters, a positive
+    shock later — and a growth model in which investment cannot fall
+    below a fraction of its steady-state level, with a Lagrange
+    multiplier, over sixty periods and two binding spells. The paths
+    agree to rounding error (4e-16 on the second).
+- **`dsge.zlb()`**: a ready-made pair of regimes, the three-equation New
+  Keynesian model with a floor on the interest rate, and the `bind`
+  test that goes with it.
+
+### Fixed
+- **A variable shadowing a builtin constant could not be assigned in a
+  loop.** `let e = 0; for t = 1:3 do e = e + t end; e` was 0. Lookup
+  took the newest binding of a name and assignment the oldest, so with
+  `let e = ...` on top of the constant `e`, an assignment from an inner
+  scope went to the constant: the variable kept its value and the
+  constant was overwritten until restart. Assignment now finds the
+  binding lookup finds. Found while building a shock vector named `e`
+  for the Dynare comparison.
+- **Assigning to a builtin without `let` silently destroyed it**:
+  `sin = 4`, or `pi = 3` inside a loop or a function, overwrote the
+  standard library's own slot, which `clear` could not bring back. The
+  standard library is shadowed, never assigned: this is now an error
+  that says to write `let pi = ...`.
+
+### Notes
+- Scope: one constraint (two regimes). Two constraints make four
+  regimes; the backward recursion is the same, the guess is a pair of
+  sequences, and it is not written.
+- The piecewise-linear solution is certainty-equivalent between
+  regimes: agents expect no further shocks, so there is no
+  precautionary behaviour ahead of the constraint. That is the
+  method's own limit, and Dynare's.
+- tests/77_occbin.test (31 cases), nine more in 74_robust.test.
+
 ## 0.1.32 — the power operator joins the tower; ordschur
 
 ### Added

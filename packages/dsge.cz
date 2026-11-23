@@ -26,9 +26,16 @@
 % write the model in logs. Cross-checked against an ordered-QZ solver
 % (SciPy) and Gali's closed form; see tests/71_dsge.test.
 %
+% An occasionally binding constraint — an interest rate that cannot fall
+% below a floor, investment that cannot be undone — is handled piecewise
+% linearly (dsge.occbin, Guerrieri and Iacoviello's OccBin): two regimes,
+% each linear, and the periods in which the constraint binds found by
+% guess and verify. Cross-checked against Dynare's OccBin; see
+% tests/77_occbin.test.
+%
 % The public face is the record dsge: dsge.model, dsge.steady, dsge.bk,
-% dsge.solve, dsge.irf, dsge.simulate, dsge.moments, dsge.vardecomp, and the
-% ready-made models dsge.rbc and dsge.nk. The functions behind it (dsge_*)
+% dsge.solve, dsge.irf, dsge.simulate, dsge.moments, dsge.vardecomp,
+% dsge.occbin, and the ready-made models dsge.rbc, dsge.nk and dsge.zlb. The functions behind it (dsge_*)
 % and the helpers (dg_*) are ordinary globals: keep() must spare them.
 % To unload the package, clear("packages/dsge.cz"): clear("dsge") finds the
 % record first and removes only that.
@@ -320,11 +327,12 @@ let dg_ss = fn m, p -> (
   y
 )
 
-% internal: steady state and the exact Jacobians A (leads), B (current),
-% C (lags), D (shocks) of the residual there — one dual pass per column.
-let dg_lin = fn m, p -> (
+% internal: the exact Jacobians A (leads), B (current), C (lags), D (shocks)
+% of the residual at the point y held in every period with no shocks — one
+% dual pass per column — and the residual r there (zero if y is the model's
+% own steady state; occbin linearises a second regime around the first's).
+let dg_lin_at = fn m, p, y -> (
   let n = m.n; let k = m.k;
-  let y = dg_ss(m, p);
   let v = [y; y; y; zeros(k, 1)];
   let use = find([m.lead, ones(1, n), m.lag, ones(1, k)] > 0);
   let J = zeros(n, 3 * n + k);
@@ -335,8 +343,11 @@ let dg_lin = fn m, p -> (
     J[:, j] = dualeps(m.f(dual(v, seed), p))
   ) end;
   {y = y, A = J[:, 1 : n], B = J[:, n + 1 : 2 * n], C = J[:, 2 * n + 1 : 3 * n],
-   D = J[:, 3 * n + 1 : 3 * n + k]}
+   D = J[:, 3 * n + 1 : 3 * n + k], r = m.f(v, p)}
 )
+
+% internal: steady state and the Jacobians of the residual there.
+let dg_lin = fn m, p -> dg_lin_at(m, p, dg_ss(m, p))
 
 % internal: cyclic reduction for A P^2 + B P + C = 0 — the solvent built
 % from the n smallest roots. Returns {found, P}; found is false if a pivot
@@ -560,6 +571,195 @@ let dsge_vardecomp = fn s -> (
   100 * V ./ (sum(V, 2) * ones(1, k))
 )
 
+% internal: the parameters of m with those entries of over that m has (the
+% two regimes of occbin share most parameters, and each may have its own).
+let dg_params_shared = fn m, over -> (
+  let p = m.params;
+  let fo = fields(over);
+  for i = 1 : numel(fo) do
+    if dg_find(m.pnames, fo[i]) > 0 then (p = setfield(p, fo[i], getfield(over, fo[i]))) end
+  end;
+  p
+)
+
+% internal: the shocks of an occbin run as a T x k matrix, from a matrix
+% (one column per shock, in the model's order) or a record of columns by
+% shock name (shocks not named are zero).
+let dg_shockpath = fn m, e -> (
+  let k = m.k;
+  if numel(fields(e)) == 0 then error("dsge: occbin needs shocks — a matrix with one column per shock, or a record of columns by shock name") end;
+  let fe = fields(e); let T = 0;
+  for i = 1 : numel(fe) do (
+    if dg_find(m.shocks, fe[i]) == 0 then error("dsge: '{}' is not a shock of this model (the shocks are {})", fe[i], strjoin(m.shocks, ", ")) end;
+    T = max(T, numel(getfield(e, fe[i])))
+  ) end;
+  let E = zeros(T, k);
+  for i = 1 : numel(fe) do (
+    let col = getfield(e, fe[i]);
+    let j = dg_find(m.shocks, fe[i]);
+    for t = 1 : numel(col) do E[t, j] = col[t] end
+  ) end;
+  E
+)
+
+% dsge.occbin(ref, alt, opts): a model with one occasionally binding constraint.
+% The piecewise-linear method of Guerrieri and Iacoviello (2015), OccBin.
+% ref is the model while the constraint is slack and alt the model while
+% it binds: the same variables and shocks, one or more equations different
+% (a policy rule replaced by the bound, a multiplier set free). Both are
+% linearised at ref's steady state. opts is a record:
+%   shocks  the innovations, period by period: a record of columns by shock
+%           name ({en = [-3; -1]}; shocks not named are zero), in the
+%           shocks' own units. Each one is a surprise: agents expect none
+%           after it.
+%   bind    fn v -> logical column: where, on a path computed with the
+%           constraint slack, it is violated (v is a record of columns, one
+%           per variable, in LEVELS, like the result of dsge.simulate).
+%   relax   fn v -> logical column: where, on a path computed with it
+%           binding, it would no longer bind. Default: where bind is false.
+%   T       periods to simulate (default: the length of shocks).
+%   horizon periods ahead agents are followed until the constraint is slack
+%           for good (default 100); an error if it still binds there.
+%   maxit   regime guesses tried per period (default 50).
+%   over    parameter values to use instead of the models' own; a name is
+%           applied to each model that has it.
+% Returns a record: path and linear (records of columns in levels — with
+% the constraint, and ignoring it), binding (a logical column: the periods
+% in which it binds), and iterations (the regime guesses needed, by period).
+% e.g. let z = dsge.zlb(); let r = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 12}); sum(r.binding) %= 7
+% e.g. let z = dsge.zlb(); let r = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 12}); min(r.path.i) %= -1
+% e.g. let z = dsge.zlb(); let r = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 12}); r.path.x[1] < r.linear.x[1] %= true
+% e.g. let z = dsge.zlb(); let r = dsge.occbin(z.ref, z.alt, {shocks = {en = [0.5]}, bind = z.bind, T = 8}); [any(r.binding), max(abs(r.path.x - r.linear.x)) < 1e-12] %= [false, true]
+let dsge_occbin = fn ref, alt, opts -> (
+  let known = ["shocks", "bind", "relax", "T", "horizon", "maxit", "over"];
+  let fo = fields(opts);
+  for i = 1 : numel(fo) do
+    if dg_find(known, fo[i]) == 0 then
+      error("dsge: occbin has no option '{}' (the options are shocks, bind, relax, T, horizon, maxit, over)", fo[i])
+    end
+  end;
+  if dg_find(fo, "bind") == 0 then error("dsge: occbin needs bind, a function of the path that says where the constraint is violated") end;
+  if dg_find(fo, "shocks") == 0 then error("dsge: occbin needs shocks — a record of columns by shock name") end;
+  let n = ref.n; let k = ref.k;
+  if (alt.n != n) || (alt.k != k) || (strjoin(alt.vars, " ") != strjoin(ref.vars, " ")) || (strjoin(alt.shocks, " ") != strjoin(ref.shocks, " ")) then
+    error("dsge: the two regimes of occbin must have the same variables and shocks, in the same order")
+  end;
+  let over = if dg_find(fo, "over") > 0 then opts.over else {} end;
+  let bind = opts.bind;
+  let hasrelax = dg_find(fo, "relax") > 0;
+  let relax = if hasrelax then opts.relax else bind end;
+  let E = dg_shockpath(ref, opts.shocks);
+  let T = if dg_find(fo, "T") > 0 then opts.T else size(E)[1] end;
+  let H = if dg_find(fo, "horizon") > 0 then opts.horizon else 100 end;
+  let maxit = if dg_find(fo, "maxit") > 0 then opts.maxit else 50 end;
+  if T < size(E)[1] then error("dsge: occbin was given {} periods of shocks but T = {}", size(E)[1], T) end;
+
+  % the two linear systems, both around the reference steady state:
+  %   A x(+1) + B x + C x(-1) + D e + r = 0   (r = 0 in the reference regime)
+  let L1 = dg_lin(ref, dg_params_shared(ref, over));
+  let ybar = L1.y;
+  let L2 = dg_lin_at(alt, dg_params_shared(alt, over), ybar);
+  if dg_size(L2.r) == inf then error("dsge: the binding regime's equations cannot be evaluated at the reference steady state") end;
+  let c = dg_core(L1.A, L1.B, L1.C);
+  if (c.nstable != n) || !c.found then
+    error("dsge: occbin needs a reference regime with a unique stable solution (Blanchard-Kahn fails there)")
+  end;
+  let P = c.P;
+  let Q = 0.0 - ((L1.A * P + L1.B) \ L1.D);
+  let r1 = zeros(n, 1);
+
+  let levels = fn X -> dg_table(X + ones(size(X)[1], 1) * ybar', ref.vars);
+  let X = zeros(T, n); let Xlin = zeros(T, n);
+  let bound = zeros(T, 1); let iters = zeros(T, 1);
+  let x = zeros(n, 1); let xl = zeros(n, 1);
+  let g = zeros(H, 1);                                 % the guess: 1 for each period ahead in which it binds
+  for t = 1 : T do (
+    let e = if t <= size(E)[1] then E[t, :]' else zeros(k, 1) end;
+    xl = P * xl + Q * e;
+    Xlin[t, :] = xl';
+    let settled = false; let it = 0; let path = zeros(H, n);
+    while !settled do (
+      it = it + 1;
+      if it > maxit then
+        error("dsge: occbin could not settle which periods bind (period {}, {} guesses) — the guesses may be cycling", t, maxit)
+      end;
+      let last = 0;
+      for s = 1 : H do if g[s] > 0.5 then (last = s) end end;
+      if last == H then
+        error("dsge: the constraint still binds {} periods ahead (period {}) — lengthen horizon, or the shock is too large for the model to leave the constraint", H, t)
+      end;
+      % decision rules backward from the last binding period: x(s) = Ps x(s-1) + ds
+      let Ps = zeros(max(last, 1) * n, n); let ds = zeros(n, max(last, 1));
+      let Pn = P; let dn = zeros(n, 1); let Q1 = Q;
+      for back = 1 : last do (
+        let s = last + 1 - back;
+        let Ls = if g[s] > 0.5 then L2 else L1 end;
+        let rs = if g[s] > 0.5 then L2.r else r1 end;
+        let M = Ls.A * Pn + Ls.B;
+        if dg_rcond(M) < 1e-13 then
+          error("dsge: occbin met a singular system {} periods ahead (period {}): the binding regime does not pin the variables down", s, t)
+        end;
+        dn = 0.0 - (M \ (Ls.A * dn + rs));
+        Pn = 0.0 - (M \ Ls.C);
+        Ps[(s - 1) * n + 1 : s * n, :] = Pn;
+        ds[:, s] = dn;
+        if s == 1 then (Q1 = 0.0 - (M \ Ls.D)) end
+      ) end;
+      % the path those rules imply
+      let z = x;
+      for s = 1 : H do (
+        if s <= last then (
+          z = Ps[(s - 1) * n + 1 : s * n, :] * z + ds[:, s];
+          if s == 1 then (z = z + Q1 * e) end
+        ) else (
+          z = P * z;
+          if s == 1 then (z = z + Q * e) end
+        ) end;
+        path[s, :] = z'
+      ) end;
+      % does the path agree with the guess?
+      let v = levels(path);
+      let viol = bind(v);
+      let free = if hasrelax then relax(v) else !viol end;
+      let gn = g;
+      for s = 1 : H do gn[s] = if (if g[s] > 0.5 then !free[s] else viol[s] end) then 1.0 else 0.0 end end;
+      settled = max(abs(gn - g)) == 0;
+      g = gn
+    ) end;
+    x = path[1, :]';
+    X[t, :] = x';
+    bound[t] = g[1];
+    iters[t] = it;
+    for s = 1 : H - 1 do g[s] = g[s + 1] end;          % next period starts from this one's guess
+    g[H] = 0.0
+  ) end;
+  {path = levels(X), linear = levels(Xlin), binding = bound > 0.5, iterations = iters}
+)
+
+% dsge.zlb(): the New Keynesian model with a floor on the interest rate.
+% A ready-made pair of regimes for dsge.occbin: the three-equation model of
+% dsge.nk with a demand disturbance, where the central bank follows its rule
+% (the notional rate inot) unless that would take the rate below -ibar —
+% the steady-state rate with its sign changed, so the floor is a nominal
+% rate of zero. Returns {ref, alt, bind}: the model with the rule in force,
+% the model with the rate at the floor, and the test for the floor.
+% e.g. dsge.zlb().ref.vars                     %= ["x", "pi", "i", "inot", "rn"]
+% e.g. dsge.bk(dsge.zlb().ref).verdict         %= "determinate"
+let dsge_zlb = fn -> (
+  let par = {beta = 0.99, sigma = 1.0, kappa = 0.1275, phi_pi = 1.5, phi_x = 0.125,
+             rho_n = 0.8, ibar = 1.0};
+  let zero = {x = 0.0, pi = 0.0, i = 0.0, inot = 0.0, rn = 0.0};
+  let common = ["pi = beta * pi(+1) + kappa * x";
+                "x = x(+1) - (1 / sigma) * (i - pi(+1) - rn)";
+                "inot = phi_pi * pi + phi_x * x";
+                "rn = rho_n * rn(-1) + en"];
+  let spec = fn rule -> {vars = "x pi i inot rn", shocks = "en", params = par, init = zero,
+                         model = [common; rule]};
+  {ref = dsge_model(spec("i = inot")),
+   alt = dsge_model(spec("i = -ibar")),
+   bind = fn v -> v.inot < -1.0}
+)
+
 % dsge.rbc(): the stochastic growth model, a ready-made spec.
 % Variables are output y, consumption c, investment i, capital k and log
 % technology a, with one technology shock e; quarterly calibration, CRRA
@@ -603,4 +803,5 @@ let dsge_nk = fn -> {
 
 let dsge = {model = dsge_model, steady = dsge_steady, bk = dsge_bk, solve = dsge_solve,
             irf = dsge_irf, simulate = dsge_simulate, moments = dsge_moments,
-            vardecomp = dsge_vardecomp, rbc = dsge_rbc, nk = dsge_nk}
+            vardecomp = dsge_vardecomp, occbin = dsge_occbin,
+            rbc = dsge_rbc, nk = dsge_nk, zlb = dsge_zlb}

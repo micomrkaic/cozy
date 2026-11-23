@@ -717,7 +717,7 @@ page for one function:
 ```
 cozy> load("packages/dsge.cz")
 cozy> help(dsge)
-  dsge — a record of 10 functions
+  dsge — a record of 12 functions
     dsge.model       compile a model from a spec record.
     dsge.steady      the steady state, as a record by variable name.
     dsge.bk          the Blanchard-Kahn check, as a value not an error.
@@ -726,8 +726,10 @@ cozy> help(dsge)
     dsge.simulate    a simulated path of T periods, in levels.
     dsge.moments     theoretical moments of the solved model.
     dsge.vardecomp   the unconditional variance decomposition, in percent.
+    dsge.occbin      a model with one occasionally binding constraint.
     dsge.rbc         the stochastic growth model, a ready-made spec.
     dsge.nk          the three-equation New Keynesian model, a ready-made spec.
+    dsge.zlb         the New Keynesian model with a floor on the interest rate.
   help(dsge.model) or help("dsge.model") for any one of them
 ```
 
@@ -739,6 +741,46 @@ cozy> load("packages/dsge.cz")
 error: dsge: indeterminacy — 1 unstable root(s) for 2 forward-looking variable(s); many stable paths
 cozy> dsge.solve(dsge.model(dsge.nk()), {phi_pi = 0.9})
 ```
+
+**An occasionally binding constraint.** A central bank cannot take its
+rate below zero; a firm cannot uninvest. Such a constraint binds in some
+periods and not in others, and the model is linear in neither sense. The
+piecewise-linear method of Guerrieri and Iacoviello (2015) — OccBin, as
+in Dynare — treats it as two linear models: `ref`, with the constraint
+slack, and `alt`, with it binding. They have the same variables and
+shocks and differ in an equation or two. `dsge.zlb()` is a ready-made
+pair, the model above with a floor on the policy rate: the rule
+`i = inot` in one regime, `i = -ibar` in the other.
+
+```
+cozy> load("packages/dsge.cz")
+cozy> let z = dsge.zlb();
+cozy> let r = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 12});
+cozy> format(4); r.path.i[1:8]
+[-1.000, -1.000, -1.000, -1.000, -1.000, -1.000, -1.000, -0.8714]
+cozy> sum(r.binding)
+7
+cozy> [r.path.x[1], r.linear.x[1]]
+[-17.63, -3.978]
+```
+
+A fall of three points in the natural rate would have the rule cut by
+more than the floor allows. The rate sits on the floor for seven
+quarters, and because it cannot do what the rule asks, the same shock
+costs more than four times the output it would cost without the floor
+(`r.linear` is the path that ignores the constraint).
+
+`bind` says where the constraint is violated on a path computed as if it
+were slack: a function of a record of columns, one per variable, in
+levels — here `fn v -> v.inot < -1.0`. `relax` says where, on a path
+computed with it binding, it would let go; by default, where `bind` is
+false. When the binding regime holds a variable exactly at its bound, as
+a constraint with a Lagrange multiplier does, `bind` cannot tell slack
+from binding there, and `relax` should test the multiplier instead
+(`fn v -> v.Lambda < 0`). Each shock is a surprise: in every period the
+agents expect no more of them, and the periods in which the constraint
+will bind are found by guessing, solving backward from the last of them,
+and checking the path against the guess.
 
 **Discussion.** A contractionary policy shock lowers the output gap and
 inflation and raises the rate, each decaying at the shock's own
@@ -763,7 +805,16 @@ and one lag per variable (add an auxiliary variable for more),
 independent shocks. Cross-checked against an independent solver —
 SymPy derivatives and SciPy's ordered QZ, `tests/ref_dsge.py` — on the
 growth model, Hansen's model with labour, and the New Keynesian model
-(`tests/71_dsge.test`).
+(`tests/71_dsge.test`). `dsge.occbin` linearises both regimes at the
+reference steady state — the binding one keeps a constant term, the
+amount by which the steady state violates it — and for a guessed set of
+binding periods solves backward from the last of them for time-varying
+rules `x(s) = P(s) x(s-1) + d(s)`; it handles one constraint, and reports
+a guess that will not settle or a constraint that never lets go instead
+of looping. Checked against Dynare 6.0's OccBin on the floor on the
+policy rate and on a growth model with irreversible investment
+(`tests/ref_occbin.py`, `tests/77_occbin.test`): the paths agree to
+rounding error.
 
 In the table, `m` is `dsge.model(dsge.nk())` and `s` is `dsge.solve(m)`.
 

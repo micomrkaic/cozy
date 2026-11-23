@@ -272,9 +272,16 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         }
         case OP_SET_VAR: {
             uint16_t k = RD_U16();
-            if (!env_assign(fr->env, ch_->names[k], ch_->namelens[k], PEEK(0)))
+            if (!env_assign(fr->env, ch_->names[k], ch_->namelens[k], PEEK(0))) {
+                Value held;
+                if (env_lookup(fr->env, ch_->names[k], ch_->namelens[k], &held)) {
+                    value_release(held);             /* the name exists, but only as a builtin */
+                    runtime_error(I, "cannot assign to the builtin '%.*s' — write let %.*s = ... to make a variable of that name",
+                                  (int)ch_->namelens[k], ch_->names[k], (int)ch_->namelens[k], ch_->names[k]);
+                }
                 runtime_error(I, "assignment to undefined name '%.*s' (declare it with 'let' first)",
                               (int)ch_->namelens[k], ch_->names[k]);
+            }
             break;
         }
         case OP_GET_AT: {

@@ -393,13 +393,19 @@ bool env_lookup(EnvObj *e, const char *name, uint32_t len, Value *out)
     return false;
 }
 
+/* Assign to the binding a lookup of the name would find: newest first. A
+ * protected (standard-library) slot is never assigned — only shadowed, by
+ * `let` — so false means "no variable of that name", even if a builtin has
+ * it. (This used to scan oldest first: with `let e = 0` shadowing the
+ * constant e, an assignment to e inside a loop went to the constant, the
+ * variable kept its value, and the constant was gone until restart.) */
 bool env_assign(EnvObj *e, const char *name, uint32_t len, Value v)
 {
     for (; e; e = e->parent)
-        for (uint32_t i = 0; i < e->count; i++)
-            if (e->namelens[i] == len && memcmp(e->names[i], name, len) == 0) {
-                value_release(e->vals[i]);
-                e->vals[i] = value_retain(v);
+        for (uint32_t i = e->count; i > e->n_protected; i--)
+            if (e->namelens[i - 1] == len && memcmp(e->names[i - 1], name, len) == 0) {
+                value_release(e->vals[i - 1]);
+                e->vals[i - 1] = value_retain(v);
                 return true;
             }
     return false;

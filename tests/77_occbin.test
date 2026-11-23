@@ -1,0 +1,92 @@
+# dsge.occbin — one occasionally binding constraint, by the piecewise-linear
+# method of Guerrieri and Iacoviello (2015).
+# The reference numbers come from Dynare 6.0's own OccBin on the same two
+# models and the same surprise shocks (tests/ref_occbin.py, which needs
+# Octave and Dynare and is not part of the suite). Assertions are closeness
+# to those numbers.
+
+# --- a floor on the policy rate (linear; the regimes differ in the rule) ---
+load("dsge"); let z = dsge.zlb(); let en = zeros(12, 1); en[1] = -3.0; en[2] = -1.0; en[12] = 2.0; let r = dsge.occbin(z.ref, z.alt, {shocks = {en = en}, bind = z.bind, T = 40}); fields(r)
+=> ["path"; "linear"; "binding"; "iterations"]
+.. max(abs(r.path.x[1 : 12] - [-17.6288455652, -22.1571413596, -14.520226303, -9.3804422595, -5.95820220358, -3.71581707734, -2.28497662393, -1.41645458974, -0.945556834173, -0.756445467338, -0.605156373871, 2.16809039341])) < 1e-9
+=> true
+.. max(abs(r.path.pi[1 : 12] - [-6.3637065767, -8.00958142943, -5.23691505665, -3.41978404346, -2.24624005593, -1.50158512623, -1.03820045341, -0.754410034198, -0.579608155563, -0.46368652445, -0.37094921956, 1.32899771712])) < 1e-9
+=> true
+.. max(abs(r.path.i[9 : 12] - [-0.987606837616, -0.790085470092, -0.632068376074, 2.26450787485])) < 1e-9
+=> true
+.. abs(r.path.x[40] - 0.00419369672937) < 1e-10
+=> true
+# the rate sits on the floor for eight quarters, and nowhere below it
+.. r.binding[1 : 10]
+=> [true, true, true, true, true, true, true, true, false, false]
+.. [sum(r.binding), min(r.path.i), max(abs(r.path.i[1 : 8] + 1))]
+=> [8, -1, 0]
+# ignoring the floor, the same shocks do far less harm
+.. max(abs(r.linear.x[1 : 3] - [-3.97832323876, -4.50876633726, -3.60701306981])) < 1e-9
+=> true
+.. [numel(r.path.x), numel(r.linear.pi), numel(r.binding)]
+=> [40, 40, 40]
+# where the rule holds, i is the notional rate; on the floor the notional rate is lower
+.. [max(abs(r.path.i[9 : 40] - r.path.inot[9 : 40])) < 1e-12, all(r.path.inot[1 : 8] < -1)]
+=> [true, true]
+# an explicit relax gives the same answer as the default (where bind is false)
+.. let r2 = dsge.occbin(z.ref, z.alt, {shocks = {en = en}, bind = z.bind, relax = fn v -> v.inot > -1.0, T = 40}); max(abs(r2.path.x - r.path.x))
+=> 0
+# shocks too small to reach the floor: the linear solution, and no binding period
+.. let q = dsge.occbin(z.ref, z.alt, {shocks = {en = [0.5; -0.2]}, bind = z.bind, T = 10}); [any(q.binding), max(abs(q.path.x - q.linear.x)) < 1e-12, max(q.iterations) == 1]
+=> [false, true, true]
+# ... and that linear solution is dsge.solve's decision rule
+.. let s = dsge.solve(z.ref); abs(q.path.x[1] - s.Q[1, 1] * 0.5) < 1e-12
+=> true
+# a floor further down binds for fewer quarters: over reaches both regimes
+.. let low = dsge.occbin(z.ref, z.alt, {shocks = {en = en}, bind = fn v -> v.inot < -2.0, T = 40, over = {ibar = 2.0}}); [sum(low.binding) < 8, min(low.path.i) == -2]
+=> [true, true]
+# a more aggressive rule shortens the spell; the parameter is the reference regime's alone
+.. let hawk = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 20, over = {phi_pi = 3.0}}); let base = dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, T = 20}); sum(hawk.binding) <= sum(base.binding)
+=> true
+
+# --- investment that cannot fall below a floor (nonlinear; a multiplier) ---
+load("dsge"); let par = {alpha = 0.33, delta = 0.10, beta = 0.96, sigma = 2.0, rho = 0.9, phi = 0.975}; let st = fn p -> (let K = ((1 / p.beta - 1 + p.delta) / p.alpha)^(1 / (p.alpha - 1)); {A = 0.0, C = K^p.alpha - p.delta * K, Invest = p.delta * K, K = K, Lambda = 0.0}); let Iss = st(par).Invest; abs(Iss - 0.353287891716) < 1e-10
+=> true
+.. let common = ["-C^(-sigma) + beta * C(+1)^(-sigma) * (1 - delta + alpha * exp(A(+1)) * K^(alpha - 1)) = -Lambda + beta * (1 - delta) * Lambda(+1)"; "C + K - (1 - delta) * K(-1) = exp(A) * K(-1)^alpha"; "Invest = K - (1 - delta) * K(-1)"; "A = rho * A(-1) + epsilon"]; let ref = dsge.model({vars = "A C Invest K Lambda", shocks = "epsilon", params = par, steady = st, model = [common; "Lambda = 0"]}); let alt = dsge.model({vars = "A C Invest K Lambda", shocks = "epsilon", params = setfield(par, "Iss", Iss), init = st(par), model = [common; "log(Invest) - log(phi * Iss) = 0"]}); [ref.n, alt.n]
+=> [5, 5]
+.. let eps = zeros(36, 1); for t = 1 : 5 do eps[t] = -0.01 end; eps[10] = -0.02; eps[30] = 0.02; for t = 31 : 36 do eps[t] = -0.015 end; let r = dsge.occbin(ref, alt, {shocks = {epsilon = eps}, T = 60, horizon = 200, bind = fn v -> v.Invest < 0.975 * Iss, relax = fn v -> v.Lambda < 0}); sum(r.binding[1 : 36])
+=> 28
+.. let at = [1, 2, 5, 10, 25, 31, 36, 60]; max(abs(r.path.C[at] - [1.15695783329, 1.14223763739, 1.10584871987, 1.09753792045, 1.14609231341, 1.15447072251, 1.06833387797, 1.14963356738])) < 1e-10
+=> true
+.. max(abs(r.path.K[at] - [3.52410673194, 3.51603947546, 3.49636343689, 3.47468837162, 3.45061878337, 3.48123257169, 3.46575374703, 3.46015102934])) < 1e-10
+=> true
+.. max(abs(r.path.Lambda[at] - [0, 0.0113015394621, 0.0393549135183, 0.04355954512, 0, 0, 0.0669327272092, 0])) < 1e-10
+=> true
+.. max(abs(r.linear.C[[2, 36]] - [1.14998325312, 1.0991082157])) < 1e-10
+=> true
+# The floor on the path is the constraint as linearised: log(Invest) = log(phi * Iss) becomes
+# Invest = Iss * (1 + log(phi)). Investment never goes below it, is exactly on it where the
+# constraint binds, and the multiplier is positive there and zero elsewhere.
+.. let floor_ = Iss * (1 + log(0.975)); [min(r.path.Invest) > floor_ - 1e-12, max(abs(r.path.Invest[find(r.binding)] - floor_)) < 1e-12]
+=> [true, true]
+.. [min(r.path.Lambda) > -1e-12, min(r.path.Lambda[find(r.binding)]) > 0, max(abs(r.path.Lambda[find(!r.binding)])) < 1e-12]
+=> [true, true, true]
+# the linear path, which ignores the constraint, goes below the floor
+.. min(r.linear.Invest) < floor_
+=> true
+
+# --- what is refused, and why ---
+load("dsge"); let z = dsge.zlb(); dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}})
+=> !occbin needs bind
+.. dsge.occbin(z.ref, z.alt, {bind = z.bind})
+=> !occbin needs shocks
+.. dsge.occbin(z.ref, z.alt, {shocks = {ev = [1.0]}, bind = z.bind})
+=> !'ev' is not a shock of this model
+.. dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, periods = 10})
+=> !occbin has no option 'periods'
+.. dsge.occbin(z.ref, dsge.model(dsge.nk()), {shocks = {en = [-3.0]}, bind = z.bind})
+=> !the two regimes of occbin must have the same variables and shocks
+.. dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0; -3.0; -3.0]}, bind = z.bind, T = 2})
+=> !3 periods of shocks but T = 2
+# a constraint that never lets go within the horizon is reported, not looped on
+.. dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, horizon = 4})
+=> !the constraint still binds 4 periods ahead
+# a reference regime without a unique stable solution has no rule to return to
+.. dsge.occbin(z.ref, z.alt, {shocks = {en = [-3.0]}, bind = z.bind, over = {phi_pi = 0.5}})
+=> !a reference regime with a unique stable solution

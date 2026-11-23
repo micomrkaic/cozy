@@ -676,3 +676,19 @@ third in floating point, no test on y can know a root was meant, and
 the principal value is what exp(y log x) and every other system with a
 tower returns; cbrt is the real root and says so. KEPT: dual numbers
 raise an error here (the promotion law: dual and complex do not mix).
+
+## 21. Occasionally binding constraints — SHIPPED 0.1.33 (owner's
+request). dsge.occbin(ref, alt, opts): Guerrieri and Iacoviello's
+piecewise-linear method. DECIDED: the two regimes are two compiled
+models, not tags on equations — the package has no parser of its own
+for a constraints block, a model is already a value, and "the same
+model with one equation changed" is one line of Cozy. DECIDED: bind and
+relax are functions of a record of columns (the whole look-ahead path at
+once, in levels, the shape dsge.simulate returns), not strings: no
+second expression language, vectorised by construction, and anything
+the language can say can be a constraint. DECIDED: validation is
+against Dynare's OccBin, not against a second implementation of ours —
+the method is an algorithm, not a theorem, and agreement to rounding
+error on a linear and a nonlinear model is the evidence
+(tests/ref_occbin.py). RESIDUE: two constraints (four regimes); a
+workbench that reads Dynare's occbin_constraints block.
