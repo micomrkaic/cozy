@@ -656,3 +656,23 @@ LAPACK disagreed in the third digit on a large triangular matrix
 written lower instead of upper, both being backward stable. RESIDUE:
 ordered Schur (select which eigenvalues come first), QZ, and a
 Sylvester solver on top.
+ORDERED 0.1.32: ordschur(s, select) -> {U, T, k}. The seam grows
+ordschur and ordschur_d (in place; a stable partition; nonzero if an
+exchange was refused). DECIDED: selection by keyword is computed in
+eval.c from T, never by the backend, so "udi" means the same
+eigenvalues everywhere; k is returned because every use (counting
+stable roots against predetermined variables) needs it and recounting
+it outside would use a second threshold. DECIDED: a refused exchange is
+an error, not a warning with a half-ordered form. RESIDUE: QZ (the
+generalized form, for singular lead matrices) and a Sylvester solver.
+
+## 20. The power operator and the tower — SHIPPED 0.1.32 (owner's
+ruling). x^y with x < 0 and y fractional returned C's nan while
+sqrt(-4) was 2i: the one arithmetic operator outside the tower. It is
+inside now — principal value, exact at the quarter turns — and complex
+exponentiation, the "not supported yet" it implied, came with it.
+REJECTED: returning the real odd root for (-8)^(1/3). 1/3 is not a
+third in floating point, no test on y can know a root was meant, and
+the principal value is what exp(y log x) and every other system with a
+tower returns; cbrt is the real root and says so. KEPT: dual numbers
+raise an error here (the promotion law: dual and complex do not mix).

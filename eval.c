@@ -129,6 +129,55 @@ static Cplx   as_cplx(Value v)  { return v.kind == VAL_COMPLEX ? v.as.z
                                        : v.kind == VAL_FLOAT   ? (Cplx){ v.as.f, 0.0 }
                                                                : (Cplx){ (double)v.as.i, 0.0 }; }
 
+/* ---- the power operator's share of the complex tower ----------------------
+ * A negative real raised to a fractional power has no real value, and C's
+ * pow answers nan. The tower's answer is the principal value, the one
+ * exp(y log x) gives with log's cut along the negative axis: (-8)^(1/3) is
+ * 1+1.73205i, the cube root of smallest argument, as sqrt(-4) is 2i and
+ * not -2i. (The real cube root is cbrt.) */
+
+/* cos and sin of pi*t, exact where the answer is 0 or +-1, so that
+ * (-4)^0.5 is 2i and not 1.2e-16+2i. */
+static void cos_sin_pi(double t, double *c, double *sn)
+{
+    double r = fmod(t, 2.0);                     /* period 2; exact */
+    if (r < 0) r += 2.0;
+    if      (r == 0.0) { *c = 1.0;  *sn = 0.0; }
+    else if (r == 0.5) { *c = 0.0;  *sn = 1.0; }
+    else if (r == 1.0) { *c = -1.0; *sn = 0.0; }
+    else if (r == 1.5) { *c = 0.0;  *sn = -1.0; }
+    else { const double pi = 3.14159265358979323846; *c = cos(pi * r); *sn = sin(pi * r); }
+}
+
+/* x^y for a negative finite real x and a finite non-integer y. */
+static Cplx negreal_pow(double x, double y)
+{
+    double mag = pow(-x, y), c, sn;
+    cos_sin_pi(y, &c, &sn);
+    return (Cplx){ mag * c, mag * sn };
+}
+
+/* z^w, principal value. An integer exponent of modest size is done by
+ * repeated multiplication, which is exact for Gaussian integers ((1i)^2 is
+ * -1+0i with no rounding in the zero) and has no trouble with z = 0. */
+static Cplx c_powz(Cplx z, Cplx w)
+{
+    if (w.im == 0.0 && w.re == floor(w.re) && fabs(w.re) <= 1024.0) {
+        long n = (long)w.re, m = n < 0 ? -n : n;
+        Cplx r = { 1.0, 0.0 }, b = z;
+        while (m > 0) { if (m & 1) r = c_mul(r, b); m >>= 1; if (m) b = c_mul(b, b); }
+        return n < 0 ? c_div((Cplx){ 1.0, 0.0 }, r) : r;
+    }
+    if (z.re == 0.0 && z.im == 0.0)              /* 0^w: 0 if Re w > 0, else no value */
+        return w.re > 0.0 ? (Cplx){ 0.0, 0.0 } : (Cplx){ nan(""), nan("") };
+    if (z.im == 0.0 && w.im == 0.0 && isfinite(z.re) && isfinite(w.re))
+        return z.re > 0.0 ? (Cplx){ pow(z.re, w.re), 0.0 } : negreal_pow(z.re, w.re);
+    double lr = log(hypot(z.re, z.im)), th = atan2(z.im, z.re);     /* log z = lr + i th */
+    double a = w.re * lr - w.im * th, b = w.re * th + w.im * lr;    /* w log z */
+    double m = exp(a);
+    return (Cplx){ m * cos(b), m * sin(b) };
+}
+
 /* Wrapping integer power by squaring: O(log e) even for huge exponents, and
  * On overflow the result PROMOTES to float (0.1.5, owner's ruling after
  * 3^84 wrapped to a misleadingly-signed integer while fzero, entering
@@ -249,7 +298,6 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
     int rank = num_rank(a) > num_rank(b) ? num_rank(a) : num_rank(b);
     if (kind == AR_DIV && rank < 1) rank = 1;                            /* int/int -> float */
     if (kind == AR_POW) {
-        if (rank == 2) runtime_error(I, "complex exponentiation is not supported yet");
         if (rank == 0 && b.as.i < 0) rank = 1;                          /* (dual: rank 3 handles all) */                          /* int^negint -> float */
     }
 
@@ -281,7 +329,13 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
         case AR_SUB: return val_float(x - y);
         case AR_MUL: return val_float(x * y);
         case AR_DIV: return val_float(x / y);
-        case AR_POW: return val_float(pow(x, y));
+        case AR_POW:
+            /* the tower: a negative base with a fractional exponent has no
+             * real value and goes complex (nan and inf stay with pow) */
+            if (x < 0.0 && isfinite(x) && isfinite(y) && y != floor(y)) {
+                Cplx r = negreal_pow(x, y); return val_complex(r.re, r.im);
+            }
+            return val_float(pow(x, y));
         default:     break;
         }
         break;
@@ -293,6 +347,7 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
         case AR_SUB: { Cplx r = c_sub(x, y); return val_complex(r.re, r.im); }
         case AR_MUL: { Cplx r = c_mul(x, y); return val_complex(r.re, r.im); }
         case AR_DIV: { Cplx r = c_div(x, y); return val_complex(r.re, r.im); }
+        case AR_POW: { Cplx r = c_powz(x, y); return val_complex(r.re, r.im); }
         default:     break;
         }
         break;
@@ -6083,6 +6138,107 @@ static Value bi_schur(Interp *I, Value *args, uint32_t n)
     return record2("U", Uv, "T", Tv);
 }
 
+/* ordschur(s, select) -> {U, T, k}: the Schur form s = {U, T} with the
+ * selected eigenvalues moved to the top-left of T, U updated so that
+ * U * T * U' is the same matrix, and k the number of eigenvalues in front.
+ * The first k columns of U then span the invariant subspace of those
+ * eigenvalues. select is a logical vector over T's diagonal, or a keyword:
+ * "udi" / "udo" (inside / outside the unit disc), "lhp" / "rhp" (negative /
+ * positive real part). Selected eigenvalues keep their order among
+ * themselves, and so do the rest. Which eigenvalue a keyword picks is
+ * decided here, above the seam, from T itself. */
+static Value bi_ordschur(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (args[0].kind != VAL_RECORD)
+        runtime_error(I, "ordschur: the first argument is a Schur form {U, T}, as schur returns it");
+    RecObj *rec = as_rec(args[0]);
+    Value Uv = val_null(), Tv = val_null();
+    for (uint32_t f = 0; f < rec->count; f++) {
+        if (rec->keylens[f] == 1 && rec->keys[f][0] == 'U') Uv = rec->vals[f];
+        if (rec->keylens[f] == 1 && rec->keys[f][0] == 'T') Tv = rec->vals[f];
+    }
+    if (!is_array(Uv) || !is_array(Tv))
+        runtime_error(I, "ordschur: the first argument is a Schur form {U, T}, as schur returns it");
+    uint32_t N, c, ur, uc;
+    Cplx *T = to_cplx(I, Tv, &N, &c, "ordschur");
+    Cplx *U = to_cplx(I, Uv, &ur, &uc, "ordschur");
+    const char *bad = nullptr;
+    if (c != N || ur != N || uc != N) bad = "ordschur: U and T must be square and of the same size";
+    bool real_form = arr_real(Tv) && arr_real(Uv);
+    size_t cells = (size_t)N * N;
+    for (size_t q = 0; q < cells && !bad; q++)
+        if (!isfinite(T[q].re) || !isfinite(T[q].im) || !isfinite(U[q].re) || !isfinite(U[q].im))
+            bad = "ordschur: the Schur form has nan or inf entries";
+#define OT(i, j) T[(size_t)(i) * N + (j)]
+    for (uint32_t i = 1; i < N && !bad; i++)             /* is T a Schur form at all? */
+        for (uint32_t j = 0; j < i; j++) {
+            bool zero = OT(i, j).re == 0.0 && OT(i, j).im == 0.0;
+            if (zero) continue;
+            if (!real_form || j + 1 != i) { bad = "ordschur: T is not upper triangular, so it is not a Schur form"; break; }
+            if (i >= 2 && (OT(i - 1, i - 2).re != 0.0))
+                { bad = "ordschur: T has two subdiagonal entries in a row, so it is not a real Schur form"; break; }
+        }
+    /* the eigenvalue at each diagonal position (a 2x2 block gives both positions its pair) */
+    Cplx *lam = malloc((N ? N : 1) * sizeof *lam);
+    unsigned char *sel = calloc(N ? N : 1, 1);
+    for (uint32_t i = 0; i < N && !bad; ) {
+        if (real_form && i + 1 < N && OT(i + 1, i).re != 0.0) {
+            double a = OT(i, i).re, b = OT(i, i + 1).re, cc = OT(i + 1, i).re, d = OT(i + 1, i + 1).re;
+            double mid = 0.5 * (a + d), disc = 0.25 * (a - d) * (a - d) + b * cc;
+            if (disc < 0) { lam[i] = (Cplx){ mid, sqrt(-disc) }; lam[i + 1] = (Cplx){ mid, -sqrt(-disc) }; }
+            else          { lam[i] = (Cplx){ mid + sqrt(disc), 0 }; lam[i + 1] = (Cplx){ mid - sqrt(disc), 0 }; }
+            i += 2;
+        } else { lam[i] = OT(i, i); i++; }
+    }
+#undef OT
+    if (!bad) {
+        Value sv = args[1];
+        if (sv.kind == VAL_STRING) {
+            StrObj *w = as_str(sv);
+            int mode = w->len != 3 ? -1 : !memcmp(w->data, "udi", 3) ? 0 : !memcmp(w->data, "udo", 3) ? 1
+                     : !memcmp(w->data, "lhp", 3) ? 2 : !memcmp(w->data, "rhp", 3) ? 3 : -1;
+            if (mode < 0) bad = "ordschur: the keyword is \"udi\", \"udo\", \"lhp\" or \"rhp\"";
+            for (uint32_t i = 0; i < N && !bad; i++) {
+                double m = c_abs(lam[i]);
+                sel[i] = mode == 0 ? m < 1.0 : mode == 1 ? m > 1.0 : mode == 2 ? lam[i].re < 0.0 : lam[i].re > 0.0;
+            }
+        } else if (is_array(sv) && as_arr(sv)->elt == ELT_BOOL
+                   && (as_arr(sv)->rows == 1 || as_arr(sv)->cols == 1)
+                   && (size_t)as_arr(sv)->rows * as_arr(sv)->cols == N) {
+            const uint8_t *bd = (const uint8_t *)as_arr(sv)->data;
+            for (uint32_t i = 0; i < N; i++) sel[i] = bd[i] != 0;
+        } else if (sv.kind == VAL_BOOL && N == 1) {
+            sel[0] = sv.as.b;
+        } else
+            bad = "ordschur: select is a logical vector with one entry per eigenvalue, or a keyword "
+                  "(\"udi\", \"udo\", \"lhp\", \"rhp\")";
+    }
+    free(lam);
+    if (bad) { free(T); free(U); free(sel); runtime_error(I, "%s", bad); }
+
+    uint32_t k = 0;
+    int rc;
+    if (real_form) {
+        size_t room = cells ? cells : 1;
+        double *Td = malloc(room * sizeof *Td), *Ud = malloc(room * sizeof *Ud);
+        for (size_t q = 0; q < cells; q++) { Td[q] = T[q].re; Ud[q] = U[q].re; }
+        rc = cozy_linalg()->ordschur_d(Td, Ud, N, sel, &k);
+        for (size_t q = 0; q < cells; q++) { T[q] = (Cplx){ Td[q], 0 }; U[q] = (Cplx){ Ud[q], 0 }; }
+        free(Td); free(Ud);
+    } else
+        rc = cozy_linalg()->ordschur(T, U, N, sel, &k);
+    free(sel);
+    if (rc != 0) {
+        free(T); free(U);
+        runtime_error(I, "ordschur: two eigenvalues that had to change places are too close to exchange");
+    }
+    for (size_t q = 0; q < cells; q++) { T[q].re += 0.0; T[q].im += 0.0; U[q].re += 0.0; U[q].im += 0.0; }
+    Value Uo = from_cplx(U, N, N, real_form), To = from_cplx(T, N, N, real_form);
+    free(T); free(U);
+    return record3("U", Uo, "T", To, "k", val_int((int64_t)k));
+}
+
 static Value bi_svd(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -7699,6 +7855,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "chol",    bi_chol,    1, 1);
     def_builtin(e, "eig",     bi_eig,     1, 1);
     def_builtin(e, "schur",   bi_schur,   1, 2);
+    def_builtin(e, "ordschur", bi_ordschur, 2, 2);
     def_builtin(e, "svd",     bi_svd,     1, 1);
     def_builtin(e, "exp",     bi_exp,     1, 1);
     def_builtin(e, "log",     bi_log,     1, 1);

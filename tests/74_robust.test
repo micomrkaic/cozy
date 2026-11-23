@@ -57,3 +57,12 @@ eig([nan, 1; 3, 2]).values
 => 1+0i
 (1+2i) / 0
 => nan+nani
+
+# a for loop over an array of strings released each element once too often
+# and corrupted the heap (0.1.32; the sanitizer run is what sees it)
+let out = ""; for w = ["a", "b", "c"] do out = out + w end; out
+=> "abc"
+let n = 0; for rep = 1 : 3 do for w = ["x", "yy"] do n = n + length(w) end end; n
+=> 9
+let names = ["udi", "udo"]; for w = names do let t = "ord " + w end; names
+=> ["udi", "udo"]

@@ -274,7 +274,7 @@ true
 | additive | `+ -` | |
 | multiplicative | `* / .* ./ \ .\` | `*` is the **matrix** product on matrices; `.*` elementwise; `\` left division (solve) |
 | unary | `- ! ~` | binds looser than `^`: `-2^2` is `-4` |
-| power | `^ .^` | right-assoc: `2^3^2` is `512`; `^` on a square matrix is the matrix power |
+| power | `^ .^` | right-assoc: `2^3^2` is `512`; `^` on a square matrix is the matrix power; a negative base with a fractional exponent is complex (`(-8)^(1/3)`) |
 | postfix | `'` `.'` `f(x)` `a[i]` `.field` | `'` is **conjugate** transpose, `.'` plain |
 
 The `.`-prefixed operators are the elementwise family, exactly as in Octave:
@@ -687,6 +687,7 @@ The decompositions return records, so the pieces have names:
 | `svd(A)` | `{U, S, V}` | `A = U*diag(S)*V'` |
 | `eig(A)` | `{values, vectors}` | `A*V = V*diag(values)` |
 | `schur(A)` | `{U, T}` | `A = U*T*U'`, `U` unitary |
+| `ordschur(s, select)` | `{U, T, k}` | the same, with `k` chosen eigenvalues first |
 
 `eig` handles both Hermitian matrices (Jacobi; real ascending eigenvalues,
 orthonormal vectors) and general ones (complex QR + inverse iteration; complex
@@ -719,7 +720,31 @@ cozy> sort(imag(diag(schur(R, "complex").T)))'
 
 The order of the eigenvalues along the diagonal of `T` is not specified
 (it can differ between a build on the built-in kernels and one on LAPACK);
-`eig` sorts, `schur` does not.
+`eig` sorts, `schur` does not. To choose the order, hand the form to
+`ordschur` with a selection: a logical vector with one entry per diagonal
+position of `T`, or a keyword — `"udi"` and `"udo"` for the eigenvalues
+inside and outside the unit disc, `"lhp"` and `"rhp"` for those with
+negative and positive real part. The selected eigenvalues move to the front
+in the order they had, `k` says how many there are, and the first `k`
+columns of `U` are then an orthonormal basis of their invariant subspace —
+the stable subspace of a linear model is `ordschur(schur(A), "udi")`.
+
+```
+cozy> let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25];
+cozy> let o = ordschur(schur(A), "udi");
+cozy> o.k
+2
+cozy> format(6); diag(o.T)'
+[0.500000, -0.250000, 2.00000]
+cozy> let V = o.U[:, 1 : 2];              # A maps span(V) into itself
+cozy> max(abs(A * V - V * o.T[1 : 2, 1 : 2])) < 1e-12
+true
+```
+
+In the real form a 2-by-2 block moves as a whole (marking either of its
+positions selects the pair). Two eigenvalues that have to pass each other
+and agree to about sixteen digits cannot be exchanged stably, and
+`ordschur` says so instead of returning a damaged form.
 
 ## 10. Complex numbers
 
@@ -730,6 +755,26 @@ the modulus. Functions with limited real domains return complex off it:
 `sqrt(-4)` is `2i`, `log(-1)` is `3.14159i`, `asin(2)` is complex. A `nan`
 is not "off the domain": it stays a real `nan`, so one missing value in a
 real array does not turn the whole array complex.
+
+The power operator follows the same rule. A negative base with a
+fractional exponent has no real value, and `^` gives the principal complex
+one — the root of smallest argument, as `sqrt` does; an integer exponent
+keeps a real base real. The real cube root is `cbrt`. Complex bases and
+exponents work throughout (`z^w` is `exp(w * log(z))`, with integer powers
+multiplied out exactly).
+
+```
+cozy> (-8)^(1/3)
+1+1.73205i
+cozy> cbrt(-8)
+-2
+cozy> (-8)^2
+64
+cozy> (-4)^0.5
+2i
+cozy> (1i)^(1i)
+0.20788+0i
+```
 
 ## 10b. Dual numbers and exact derivatives
 
@@ -1607,6 +1652,7 @@ cozy> clear("scatter"); who
 | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) |
 | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) |
 | `schur(A) \| schur(A, "complex")` | Schur decomposition -> {U, T}, A = U*T*U' with U unitary. Real A: T quasi-triangular, a 2x2 block per complex pair of eigenvalues; "complex", or complex A: T triangular |
+| `ordschur(s, select)` | reorder a Schur form s = {U, T} -> {U, T, k}: the selected eigenvalues come first, k of them, and U*T*U' is unchanged. select: a logical vector over the diagonal of T, or "udi" / "udo" (inside / outside the unit disc), "lhp" / "rhp" (negative / positive real part) |
 | `svd(A)` | thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending) |
 
 ### autodiff

@@ -1,5 +1,67 @@
 # Cozy changelog
 
+## 0.1.32 — the power operator joins the tower; ordschur
+
+### Added
+- **`ordschur(s, select)` reorders a Schur form** (owner's request; the
+  residue of 0.1.31). Given `s = {U, T}` from schur it returns
+  `{U, T, k}` with the selected eigenvalues moved to the top-left of
+  `T`, `k` of them, and `U*T*U'` unchanged — so the first `k` columns of
+  `U` are an orthonormal basis of the selected invariant subspace.
+  `select` is a logical vector over the diagonal of `T`, or a keyword:
+  `"udi"` / `"udo"` (inside / outside the unit disc), `"lhp"` / `"rhp"`
+  (negative / positive real part). The selected eigenvalues keep their
+  order among themselves, and so do the others.
+  - Built-in kernels: neighbouring diagonal blocks are exchanged one
+    pair at a time. In the complex form that is a plane rotation; in
+    the real form, with 1x1 and 2x2 blocks, it is LAPACK's dlaexc by
+    the direct route — a small Sylvester equation gives the invariant
+    subspace of the lower block, a Householder QR of it gives the
+    orthogonal exchange, the exchange is tried on a copy of the two
+    blocks and applied only if what must vanish does, and the 2x2
+    blocks are put back in standard form. A LAPACK build calls dtrsen
+    and ztrsen. Both answer the same question the same way: a stable
+    partition.
+  - Two eigenvalues that must pass each other and are equal to
+    rounding cannot be exchanged stably; ordschur raises an error
+    naming that, and never returns a form it could not complete.
+  - Which eigenvalue a keyword selects is decided above the seam, from
+    `T` itself, so the two backends cannot disagree about it.
+  - stress/schur.cz gains 3,480 reorderings — keywords and random
+    selections, real and complex forms, sizes to 30 — checked for
+    reconstruction, orthogonality, shape, the count, the selected set
+    and its order. Both backends pass near 1e-14.
+- **Complex exponentiation.** `z^w` for a complex base or exponent was
+  "not supported yet"; it is `exp(w log z)` now, principal value, with
+  integer exponents of ordinary size multiplied out exactly (`(1i)^2`
+  is `-1+0i` with nothing in the zero) and `0^w` given its limits.
+
+### Changed
+- **`^` is part of the complex tower** (owner: "so that (-9)^(1/3) will
+  not return nan anymore"). A negative real base with a fractional
+  exponent has no real value; C's pow says nan, and so did Cozy, while
+  `sqrt(-4)` went complex. `^` now returns the principal value, as
+  `sqrt` and `log` do: `(-9)^(1/3)` is `1.04004+1.80141i`, `(-4)^0.5`
+  is exactly `2i` (the quarter turns are special-cased, so no 1e-16
+  appears where a zero belongs). An integer exponent keeps a real base
+  real; `cbrt` is the real cube root; nan and inf stay with pow. With
+  dual numbers the case stays an error — dual and complex do not mix —
+  and the message says so.
+
+### Fixed
+- **A `for` loop over an array of strings corrupted the heap**: the VM
+  took the element arr_get lends for a string as if it were given, and
+  released the array's own string once per pass. `for w = ["a", "b"] do
+  ... end` freed both; the next use of the array read freed memory.
+  Found by the sanitizer build running the new ordschur stress loop
+  (`for word = ["udi", "udo", "lhp", "rhp"]`), not by any golden: no
+  test had ever looped over strings.
+
+### Notes
+- tests/75_power.test (31 cases), 76_ordschur.test (27), three more in
+  74_robust.test for the loop.
+- Design entry 19's residue shrinks to QZ and a Sylvester solver.
+
 ## 0.1.31 — schur, and nan that behaves
 
 ### Added

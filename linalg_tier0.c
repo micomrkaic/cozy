@@ -677,6 +677,219 @@ static int t0_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
 #undef ZU
 }
 
+/* ---- ordschur: reordering a Schur form ------------------------------------
+ * The eigenvalues marked in sel are moved to the top-left of T, keeping
+ * their order among themselves (and the others theirs), by exchanging
+ * neighbouring diagonal blocks one pair at a time; U follows, so U T U^H is
+ * unchanged. *k receives how many eigenvalues ended up in front. Returns
+ * nonzero if two blocks that had to pass each other have eigenvalues too
+ * close for the exchange to be done stably (T and U are then left as a
+ * valid, partly reordered Schur form). */
+
+#define RS(i, j) T[(size_t)(i) * n + (j)]
+#define RU(i, j) U[(size_t)(i) * n + (j)]
+
+/* Exchange the block of order p at (j, j) with the block of order q below
+ * it (p, q in {1, 2}) in a real Schur form. LAPACK's dlaexc, by the direct
+ * route: the columns of [-X; I], with X solving T11 X - X T22 = T12, span
+ * the invariant subspace of T22's eigenvalues inside the two blocks; an
+ * orthogonal Q with that span in its first q columns puts T22's eigenvalues
+ * first. The exchange is tried on a copy of the two blocks and only applied
+ * to T and U if what should be zero afterwards is zero to rounding. */
+static bool rs_swap(double *T, double *U, uint32_t n, uint32_t j, uint32_t p, uint32_t q)
+{
+    if (p == 1 && q == 1) {
+        double a = RS(j, j), b = RS(j, j + 1), c = RS(j + 1, j + 1);
+        double r = hypot(b, c - a);
+        if (r == 0.0) return true;                           /* equal and uncoupled: already exchanged */
+        rs_rotate(T, U, n, j, b / r, (c - a) / r);           /* first column: the eigenvector of c */
+        RS(j + 1, j) = 0.0; RS(j, j) = c; RS(j + 1, j + 1) = a;
+        return true;
+    }
+    uint32_t m = p + q;
+    double D[16], dmax = 0.0;
+    for (uint32_t r = 0; r < m; r++) for (uint32_t c = 0; c < m; c++) {
+        D[r * 4 + c] = RS(j + r, j + c); dmax = fmax(dmax, fabs(D[r * 4 + c]));
+    }
+    /* T11 X - X T22 = T12 as a linear system in the p*q entries of X */
+    uint32_t nx = p * q;
+    double K[16] = { 0 }, x[4];
+    for (uint32_t r = 0; r < p; r++) for (uint32_t c = 0; c < q; c++) {
+        uint32_t row = r * q + c;
+        for (uint32_t i = 0; i < p; i++) K[row * 4 + i * q + c] += D[r * 4 + i];                 /* T11[r][i] X[i][c] */
+        for (uint32_t i = 0; i < q; i++) K[row * 4 + r * q + i] -= D[(p + i) * 4 + (p + c)];     /* X[r][i] T22[i][c] */
+        x[row] = D[r * 4 + (p + c)];
+    }
+    uint32_t perm[4] = { 0, 1, 2, 3 };
+    for (uint32_t s = 0; s < nx; s++) {                      /* elimination with complete pivoting */
+        uint32_t pr = s, pc = s; double big = 0.0;
+        for (uint32_t r = s; r < nx; r++) for (uint32_t c = s; c < nx; c++)
+            if (fabs(K[r * 4 + c]) > big) { big = fabs(K[r * 4 + c]); pr = r; pc = c; }
+        if (big <= 2.220446049250313e-16 * dmax) return false;      /* the blocks share an eigenvalue, near enough */
+        for (uint32_t c = 0; c < nx; c++) { double t = K[s * 4 + c]; K[s * 4 + c] = K[pr * 4 + c]; K[pr * 4 + c] = t; }
+        { double t = x[s]; x[s] = x[pr]; x[pr] = t; }
+        for (uint32_t r = 0; r < nx; r++) { double t = K[r * 4 + s]; K[r * 4 + s] = K[r * 4 + pc]; K[r * 4 + pc] = t; }
+        { uint32_t t = perm[s]; perm[s] = perm[pc]; perm[pc] = t; }
+        for (uint32_t r = s + 1; r < nx; r++) {
+            double f = K[r * 4 + s] / K[s * 4 + s];
+            for (uint32_t c = s; c < nx; c++) K[r * 4 + c] -= f * K[s * 4 + c];
+            x[r] -= f * x[s];
+        }
+    }
+    double X[4];
+    for (uint32_t s = nx; s-- > 0; ) {
+        double v = x[s];
+        for (uint32_t c = s + 1; c < nx; c++) v -= K[s * 4 + c] * x[c];
+        x[s] = v / K[s * 4 + s];
+    }
+    for (uint32_t s = 0; s < nx; s++) X[perm[s]] = x[s];
+
+    /* M = [-X; I] (m x q); Householder reflectors with Q^T M = [R; 0] */
+    double M[8], hv[2][4], hb[2];
+    bool have[2] = { false, false };
+    for (uint32_t r = 0; r < p; r++) for (uint32_t c = 0; c < q; c++) M[r * 2 + c] = -X[r * q + c];
+    for (uint32_t r = 0; r < q; r++) for (uint32_t c = 0; c < q; c++) M[(p + r) * 2 + c] = (r == c);
+    for (uint32_t h = 0; h < q; h++) {
+        double col[4];
+        for (uint32_t r = h; r < m; r++) col[r - h] = M[r * 2 + h];
+        have[h] = rs_house(col, m - h, hv[h], &hb[h]);
+        if (!have[h]) continue;
+        for (uint32_t c = h; c < q; c++) {
+            double s = 0.0;
+            for (uint32_t r = h; r < m; r++) s += hv[h][r - h] * M[r * 2 + c];
+            s *= hb[h];
+            for (uint32_t r = h; r < m; r++) M[r * 2 + c] -= s * hv[h][r - h];
+        }
+    }
+    /* the trial, on the copy: Q^T D Q must have a zero p x q block at the bottom left */
+    for (uint32_t h = 0; h < q; h++) {
+        if (!have[h]) continue;
+        for (uint32_t c = 0; c < m; c++) {
+            double s = 0.0;
+            for (uint32_t r = h; r < m; r++) s += hv[h][r - h] * D[r * 4 + c];
+            s *= hb[h];
+            for (uint32_t r = h; r < m; r++) D[r * 4 + c] -= s * hv[h][r - h];
+        }
+        for (uint32_t r = 0; r < m; r++) {
+            double s = 0.0;
+            for (uint32_t c = h; c < m; c++) s += D[r * 4 + c] * hv[h][c - h];
+            s *= hb[h];
+            for (uint32_t c = h; c < m; c++) D[r * 4 + c] -= s * hv[h][c - h];
+        }
+    }
+    double left = 0.0;
+    for (uint32_t r = q; r < m; r++) for (uint32_t c = 0; c < q; c++) left = fmax(left, fabs(D[r * 4 + c]));
+    if (left > 10.0 * 2.220446049250313e-16 * dmax) return false;
+
+    /* accepted: the same reflectors on T and U */
+    for (uint32_t h = 0; h < q; h++) {
+        if (!have[h]) continue;
+        uint32_t r0 = j + h, len = m - h;
+        for (uint32_t c = j; c < n; c++) {
+            double s = 0.0;
+            for (uint32_t i = 0; i < len; i++) s += hv[h][i] * RS(r0 + i, c);
+            s *= hb[h];
+            for (uint32_t i = 0; i < len; i++) RS(r0 + i, c) -= s * hv[h][i];
+        }
+        for (uint32_t r = 0; r < j + m; r++) {
+            double s = 0.0;
+            for (uint32_t i = 0; i < len; i++) s += RS(r, r0 + i) * hv[h][i];
+            s *= hb[h];
+            for (uint32_t i = 0; i < len; i++) RS(r, r0 + i) -= s * hv[h][i];
+        }
+        for (uint32_t r = 0; r < n; r++) {
+            double s = 0.0;
+            for (uint32_t i = 0; i < len; i++) s += RU(r, r0 + i) * hv[h][i];
+            s *= hb[h];
+            for (uint32_t i = 0; i < len; i++) RU(r, r0 + i) -= s * hv[h][i];
+        }
+    }
+    for (uint32_t r = q; r < m; r++) for (uint32_t c = 0; c < q; c++) RS(j + r, j + c) = 0.0;
+    if (q == 2) rs_standardize(T, U, n, j);
+    if (p == 2) rs_standardize(T, U, n, j + q);
+    return true;
+}
+
+static int t0_ordschur_d(double *T, double *U, uint32_t n, const unsigned char *sel, uint32_t *k)
+{
+    unsigned char *mark = malloc(n ? n : 1);
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < n; ) {                          /* a 2x2 block goes if either half is marked */
+        bool two = i + 1 < n && RS(i + 1, i) != 0.0;
+        bool on = sel[i] || (two && sel[i + 1]);
+        mark[i] = on; if (two) mark[i + 1] = on;
+        count += on ? (two ? 2 : 1) : 0;
+        i += two ? 2 : 1;
+    }
+    *k = count;
+    int rc = 0;
+    for (bool moved = true; moved && rc == 0; ) {            /* a marked block rises past an unmarked one */
+        moved = false;
+        for (uint32_t i = 0; i < n; ) {
+            uint32_t p = (i + 1 < n && RS(i + 1, i) != 0.0) ? 2 : 1;
+            uint32_t j = i + p;
+            if (j >= n) break;
+            uint32_t q = (j + 1 < n && RS(j + 1, j) != 0.0) ? 2 : 1;
+            if (!mark[i] && mark[j]) {
+                if (!rs_swap(T, U, n, i, p, q)) { rc = 1; break; }
+                for (uint32_t t = 0; t < q; t++) mark[i + t] = 1;
+                for (uint32_t t = 0; t < p; t++) mark[i + q + t] = 0;
+                moved = true;
+                i += q;                                      /* go on from the block that came down */
+            } else i = j;
+        }
+    }
+    free(mark);
+    return rc;
+}
+#undef RS
+#undef RU
+
+static int t0_ordschur(Cplx *T, Cplx *U, uint32_t n, const unsigned char *sel, uint32_t *k)
+{
+#define ZS(i, j) T[(size_t)(i) * n + (j)]
+#define ZU(i, j) U[(size_t)(i) * n + (j)]
+    unsigned char *mark = malloc(n ? n : 1);
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < n; i++) { mark[i] = sel[i] != 0; count += mark[i]; }
+    *k = count;
+    for (bool moved = true; moved; ) {
+        moved = false;
+        for (uint32_t j = 0; j + 1 < n; j++) {
+            if (mark[j] || !mark[j + 1]) continue;
+            /* [a b; 0 c] -> [c *; 0 a] by the unitary G whose first column is the eigenvector of c */
+            Cplx a = ZS(j, j), b = ZS(j, j + 1), c = ZS(j + 1, j + 1), d = c_sub(c, a);
+            double r = hypot(c_abs(b), c_abs(d));
+            if (r > 0.0) {
+                Cplx g11 = c_scale(1.0 / r, b), g21 = c_scale(1.0 / r, d);
+                Cplx g12 = c_scale(-1.0, c_conj(g21)), g22 = c_conj(g11);
+                for (uint32_t col = j; col < n; col++) {     /* rows: G^H T */
+                    Cplx x = ZS(j, col), y = ZS(j + 1, col);
+                    ZS(j, col)     = c_add(c_mul(c_conj(g11), x), c_mul(c_conj(g21), y));
+                    ZS(j + 1, col) = c_add(c_mul(c_conj(g12), x), c_mul(c_conj(g22), y));
+                }
+                for (uint32_t row = 0; row <= j + 1; row++) { /* columns: T G */
+                    Cplx x = ZS(row, j), y = ZS(row, j + 1);
+                    ZS(row, j)     = c_add(c_mul(x, g11), c_mul(y, g21));
+                    ZS(row, j + 1) = c_add(c_mul(x, g12), c_mul(y, g22));
+                }
+                for (uint32_t row = 0; row < n; row++) {
+                    Cplx x = ZU(row, j), y = ZU(row, j + 1);
+                    ZU(row, j)     = c_add(c_mul(x, g11), c_mul(y, g21));
+                    ZU(row, j + 1) = c_add(c_mul(x, g12), c_mul(y, g22));
+                }
+                ZS(j + 1, j) = (Cplx){ 0, 0 }; ZS(j, j) = c; ZS(j + 1, j + 1) = a;
+            }
+            mark[j] = 1; mark[j + 1] = 0;
+            moved = true;
+        }
+    }
+    free(mark);
+    return 0;
+#undef ZS
+#undef ZU
+}
+
 /* ---- svd: thin SVD via one-sided Jacobi (S descending) ------------------
  * Works on the tall orientation; for m<n it factors A^H and swaps U,V. */
 
@@ -900,6 +1113,8 @@ static const LinalgKernels tier0 = {
     .eig_gen  = t0_eig_gen,
     .schur    = t0_schur,
     .schur_d  = t0_schur_d,
+    .ordschur = t0_ordschur,
+    .ordschur_d = t0_ordschur_d,
     .svd      = t0_svd,
     .chol     = t0_chol,
 };

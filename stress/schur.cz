@@ -115,5 +115,67 @@ for n = [2, 3, 5, 8] do (
 print("  defective / repeated:", count, "in all, worst =", worst);
 let A = randn(150, 150); let s = schur(A);
 note("150 x 150", [max(abs(s.U * s.T * s.U' - A)), max(abs(s.U' * s.U - eye(150))), blocks_ok(s.T), 0.0]);
+
+% ---- ordschur: the same forms, reordered --------------------------------------------------
+% After ordschur(s, select): still a Schur form of the same matrix (recon, orth, shape); k is
+% the number selected; the first k eigenvalues on T are exactly the selected ones, and in the
+% complex form they are in their original order (spec holds the worst of these mismatches).
+% expand: a 2x2 block of the real form is selected if either of its positions is
+let expand = fn T, sel -> (
+  let n = size(T)[1]; let out = sel; let i = 1;
+  while i <= n do (
+    if (i < n) && (abs(T[min(i + 1, n), i]) != 0) then (
+      let on = sel[i] || sel[i + 1]; out[i] = on; out[i + 1] = on; i = i + 2
+    ) else (i = i + 1) end
+  ) end;
+  out
+)
+let pick_by = fn w, word -> if word == "udi" then abs(w) < 1 elseif word == "udo" then abs(w) > 1 elseif word == "lhp" then real(w) < 0 else real(w) > 0 end
+let ordcheck = fn A, s, sel, real_form -> (
+  let n = size(A)[1];
+  let o = ordschur(s, sel);
+  let w0 = spectrum(s.T);
+  let mask = if real_form then expand(s.T, sel) else sel end;
+  let k = sum(mask);
+  let scale = max(1.0, max(abs(A)));
+  let recon = max(abs(o.U * o.T * o.U' - A)) / scale;
+  let orth = max(abs(o.U' * o.U - eye(n)));
+  let shape = (if real_form then blocks_ok(o.T) else tri_ok(o.T) end) + (if o.k == k then 0 else 1 end);
+  let w1 = spectrum(o.T);
+  let spec = 0.0;
+  if (k > 0) && (k < n) then (
+    let front = reshape(w1[1 : k], k, 1); let back = reshape(w1[k + 1 : n], n - k, 1);
+    let chosen = reshape(w0[find(mask)], k, 1); let rest = reshape(w0[find(!mask)], n - k, 1);
+    spec = max([nearest(front, chosen), nearest(chosen, front), nearest(back, rest), nearest(rest, back)]) / scale;
+    if !real_form then (spec = max(spec, max(abs(front - chosen)) / scale)) end
+  ) end;
+  [recon, orth, shape, spec]
+)
+worst = zeros(1, 4); let before = count;
+for n = 1 : 30 do for rep = 1 : 4 do (
+  let A = randn(n, n) / sqrt(n);                       % eigenvalues on both sides of the unit circle
+  let s = schur(A); let sc = schur(A, "complex");
+  let Z = (randn(n, n) + 1i * randn(n, n)) / sqrt(2 * n); let sz = schur(Z);
+  for word = ["udi", "udo", "lhp", "rhp"] do (
+    note("ordschur " + word, ordcheck(A, s, pick_by(spectrum(s.T), word), true));
+    note("ordschur " + word + "/complex", ordcheck(A, sc, pick_by(diag(sc.T), word), false));
+    note("ordschur " + word + "/z", ordcheck(Z, sz, pick_by(diag(sz.T), word), false));
+    % the keyword itself picks the same eigenvalues as the mask built here
+    let a = ordschur(s, word); let b = ordschur(s, pick_by(spectrum(s.T), word));
+    note("ordschur keyword", [max(abs(a.T - b.T)), max(abs(a.U - b.U)), abs(a.k - b.k), 0.0])
+  ) end;
+  for trial = 1 : 3 do (
+    let sel = rand(n, 1) < 0.5;
+    note("ordschur random", ordcheck(A, s, sel, true));
+    note("ordschur random/complex", ordcheck(A, sc, sel, false));
+    note("ordschur random/z", ordcheck(Z, sz, sel, false));
+    let a = ordschur(sz, sel); let b = ordschur(sz, sel');           % a row selects as a column does
+    note("ordschur row", [max(abs(a.T - b.T)), max(abs(a.U - b.U)), abs(a.k - b.k), 0.0])
+  ) end;
+  % reordering twice with complementary selections is still the same matrix
+  let o1 = ordschur(s, "udo"); let o2 = ordschur(o1, "udi");
+  note("ordschur twice", [max(abs(o2.U * o2.T * o2.U' - A)), max(abs(o2.U' * o2.U - eye(n))), blocks_ok(o2.T), 0.0])
+) end end;
+print("  ordschur:", count - before, "reorderings, worst [recon, orth, shape, spec] =", worst);
 assert(suspects == 0, "schur: a decomposition failed its checks");
 print("schur: all green")

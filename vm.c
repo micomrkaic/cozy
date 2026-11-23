@@ -445,7 +445,10 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             int64_t count = iter.kind == VAL_ARRAY
                           ? (int64_t)as_arr(iter)->rows * as_arr(iter)->cols : 1;
             if (idx >= count) { fr->ip += endoff; break; }
-            Value elem = iter.kind == VAL_ARRAY ? arr_get(as_arr(iter), (size_t)idx)
+            /* arr_get lends a string element rather than giving a reference:
+             * retain it, or the release below frees the array's own string
+             * (a for loop over a string array used to corrupt the heap) */
+            Value elem = iter.kind == VAL_ARRAY ? value_retain(arr_get(as_arr(iter), (size_t)idx))
                                                 : value_retain(iter);
             scope_push(st, fr);
             env_define(fr->env, ch_->names[name], ch_->namelens[name], elem);

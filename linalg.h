@@ -106,6 +106,16 @@ typedef struct LinalgKernels {
     int (*schur)(const Cplx *A, uint32_t n, Cplx *T, Cplx *U);
     int (*schur_d)(const double *A, uint32_t n, double *T, double *U);
 
+    /* Reorder a Schur form in place: the eigenvalues whose diagonal
+     * positions are marked in sel (n flags) move to the top-left of T,
+     * keeping their order among themselves, and U is updated so that
+     * U T U^H is unchanged. ordschur takes the complex (triangular) form;
+     * ordschur_d the real one, where a 2×2 block moves if either of its
+     * positions is marked. *k receives the number of eigenvalues in front.
+     * Returns nonzero if two eigenvalues were too close to exchange. */
+    int (*ordschur)(Cplx *T, Cplx *U, uint32_t n, const unsigned char *sel, uint32_t *k);
+    int (*ordschur_d)(double *T, double *U, uint32_t n, const unsigned char *sel, uint32_t *k);
+
     /* Thin SVD of A (m×n), any shape: A = U * diag(s) * V^H with
      * k = min(m, n); U is m×k, s length k DESCENDING (part of the
      * contract — every backend returns descending), V is n×k.

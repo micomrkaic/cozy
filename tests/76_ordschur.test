@@ -1,0 +1,70 @@
+# ordschur(s, select) -> {U, T, k}: a Schur form with the selected
+# eigenvalues moved to the top-left of T. As with schur, the tests pin what
+# must hold on any backend, not the digits.
+fields(ordschur(schur([1, 2; 3, 4]), "udi"))
+=> ["U"; "T"; "k"]
+# still a Schur form of the same matrix
+let A = [1, 2, 3; 4, 5, 6; 7, 8, 10]; let o = ordschur(schur(A), [false, true, false]); [max(abs(o.U * o.T * o.U' - A)) < 1e-11, max(abs(o.U' * o.U - eye(3))) < 1e-12, o.T[2, 1] == 0, o.T[3, 1] == 0, o.T[3, 2] == 0]
+=> [true, true, true, true, true]
+# k counts the eigenvalues in front, and they are the ones asked for
+let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25]; let o = ordschur(schur(A), "udi"); o.k
+=> 2
+format(6); let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25]; let o = ordschur(schur(A), "udi"); diag(o.T)'
+=> [0.500000, -0.250000, 2.00000]
+format(6); let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25]; let o = ordschur(schur(A), "udo"); [o.k, o.T[1, 1]]
+=> [1.00000, 2.00000]
+format(6); let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25]; let o = ordschur(schur(A), "lhp"); [o.k, o.T[1, 1]]
+=> [1.00000, -0.250000]
+format(6); let A = [0.5, 1, 0; 0, 2, 1; 0, 0, -0.25]; let o = ordschur(schur(A), "rhp"); o.k
+=> 2
+# the selected eigenvalues keep their order among themselves, and so do the rest
+format(6); let A = [1, 5, 5, 5; 0, 2, 5, 5; 0, 0, 3, 5; 0, 0, 0, 4]; diag(ordschur(schur(A), [false, true, false, true]).T)'
+=> [2.00000, 4.00000, 1.00000, 3.00000]
+# the first k columns of U span the invariant subspace of the selected eigenvalues
+let A = [0.9, 0.5, 0.1; 0.2, 1.4, 0.3; 0.1, 0.2, 0.3]; let o = ordschur(schur(A), "udi"); let V = o.U[:, 1 : o.k]; max(abs(A * V - V * o.T[1 : o.k, 1 : o.k])) < 1e-12
+=> true
+# nothing selected, or everything: the form comes back as it was
+let s = schur([1, 2; 3, 4]); let o = ordschur(s, [false, false]); [o.k, max(abs(o.T - s.T)), max(abs(o.U - s.U))]
+=> [0, 0, 0]
+let s = schur([1, 2; 3, 4]); let o = ordschur(s, [true, true]); [o.k, max(abs(o.T - s.T)), max(abs(o.U - s.U))]
+=> [2, 0, 0]
+
+# a complex pair moves as one 2x2 block of the real form, and stays in standard form
+let A = [2, 0, 0; 0, 0, -0.5; 0, 0.5, 0]; let o = ordschur(schur(A), "udi"); [o.k == 2, o.T[1, 1] == o.T[2, 2], o.T[1, 2] * o.T[2, 1] < 0, o.T[3, 1] == 0, o.T[3, 2] == 0]
+=> [true, true, true, true, true]
+format(6); let A = [2, 0, 0; 0, 0, -0.5; 0, 0.5, 0]; ordschur(schur(A), "udi").T[3, 3]
+=> 2.00000
+# marking either half of a pair selects the pair
+let A = [2, 0, 0; 0, 0, -0.5; 0, 0.5, 0]; let s = schur(A); let i = find(abs(diag(s.T)) < 1)[1]; let sel = [false, false, false]; sel[i] = true; ordschur(s, sel).k
+=> 2
+# two pairs exchanged
+let A = [0, -2, 1, 1; 2, 0, 1, 1; 0, 0, 0, -0.5; 0, 0, 0.5, 0]; let o = ordschur(schur(A), "udi"); [o.k == 2, max(abs(o.U * o.T * o.U' - A)) < 1e-12, max(abs(o.U' * o.U - eye(4))) < 1e-12, abs(o.T[1, 1]^2 - o.T[1, 2] * o.T[2, 1] - 0.25) < 1e-12]
+=> [true, true, true, true]
+# the complex form: single eigenvalues, order kept
+let A = [0, -2, 1, 1; 2, 0, 1, 1; 0, 0, 0, -0.5; 0, 0, 0.5, 0]; let o = ordschur(schur(A, "complex"), "udi"); [o.k == 2, max(abs(o.U * o.T * o.U' - A)) < 1e-12, max(abs(abs(diag(o.T)) - [0.5; 0.5; 2; 2])) < 1e-12]
+=> [true, true, true]
+let A = [1+2i, 2; 3, 4-1i]; let s = schur(A); let o = ordschur(s, [false, true]); [o.k == 1, abs(o.T[1, 1] - s.T[2, 2]) < 1e-12, abs(o.T[2, 1]) == 0, max(abs(o.U * o.T * o.U' - A)) < 1e-12]
+=> [true, true, true, true]
+# a larger case: the stable eigenvalues of a random matrix, in front
+rng(2); let A = randn(40, 40) / sqrt(40); let o = ordschur(schur(A), "udi"); let w = abs(eig(A).values); [o.k == sum(w < 1), max(abs(o.U * o.T * o.U' - A)) < 1e-11, max(abs(o.U' * o.U - eye(40))) < 1e-12]
+=> [true, true, true]
+rng(2); let A = randn(40, 40) / sqrt(40); let o = ordschur(schur(A), "udi"); let k = o.k; max(abs(eig(o.T[1 : k, 1 : k]).values)) < 1
+=> true
+
+# what is refused, and why
+ordschur([1, 2; 3, 4], "udi")
+=> !the first argument is a Schur form {U, T}
+ordschur({U = eye(3), T = [1, 2, 3; 0, 4, 5; 6, 0, 7]}, "udi")
+=> !T is not upper triangular
+ordschur({U = eye(3), T = [1, 2, 3; 1, 4, 5; 0, 1, 7]}, "udi")
+=> !two subdiagonal entries in a row
+ordschur(schur([1, 2; 3, 4]), "stable")
+=> !the keyword is "udi", "udo", "lhp" or "rhp"
+ordschur(schur([1, 2; 3, 4]), [true, false, true])
+=> !select is a logical vector with one entry per eigenvalue
+ordschur(schur([1, 2; 3, 4]), [1, 0])
+=> !select is a logical vector with one entry per eigenvalue
+ordschur(schur([1.0, nan; 2.0, 3.0]), "udi")
+=> !nan or inf
+ordschur({U = eye(2), T = eye(3)}, "udi")
+=> !U and T must be square and of the same size

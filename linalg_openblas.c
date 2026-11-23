@@ -398,6 +398,55 @@ static int ob_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
     return info != 0;
 }
 
+/* ordschur -> dtrsen / ztrsen (job "N": reorder only; compq "V": update Q).
+ * A Fortran LOGICAL is an int here, as everywhere this file meets one. */
+extern void dtrsen_(const char *job, const char *compq, const int *select, const int *n,
+                    double *t, const int *ldt, double *q, const int *ldq, double *wr, double *wi,
+                    int *m, double *s, double *sep, double *work, const int *lwork,
+                    int *iwork, const int *liwork, int *info);
+extern void ztrsen_(const char *job, const char *compq, const int *select, const int *n,
+                    double *t, const int *ldt, double *q, const int *ldq, double *w,
+                    int *m, double *s, double *sep, double *work, const int *lwork, int *info);
+
+static int ob_ordschur_d(double *T, double *U, uint32_t n, const unsigned char *sel, uint32_t *k)
+{
+    *k = 0;
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, m = 0, lwork = N > 1 ? N : 1, liwork = 1, iwork[1];
+    int *select = malloc(n * sizeof *select);
+    for (uint32_t i = 0; i < n; i++) select[i] = sel[i] != 0;
+    double *t = to_cm_d(T, n, n), *q = to_cm_d(U, n, n);
+    double *wr = malloc(n * sizeof *wr), *wi = malloc(n * sizeof *wi), *work = malloc((size_t)lwork * sizeof *work);
+    double s = 0.0, sep = 0.0;
+    dtrsen_("N", "V", select, &N, t, &N, q, &N, wr, wi, &m, &s, &sep, work, &lwork, iwork, &liwork, &info);
+    from_cm_d(T, t, n, n); from_cm_d(U, q, n, n);        /* valid even when the reordering stopped early */
+    for (uint32_t i = 2; i < n; i++)
+        for (uint32_t j = 0; j + 1 < i; j++) T[(size_t)i * n + j] = 0.0;
+    *k = (uint32_t)m;
+    free(select); free(t); free(q); free(wr); free(wi); free(work);
+    return info != 0;
+}
+
+static int ob_ordschur(Cplx *T, Cplx *U, uint32_t n, const unsigned char *sel, uint32_t *k)
+{
+    *k = 0;
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, m = 0, lwork = 1;
+    int *select = malloc(n * sizeof *select);
+    for (uint32_t i = 0; i < n; i++) select[i] = sel[i] != 0;
+    Cplx *t = to_cm(T, n, n), *q = to_cm(U, n, n);
+    Cplx *w = malloc(n * sizeof *w), work[1];
+    double s = 0.0, sep = 0.0;
+    ztrsen_("N", "V", select, &N, (double *)t, &N, (double *)q, &N, (double *)w, &m, &s, &sep,
+            (double *)work, &lwork, &info);
+    from_cm(T, t, n, n); from_cm(U, q, n, n);
+    for (uint32_t i = 1; i < n; i++)
+        for (uint32_t j = 0; j < i; j++) T[(size_t)i * n + j] = (Cplx){ 0, 0 };
+    *k = (uint32_t)m;
+    free(select); free(t); free(q); free(w);
+    return info != 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
@@ -414,6 +463,8 @@ static const LinalgKernels openblas = {
     .eig_gen  = ob_eig_gen,
     .schur    = ob_schur,
     .schur_d  = ob_schur_d,
+    .ordschur = ob_ordschur,
+    .ordschur_d = ob_ordschur_d,
     .svd      = ob_svd,
     .chol     = ob_chol,
 };
