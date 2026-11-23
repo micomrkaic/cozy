@@ -7,6 +7,8 @@ echo "== stress: identities (randomized property battery)"
 ./cozy stress/identities.cz
 echo "== stress: calculus (derivatives vs finite differences; optimizers vs truth)"
 ./cozy stress/calculus.cz
+echo "== stress: schur (about nine hundred matrices; reconstruction, orthogonality, shape, spectrum)"
+./cozy stress/schur.cz | grep -v "^<fn"
 echo "== stress: sparse at scale"
 ./cozy stress/sparse_scale.cz
 echo "== stress: parser fuzz under ASan (400 lines of token soup; clean errors only)"

@@ -1,5 +1,96 @@
 # Cozy changelog
 
+## 0.1.31 — schur, and nan that behaves
+
+### Added
+- **`schur(A)` returns `{U, T}` with `A = U*T*U'`** (owner's request:
+  the Schur form is what second-order DSGE solutions and Sylvester
+  equations are built on, and eig's vectors are no substitute for an
+  orthogonal basis). A real matrix gets the real form: `U` orthogonal,
+  `T` upper triangular except for a 2-by-2 block per complex-conjugate
+  pair of eigenvalues, in LAPACK's standard form (equal diagonal
+  entries, off-diagonal entries of opposite sign) and exactly zero
+  below. `schur(A, "complex")` gives the triangular form with the
+  eigenvalues on the diagonal; a complex matrix always gets that one.
+  - The built-in kernels are new (linalg_tier0.c): Householder
+    reduction to Hessenberg form, Francis's double-shift QR for the
+    real form and a Wilkinson-shift QR for the complex one, the
+    transformations accumulated, exceptional shifts against cycling,
+    and a matrix of extreme size scaled first. A LAPACK build calls
+    dgees and zgees. The seam (linalg.h) gains `schur` and `schur_d`.
+  - The order of the eigenvalues along `T` is the backend's and is
+    documented as unspecified; the goldens (tests/73_schur.test) pin
+    what every Schur form satisfies, not digits. stress/schur.cz runs
+    about nine hundred matrices — dense of every size to 40, orthogonal,
+    skew, cyclic, companion, graded, triangular, defective, sizes from
+    1e-300 to 1e300 — through reconstruction, orthogonality, shape and
+    spectrum checks; both backends pass with errors near 1e-14.
+- **`"omit"` on `min`, `max` and `quantile`**, as on mean, sum, std and
+  median: `max(x, "omit")`, `quantile(x, p, "omit")`.
+
+### Fixed
+- **nan is missing data and now behaves like it everywhere** (owner:
+  "this is important"; design entry 15 said nan propagates, and five
+  builtins did not agree):
+  - `sqrt`, `log`, `log10`, `log2`, `asin`, `acos`, `acosh`, `atanh` of
+    a nan returned a COMPLEX nan — and so turned a real array with one
+    missing value complex (`sqrt([4.0; nan])` was `[2+0i; nani]`). The
+    domain test was "in range, else complex", and nan is not in range.
+    A nan now stays a real nan; a real number outside the domain goes
+    complex as before.
+  - `max(nan, 1)` was 1 while `max(1, nan)` was nan, and `max([1, nan,
+    3])` was 3 while `max([nan, 1])` was nan: a bare comparison keeps
+    whichever operand it started with. `min` and `max` — elementwise,
+    over an array, along a dimension — now return nan if any operand
+    is.
+  - `sort([3, nan, 1])` came back unsorted: the comparison was not a
+    total order. nan sorts last.
+  - `median` and `quantile` of data with a nan returned an ordinary
+    number picked by that broken ordering. They return nan.
+  - `sign(nan)` was 0. It is nan.
+- **eig took a complex matrix for Hermitian without looking at its
+  diagonal**: if the off-diagonal part was Hermitian the imaginary
+  parts of the diagonal were silently dropped. `eig([1+2i])` was 1;
+  `eig([1+2i, 1; 1, 3-1i])` returned two real numbers.
+- **eig on the built-in kernels returned all zeros for a cyclic shift**
+  (a permutation matrix `[0, 1, 0; 0, 0, 1; 1, 0, 0]`): the shifted QR
+  step maps such a matrix to itself, the loop ran out, and the code
+  "accepted the diagonal". The iteration now takes an exceptional shift
+  every tenth step, and if a block still fails to converge eig raises
+  an error instead of returning numbers that are not eigenvalues.
+- **Complex division overflowed past 1e154**: it computed the square of
+  the divisor's modulus. `(1+1i)/1e200` was 0 and
+  `(1e200+1e200i)/(2e200+1e200i)` was nan. It is Smith's algorithm
+  now; dividing by a real number is exact in each part.
+
+- **`mean(x, "omit")` leaked the filtered copy when every value was
+  missing** (and any "omit" call that then raised did): the copy is now
+  released on the error path too. Found by the sanitizer rite on the
+  new `max(x, "omit")`.
+
+### Changed
+- **The built-in eig and schur isolate eigenvalues by permutation
+  first** (the permuting half of LAPACK's balancing). A row or column
+  that is zero off the diagonal marks an eigenvalue that can be read
+  off; what remains is iterated. A lower-triangular matrix used to go
+  through the full QR iteration, and a 34-by-34 random one — far from
+  normal — came back with eigenvalues wrong in the third digit, where
+  LAPACK returned its diagonal exactly. So does Cozy now; block-
+  triangular matrices (a recursive model's transition matrix) gain the
+  same way.
+- A matrix with a nan or inf entry gives eig and schur results of nan
+  by an explicit test, not by an iteration that happened to give up.
+
+### Notes
+- All four eig and division bugs were found by stress/schur.cz, whose
+  spectrum check compares the eigenvalues on `T` with eig's: every
+  disagreement turned out to be eig. The stress battery is worth more
+  than the feature's own goldens.
+- Left alone, and worth knowing: `x^y` with a negative base and a
+  fractional exponent returns nan (`(-8)^(1/3)`), where `sqrt(-4)` goes
+  complex. The power operator is not part of the complex tower.
+- tests/72_nan.test (38 cases), 73_schur.test (37), 74_robust.test (21).
+
 ## 0.1.30 — Cozy as a library
 
 ### Added

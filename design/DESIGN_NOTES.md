@@ -564,6 +564,16 @@ records-of-columns, and "omit" on mean/sum/std/median via one shared
 filter hook. tests/64_missing.test pins every piece. RESIDUE: the
 holey-CSV book problem rides with entry 16's time-series problem
 (one dataset, both lessons).
+AUDITED 0.1.31 (owner: "this is important"): "propagates through
+reductions exactly as missingness should" was the design and not the
+fact. sqrt/log/asin/acos/acosh/atanh sent nan up the complex tower
+(their test was "in domain, else complex"), min/max kept whichever
+operand a bare comparison started from, sort's comparator was not a
+total order, median/quantile inherited that, sign(nan) was 0. All now
+obey the one rule — nan in, nan out; never complex; sorted last — and
+"omit" reaches min, max and quantile. The rule is in the manual's
+section 3 and pinned by tests/72_nan.test. unique keeps every nan
+(nan equals nothing) by its documented choice.
 
 ## 16. Dates — DESIGN WRITTEN (owner: "critical"), trigger live.
 A Date value/element kind whose REPRESENTATION is a double: days since
@@ -625,3 +635,24 @@ The audit paid immediately: finance.cz shadowed the today/datestr
 builtins, ts.cz shadowed the diff builtin, and hdual collapsed a
 1-element array to a scalar (the n=1 Newton) — three bugs no user had
 reported, all found by writing and executing the examples.
+
+## 19. Schur decomposition — SHIPPED 0.1.31 (owner's request, for
+second-order DSGE solutions: the generalized Sylvester equation is
+solved on Schur forms). schur(A) -> {U, T}; real input gets the real
+form (quasi-triangular, 2x2 blocks standardised as LAPACK's dlanv2
+does), "complex" or complex input the triangular one. The seam grows
+schur and schur_d; tier0 gets its first kernels written for this
+repository rather than inherited (Francis double shift, real; Wilkinson
+shift, complex; both accumulate, take exceptional shifts, and scale a
+matrix of extreme size), and the openblas backend calls dgees/zgees.
+DECIDED: eigenvalue order along T is the backend's, documented as
+unspecified — canonicalising it would need block swapping (dtrexc),
+which is the next feature (an ordered Schur form, and with it QZ, is
+what a Blanchard-Kahn solver built on Schur forms needs), not a
+convention to fake. Tests therefore pin invariants. DECIDED: tier0 now
+isolates eigenvalues by permutation before iterating (dgebal's
+permuting half; no scaling half), in eig as well — without it tier0 and
+LAPACK disagreed in the third digit on a large triangular matrix
+written lower instead of upper, both being backward stable. RESIDUE:
+ordered Schur (select which eigenvalues come first), QZ, and a
+Sylvester solver on top.

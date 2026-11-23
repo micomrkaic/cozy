@@ -343,6 +343,61 @@ static int ob_eig_gen_d(const double *A, uint32_t n, Cplx *w, Cplx *V)
     return info != 0;
 }
 
+/* schur -> dgees / zgees, eigenvalues in the order LAPACK finds them (no
+ * sorting: the select function is never called with sort = "N"). */
+extern void dgees_(const char *jobvs, const char *sort, void *select, const int *n,
+                   double *a, const int *lda, int *sdim, double *wr, double *wi,
+                   double *vs, const int *ldvs, double *work, const int *lwork,
+                   int *bwork, int *info);
+extern void zgees_(const char *jobvs, const char *sort, void *select, const int *n,
+                   double *a, const int *lda, int *sdim, double *w,
+                   double *vs, const int *ldvs, double *work, const int *lwork,
+                   double *rwork, int *bwork, int *info);
+
+static int ob_schur_d(const double *A, uint32_t n, double *T, double *U)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, lwork = -1, sdim = 0;
+    double *a = to_cm_d(A, n, n);
+    double *wr = malloc(n * sizeof *wr), *wi = malloc(n * sizeof *wi);
+    double *vs = malloc((size_t)n * n * sizeof *vs);
+    double wkq;
+    dgees_("V", "N", NULL, &N, a, &N, &sdim, wr, wi, vs, &N, &wkq, &lwork, NULL, &info);
+    lwork = (int)wkq;
+    double *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    dgees_("V", "N", NULL, &N, a, &N, &sdim, wr, wi, vs, &N, work, &lwork, NULL, &info);
+    if (info == 0) {
+        from_cm_d(T, a, n, n); from_cm_d(U, vs, n, n);
+        for (uint32_t i = 2; i < n; i++)                 /* dgees leaves the part below the */
+            for (uint32_t j = 0; j + 1 < i; j++) T[(size_t)i * n + j] = 0.0;   /* subdiagonal untouched */
+    }
+    free(a); free(wr); free(wi); free(vs); free(work);
+    return info != 0;
+}
+
+static int ob_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
+{
+    if (n == 0) return 0;
+    int N = (int)n, info = 0, lwork = -1, sdim = 0;
+    Cplx *a = to_cm(A, n, n);
+    Cplx *w = malloc(n * sizeof *w), *vs = malloc((size_t)n * n * sizeof *vs);
+    double *rwork = malloc(n * sizeof *rwork);
+    Cplx wkq;
+    zgees_("V", "N", NULL, &N, (double *)a, &N, &sdim, (double *)w, (double *)vs, &N,
+           (double *)&wkq, &lwork, rwork, NULL, &info);
+    lwork = (int)wkq.re;
+    Cplx *work = malloc((size_t)(lwork > 0 ? lwork : 1) * sizeof *work);
+    zgees_("V", "N", NULL, &N, (double *)a, &N, &sdim, (double *)w, (double *)vs, &N,
+           (double *)work, &lwork, rwork, NULL, &info);
+    if (info == 0) {
+        from_cm(T, a, n, n); from_cm(U, vs, n, n);
+        for (uint32_t i = 1; i < n; i++)
+            for (uint32_t j = 0; j < i; j++) T[(size_t)i * n + j] = (Cplx){ 0, 0 };
+    }
+    free(a); free(w); free(vs); free(rwork); free(work);
+    return info != 0;
+}
+
 static const LinalgKernels openblas = {
     .name     = COZY_LAPACK_NAME,
     .solve    = ob_solve,
@@ -357,6 +412,8 @@ static const LinalgKernels openblas = {
     .det      = ob_det,
     .eig_herm = ob_eig_herm,
     .eig_gen  = ob_eig_gen,
+    .schur    = ob_schur,
+    .schur_d  = ob_schur_d,
     .svd      = ob_svd,
     .chol     = ob_chol,
 };

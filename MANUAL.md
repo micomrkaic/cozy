@@ -99,10 +99,11 @@ the examples are machine-verified against the interpreter, like this manual:
 
 ```
 cozy> help(median)
-  median(A) | median(A, dim)
-      median of all elements, or along dim
+  median(A) | median(A, dim) | median(A, "omit")
+      median of all elements, or along dim; nan propagates, "omit" skips it
       builtin, 1 to 2 arguments
       e.g.  median([1, 2, 3, 4])              % 2.5
+            median([1, nan, 3], "omit")       % 2
 ```
 
 **Autocall.** A bare name that is a zero-argument builtin or closure is called:
@@ -220,6 +221,24 @@ inf
 
 Division by zero yields `inf`/`nan` rather than an error — test with
 `isfinite`/`isnan` where it matters.
+
+`nan` also stands for a missing value, and it is treated the same way
+everywhere: **it propagates**. Arithmetic with a `nan` is `nan`; so are
+`min` and `max` of a `nan` and anything else, on either side, and `median`
+or `quantile` of data that contains one. A `nan` is never a reason to go
+complex (`sqrt(nan)` is `nan`, not a complex number), and `sort` puts
+`nan`s last. To leave the missing values out instead, say so: `"omit"` on
+`sum`, `mean`, `std`, `median`, `quantile`, `min` and `max`, or the mask
+`x[!isnan(x)]`.
+
+```
+cozy> max([3, nan, 4])
+nan
+cozy> max([3, nan, 4], "omit")
+4
+cozy> sort([3, nan, 1])
+[1, 3, nan]
+```
 
 ## 4. Operators and expressions
 
@@ -667,6 +686,7 @@ The decompositions return records, so the pieces have names:
 | `chol(A)` | `L` | `L*L' = A` (Hermitian PD) |
 | `svd(A)` | `{U, S, V}` | `A = U*diag(S)*V'` |
 | `eig(A)` | `{values, vectors}` | `A*V = V*diag(values)` |
+| `schur(A)` | `{U, T}` | `A = U*T*U'`, `U` unitary |
 
 `eig` handles both Hermitian matrices (Jacobi; real ascending eigenvalues,
 orthonormal vectors) and general ones (complex QR + inverse iteration; complex
@@ -674,13 +694,42 @@ pairs come out right). All of it is complex-capable — `'` being the conjugate
 transpose is what makes the identities hold. `kron(A, B)` is the Kronecker
 product, `det`, `inv`, `trace`, `norm`, `dot` round out the set.
 
+`schur` is the decomposition to reach for when eigenvectors are not to be
+trusted — a matrix always has a Schur form, and `U` is always perfectly
+conditioned. For a real matrix both factors are real: `T` is upper
+triangular except for a 2-by-2 block on the diagonal for each
+complex-conjugate pair of eigenvalues (equal diagonal entries, off-diagonal
+entries of opposite sign). `schur(A, "complex")` gives the fully triangular
+form instead, with the eigenvalues on the diagonal of a complex `T`; a
+complex matrix always gets that form.
+
+```
+cozy> let A = [1, 2; 3, 4]; let s = schur(A);
+cozy> s.T[2, 1]
+0
+cozy> max(abs(s.U * s.T * s.U' - A)) < 1e-12
+true
+cozy> let R = [0, -1; 1, 0];              # a rotation: eigenvalues i and -i
+cozy> schur(R).T                          # real form: one 2-by-2 block
+[  0  -1
+   1   0 ]
+cozy> sort(imag(diag(schur(R, "complex").T)))'
+[-1, 1]
+```
+
+The order of the eigenvalues along the diagonal of `T` is not specified
+(it can differ between a build on the built-in kernels and one on LAPACK);
+`eig` sorts, `schur` does not.
+
 ## 10. Complex numbers
 
 The imaginary literal is a number followed by `i`. Complex values propagate
 through arithmetic and the math library; results stay complex (`1i * 1i` is
 `-1+0i`, not `-1`). `real`, `imag`, `conj`, `angle` access the parts, `abs` is
 the modulus. Functions with limited real domains return complex off it:
-`sqrt(-4)` is `2i`, `log(-1)` is `3.14159i`, `asin(2)` is complex.
+`sqrt(-4)` is `2i`, `log(-1)` is `3.14159i`, `asin(2)` is complex. A `nan`
+is not "off the domain": it stays a real `nan`, so one missing value in a
+real array does not turn the whole array complex.
 
 ## 10b. Dual numbers and exact derivatives
 
@@ -1476,11 +1525,11 @@ cozy> clear("scatter"); who
 | `corr(X) \| corr(x, y)` | Pearson correlation matrix of X's columns, or scalar correlation of two vectors |
 | `var(A) \| var(A, w) \| var(A, w, dim)` | variance; w = 0 divides by N-1 (default), w = 1 by N |
 | `std(A) \| std(A, w) \| std(A, w, dim)` | standard deviation (sqrt of var, same normalization) |
-| `median(A) \| median(A, dim)` | median of all elements, or along dim |
-| `quantile(x, p)` | quantile(s) of the data at probability p (scalar or vector); linear interpolation |
+| `median(A) \| median(A, dim) \| median(A, "omit")` | median of all elements, or along dim; nan propagates, "omit" skips it |
+| `quantile(x, p) \| quantile(x, p, "omit")` | quantile(s) of the data at probability p (scalar or vector); linear interpolation; nan propagates, "omit" skips it |
 | `mean(A) \| mean(A, dim)` | mean of all elements, or along dim |
-| `min(A) \| min(a, b) \| min(A, [], dim)` | smallest element; elementwise min; or min along dim |
-| `max(A) \| max(a, b) \| max(A, [], dim)` | largest element; elementwise max; or max along dim |
+| `min(A) \| min(a, b) \| min(A, [], dim) \| min(A, "omit")` | smallest element; elementwise min; or min along dim. nan is missing data and propagates; "omit" skips it |
+| `max(A) \| max(a, b) \| max(A, [], dim) \| max(A, "omit")` | largest element; elementwise max; or max along dim. nan is missing data and propagates; "omit" skips it |
 | `any(mask) \| any(mask, dim)` | true if any element is nonzero/true (overall or along dim) |
 | `all(mask) \| all(mask, dim)` | true if every element is nonzero/true (overall or along dim) |
 
@@ -1500,8 +1549,8 @@ cozy> clear("scatter"); who
 
 | Signature | Description |
 |---|---|
-| `unique(A)` | sorted distinct elements; vectors keep orientation, matrices flatten to a row |
-| `sort(A)` | ascending sort: a vector as a whole, a matrix by column |
+| `unique(A)` | sorted distinct elements; vectors keep orientation, matrices flatten to a row; every nan is kept, last |
+| `sort(A)` | ascending sort: a vector as a whole, a matrix by column; nan sorts last |
 | `find(mask)` | 1-based positions of nonzero/true elements (row-major) |
 | `pick(mask, a, b)` | elementwise select: a where the mask is true, else b |
 | `cumsum(A)` | cumulative sum along a vector, or down each column |
@@ -1515,14 +1564,14 @@ cozy> clear("scatter"); who
 | Signature | Description |
 |---|---|
 | `abs(x)` | absolute value, or complex magnitude |
-| `sqrt(x)` | square root (complex result for negative reals) |
+| `sqrt(x)` | square root (complex result for negative reals; nan stays a real nan) |
 | `cbrt(x)` | real cube root |
 | `exp(x)` | e raised to the x (complex-aware) |
-| `log(x)` | natural logarithm (complex for negatives) |
+| `log(x)` | natural logarithm (complex for negatives; nan stays a real nan) |
 | `ln(x)` | natural logarithm (alias for log) |
 | `log10(x)` | base-10 logarithm (complex for negatives) |
 | `log2(x)` | base-2 logarithm (complex for negatives) |
-| `sign(x)` | -1 / 0 / +1 by sign; z/\|z\| for complex |
+| `sign(x)` | -1 / 0 / +1 by sign (nan for nan); z/\|z\| for complex |
 | `floor(x)` | round toward -infinity (componentwise on complex) |
 | `ceil(x)` | round toward +infinity (componentwise on complex) |
 | `round(x)` | round to nearest (componentwise on complex) |
@@ -1557,6 +1606,7 @@ cozy> clear("scatter"); who
 | `qr(A)` | Householder QR -> {Q, R} (real or complex) |
 | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) |
 | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) |
+| `schur(A) \| schur(A, "complex")` | Schur decomposition -> {U, T}, A = U*T*U' with U unitary. Real A: T quasi-triangular, a 2x2 block per complex pair of eigenvalues; "complex", or complex A: T triangular |
 | `svd(A)` | thin SVD -> {U, S, V}, A = U*diag(S)*V' (S descending) |
 
 ### autodiff

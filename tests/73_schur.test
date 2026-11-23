@@ -1,0 +1,99 @@
+# schur(A) -> {U, T} with A = U * T * U' and U unitary.
+# The order of the eigenvalues along T's diagonal belongs to the backend, so
+# these tests pin what every Schur form must satisfy, not the digits.
+fields(schur([1, 2; 3, 4]))
+=> ["U"; "T"]
+# reconstruction and orthogonality
+let A = [1, 2; 3, 4]; let s = schur(A); max(abs(s.U * s.T * s.U' - A)) < 1e-12
+=> true
+let A = [1, 2; 3, 4]; let s = schur(A); max(abs(s.U' * s.U - eye(2))) < 1e-12
+=> true
+# real eigenvalues: T is upper triangular, exactly, with the eigenvalues on its diagonal
+schur([1, 2; 3, 4]).T[2, 1]
+=> 0
+format(6); sort(diag(schur([1, 2; 3, 4]).T))'
+=> [-0.372281, 5.37228]
+let A = [1, 2, 3; 4, 5, 6; 7, 8, 10]; let s = schur(A); [max(abs(s.U * s.T * s.U' - A)) < 1e-11, max(abs(s.U' * s.U - eye(3))) < 1e-12, s.T[2, 1] == 0, s.T[3, 1] == 0, s.T[3, 2] == 0]
+=> [true, true, true, true, true]
+# a matrix that is already triangular is its own Schur form
+schur([2, 5; 0, 3]).T
+=> [2, 5; 0, 3]
+schur([2, 5; 0, 3]).U
+=> [1, 0; 0, 1]
+# ... and one that is triangular the other way round is only reordered:
+# its eigenvalues are read off, not iterated for
+sort(diag(schur([2, 0, 0; 1, 3, 0; 4, 5, 6]).T))'
+=> [2, 3, 6]
+let A = [2, 0, 0; 1, 3, 0; 4, 5, 6]; let s = schur(A); max(abs(s.U * s.T * s.U' - A)) < 1e-12
+=> true
+
+# a complex pair of eigenvalues: the real form keeps a 2x2 block for it, in
+# standard form (equal diagonal entries, off-diagonal entries of opposite sign)
+let s = schur([0, -1; 1, 0]); [s.T[1, 1] == s.T[2, 2], s.T[1, 2] * s.T[2, 1] < 0]
+=> [true, true]
+let A = [1, -2; 1, 3]; let s = schur(A); [s.T[1, 1] == s.T[2, 2], s.T[1, 2] * s.T[2, 1] < 0, max(abs(s.U * s.T * s.U' - A)) < 1e-12]
+=> [true, true, true]
+# one real eigenvalue and one pair: exactly one 2x2 block
+let A = [0, 1, 0; 0, 0, 1; 1, 0, 0]; let s = schur(A); [sum(abs(diag(s.T[2 : 3, 1 : 2])) > 0) == 1, s.T[3, 1] == 0, max(abs(s.U * s.T * s.U' - A)) < 1e-12]
+=> [true, true, true]
+# the U and T of a real matrix are real
+let s = schur([0, -1; 1, 0]); [max(abs(imag(s.U))), max(abs(imag(s.T)))]
+=> [0, 0]
+
+# "complex" asks for the triangular form of a real matrix: the pair is on the diagonal
+let A = [0, -1; 1, 0]; let s = schur(A, "complex"); [abs(s.T[2, 1]) == 0, max(abs(s.U * s.T * s.U' - A)) < 1e-12, max(abs(s.U' * s.U - eye(2))) < 1e-12]
+=> [true, true, true]
+format(6); sort(imag(diag(schur([0, -1; 1, 0], "complex").T)))'
+=> [-1.00000, 1.00000]
+schur([1, 2; 3, 4], "real").T[2, 1]
+=> 0
+# a complex matrix has only the complex form
+let A = [1+2i, 2; 3, 4-1i]; let s = schur(A); [abs(s.T[2, 1]) == 0, max(abs(s.U * s.T * s.U' - A)) < 1e-12, max(abs(s.U' * s.U - eye(2))) < 1e-12]
+=> [true, true, true]
+let A = [1+2i, 2; 3, 4-1i]; abs(sum(diag(schur(A).T)) - trace(A)) < 1e-12
+=> true
+schur([1+2i, 2; 3, 4], "real")
+=> !a complex matrix has no real Schur form
+
+# the eigenvalues on T agree with eig
+let A = [4, 1, 2; 0.5, 3, 1; 2, 1, 5]; max(abs(sort(diag(schur(A).T)) - sort(real(eig(A).values)))) < 1e-12
+=> true
+# a larger matrix, with real eigenvalues and complex pairs mixed
+rng(1); let A = randn(30, 30); let s = schur(A); [max(abs(s.U * s.T * s.U' - A)) < 1e-11, max(abs(s.U' * s.U - eye(30))) < 1e-12]
+=> [true, true]
+rng(1); let A = randn(30, 30); let T = schur(A).T; let low = 0; for r = 3 : 30 do for c = 1 : r - 2 do if T[r, c] != 0 then (low = low + 1) end end end; low
+=> 0
+rng(1); let A = randn(30, 30) + 1i * randn(30, 30); let s = schur(A); [max(abs(s.U * s.T * s.U' - A)) < 1e-11, max(abs(s.U' * s.U - eye(30))) < 1e-12]
+=> [true, true]
+
+# awkward cases
+# a cyclic shift: the plain QR step maps it to itself; an exceptional shift gets it moving
+let A = [0, 1, 0, 0; 0, 0, 1, 0; 0, 0, 0, 1; 1, 0, 0, 0]; let s = schur(A); max(abs(s.U * s.T * s.U' - A)) < 1e-12
+=> true
+format(6); let A = [0, 1, 0, 0; 0, 0, 1, 0; 0, 0, 0, 1; 1, 0, 0, 0]; sort(abs(diag(schur(A, "complex").T)))'
+=> [1.00000, 1.00000, 1.00000, 1.00000]
+# a defective matrix (one eigenvector for a triple eigenvalue)
+let A = [2, 1, 0; 0, 2, 1; 0, 0, 2]; schur(A).T
+=> [2, 1, 0; 0, 2, 1; 0, 0, 2]
+# sizes far from one do not overflow the iteration
+let A = [1, 2; 3, 4]; let s = schur(1e200 * A); max(abs(s.U * (s.T / 1e200) * s.U' - A)) < 1e-12
+=> true
+let A = [1, 2, 0; 3, 4, 1; 1, 1, 1]; let s = schur(1e-200 * A); max(abs(s.U * (s.T / 1e-200) * s.U' - A)) < 1e-12
+=> true
+schur([5]).T
+=> [5]
+schur(zeros(0, 0))
+=> {U = [], T = []}
+# missing data propagates, as in eig and svd
+schur([1.0, nan; 2.0, 3.0]).T
+=> [nan, nan; nan, nan]
+schur([1.0, nan; 2.0, 3.0]).U
+=> [nan, nan; nan, nan]
+schur([1, 2, 3; 4, 5, 6])
+=> !matrix must be square (got 2x3)
+schur([1, 2; 3, 4], "ordered")
+=> !the second argument is "real" or "complex"
+schur(5)
+=> !expected a matrix
+schur(speye(3))
+=> !schur on sparse is not supported

@@ -167,6 +167,45 @@ static int t0_eig_herm(Cplx *A, uint32_t N, double *w, Cplx *V)
     return 0;
 }
 
+/* ---- isolating eigenvalues by permutation -------------------------------
+ * The permuting half of LAPACK's balancing (dgebal). If a row is zero off
+ * the diagonal, its diagonal entry is an eigenvalue and the row can go to
+ * the bottom; likewise a column, to the left. Repeating this on what is
+ * left gives a reordering in which the matrix is
+ *
+ *     [ T1  X   Y  ]
+ *     [ 0   B   Z  ]     T1, T2 upper triangular
+ *     [ 0   0   T2 ]
+ *
+ * so the eigenvalues on T1 and T2 are read off exactly and the QR iteration
+ * only ever works on B: the zeros below T1's and T2's diagonals make those
+ * blocks deflate at once. Without this a triangular matrix written the
+ * "wrong" way round (lower instead of upper) goes through the full
+ * iteration, and if it is far from normal its eigenvalues come back with
+ * errors many orders above rounding. nz is the n x n pattern of nonzeros;
+ * perm[k] receives the original index that goes to position k. */
+static void isolate_perm(const unsigned char *nz, uint32_t n, uint32_t *perm)
+{
+    for (uint32_t i = 0; i < n; i++) perm[i] = i;
+    uint32_t lo = 0, hi = n;
+    for (bool moved = true; moved && hi - lo > 1; ) {
+        moved = false;
+        for (uint32_t j = hi; j-- > lo; ) {                 /* a row with nothing off the diagonal */
+            bool alone = true;
+            for (uint32_t k = lo; k < hi && alone; k++)
+                if (k != j && nz[(size_t)perm[j] * n + perm[k]]) alone = false;
+            if (alone) { uint32_t t = perm[j]; perm[j] = perm[hi - 1]; perm[hi - 1] = t; hi--; moved = true; break; }
+        }
+        if (moved) continue;
+        for (uint32_t j = lo; j < hi; j++) {                /* a column with nothing off the diagonal */
+            bool alone = true;
+            for (uint32_t k = lo; k < hi && alone; k++)
+                if (k != j && nz[(size_t)perm[k] * n + perm[j]]) alone = false;
+            if (alone) { uint32_t t = perm[j]; perm[j] = perm[lo]; perm[lo] = t; lo++; moved = true; break; }
+        }
+    }
+}
+
 /* ---- eig_gen: Hessenberg + shifted complex QR, inverse iteration -------- */
 
 /* Reduce A to upper Hessenberg form in place by Householder similarity. */
@@ -199,14 +238,16 @@ static void hessenberg(Cplx *A, uint32_t N)
     free(v);
 }
 
-/* Eigenvalues of a (Hessenberg) matrix H by shifted complex QR; writes N eigenvalues to eig. */
-static void qr_eig(Cplx *H, uint32_t N, Cplx *eig)
+/* Eigenvalues of a (Hessenberg) matrix H by shifted complex QR; writes N
+ * eigenvalues to eig. Returns false if a block did not converge. */
+static bool qr_eig(Cplx *H, uint32_t N, Cplx *eig)
 {
     hessenberg(H, N);
     double *cs = malloc((N ? N : 1) * sizeof *cs);
     Cplx   *sn = malloc((N ? N : 1) * sizeof *sn);
     uint32_t hi = N;
     int iters = 0;
+    bool converged = true;
     while (hi > 0) {
         uint32_t lo = hi - 1;                               /* find bottom block [lo, hi) */
         while (lo > 0) {
@@ -216,9 +257,9 @@ static void qr_eig(Cplx *H, uint32_t N, Cplx *eig)
             lo--;
         }
         if (lo == hi - 1) { eig[hi-1] = H[(size_t)(hi-1)*N+(hi-1)]; hi--; iters = 0; continue; }
-        if (++iters > 300) {                                /* give up: accept the diagonal */
-            for (uint32_t i = lo; i < hi; i++) eig[i] = H[(size_t)i*N+i];
-            hi = lo; iters = 0; continue;
+        if (++iters > 300) {                                /* give up, and say so: the diagonal */
+            for (uint32_t i = lo; i < hi; i++) eig[i] = H[(size_t)i*N+i];   /* is not the spectrum */
+            hi = lo; iters = 0; converged = false; continue;
         }
         Cplx a = H[(size_t)(hi-2)*N+(hi-2)], b = H[(size_t)(hi-2)*N+(hi-1)];
         Cplx cc2 = H[(size_t)(hi-1)*N+(hi-2)], d = H[(size_t)(hi-1)*N+(hi-1)];
@@ -226,6 +267,12 @@ static void qr_eig(Cplx *H, uint32_t N, Cplx *eig)
         Cplx disc = c_sqrtz(c_sub(c_mul(tr, tr), c_scale(4.0, det)));
         Cplx mu1 = c_scale(0.5, c_add(tr, disc)), mu2 = c_scale(0.5, c_sub(tr, disc));
         Cplx mu = c_abs(c_sub(mu1, d)) < c_abs(c_sub(mu2, d)) ? mu1 : mu2;
+        /* An exceptional shift every tenth step. With the usual shift the
+         * step can be a fixed point: a cyclic shift matrix has a zero shift
+         * and is mapped to itself, and the loop used to run out and return
+         * its all-zero diagonal as the eigenvalues. */
+        if (iters % 10 == 0)
+            mu = (Cplx){ d.re + c_abs(cc2) + (hi - lo > 2 ? c_abs(H[(size_t)(hi-2)*N+(hi-3)]) : 0.0), d.im };
         for (uint32_t i = lo; i < hi; i++) H[(size_t)i*N+i] = c_sub(H[(size_t)i*N+i], mu);   /* H - muI */
         for (uint32_t i = lo; i + 1 < hi; i++) {            /* QR: zero subdiagonals -> R */
             double c; Cplx s; c_givens(H[(size_t)i*N+i], H[(size_t)(i+1)*N+i], &c, &s);
@@ -248,6 +295,7 @@ static void qr_eig(Cplx *H, uint32_t N, Cplx *eig)
         for (uint32_t i = lo; i < hi; i++) H[(size_t)i*N+i] = c_add(H[(size_t)i*N+i], mu);   /* + muI */
     }
     free(cs); free(sn);
+    return converged;
 }
 
 static int t0_eig_gen(const Cplx *A0, uint32_t N, Cplx *w, Cplx *V)
@@ -256,8 +304,16 @@ static int t0_eig_gen(const Cplx *A0, uint32_t N, Cplx *w, Cplx *V)
     Cplx *H = malloc(cells * sizeof *H);                     /* consumed by qr_eig */
     Cplx *M = malloc(cells * sizeof *M);
     Cplx *x = malloc((N ? N : 1) * sizeof *x);
-    memcpy(H, A0, cells * sizeof *H);
-    qr_eig(H, N, w);
+    {                                                        /* H = P^T A0 P, eigenvalues isolated */
+        unsigned char *nz = calloc(cells, 1);
+        uint32_t *perm = malloc((N ? N : 1) * sizeof *perm);
+        for (size_t q = 0; q < (size_t)N * N; q++) nz[q] = A0[q].re != 0.0 || A0[q].im != 0.0;
+        isolate_perm(nz, N, perm);
+        for (uint32_t i = 0; i < N; i++)
+            for (uint32_t j = 0; j < N; j++) H[(size_t)i * N + j] = A0[(size_t)perm[i] * N + perm[j]];
+        free(nz); free(perm);
+    }
+    if (!qr_eig(H, N, w)) { free(H); free(M); free(x); return 1; }
 
     for (uint32_t j = 0; j < N; j++) {                       /* one vector per value */
         Cplx lam = w[j];
@@ -277,6 +333,348 @@ static int t0_eig_gen(const Cplx *A0, uint32_t N, Cplx *w, Cplx *V)
     }
     free(H); free(M); free(x);
     return 0;
+}
+
+/* ---- schur: Hessenberg reduction and shifted QR, transformations kept ---- */
+
+/* The real Schur form. A = U T U^T with U orthogonal and T quasi-upper-
+ * triangular: 1x1 blocks for real eigenvalues, 2x2 blocks for complex-
+ * conjugate pairs. Everything is real arithmetic: a real matrix with complex
+ * eigenvalues has no real triangular form, and the 2x2 blocks are what stands
+ * in for it.
+ *
+ * Three stages, all accumulated into U: Householder reduction to Hessenberg
+ * form; Francis's implicit double-shift QR iteration (Golub and Van Loan,
+ * Matrix Computations, alg. 7.5.1), which chases a 3x3 bulge down the active
+ * block until a subdiagonal entry is negligible and the block splits; and a
+ * rotation of each 2x2 block that splits it if its eigenvalues are real, or
+ * else puts it in LAPACK's standard form (equal diagonal entries,
+ * off-diagonal entries of opposite sign). */
+
+#define RS(i, j) T[(size_t)(i) * n + (j)]
+#define RU(i, j) U[(size_t)(i) * n + (j)]
+
+/* A plane rotation G = [cs -sn; sn cs] in the (i, i+1) plane, applied as a
+ * similarity: T <- G^T T G, U <- U G. */
+static void rs_rotate(double *T, double *U, uint32_t n, uint32_t i, double cs, double sn)
+{
+    for (uint32_t j = 0; j < n; j++) {                      /* rows i, i+1 */
+        double a = RS(i, j), b = RS(i + 1, j);
+        RS(i, j) = cs * a + sn * b; RS(i + 1, j) = cs * b - sn * a;
+    }
+    for (uint32_t r = 0; r < n; r++) {                      /* columns i, i+1 */
+        double a = RS(r, i), b = RS(r, i + 1);
+        RS(r, i) = cs * a + sn * b; RS(r, i + 1) = cs * b - sn * a;
+        a = RU(r, i); b = RU(r, i + 1);
+        RU(r, i) = cs * a + sn * b; RU(r, i + 1) = cs * b - sn * a;
+    }
+}
+
+/* The 2x2 block at (l, l): triangular if its eigenvalues are real, standard
+ * form if they are complex. */
+static void rs_standardize(double *T, double *U, uint32_t n, uint32_t l)
+{
+    double a = RS(l, l), b = RS(l, l + 1), c = RS(l + 1, l), d = RS(l + 1, l + 1);
+    if (c == 0.0) return;
+    double p = 0.5 * (a - d), bcmax = fmax(fabs(b), fabs(c));
+    double bcmis = fmin(fabs(b), fabs(c)) * (b < 0 ? -1.0 : 1.0) * (c < 0 ? -1.0 : 1.0);
+    double scale = fmax(fabs(p), bcmax);
+    double z = p / scale * p + bcmax / scale * bcmis;       /* (p^2 + bc) / scale, without overflow */
+    if (z >= 0.0) {
+        /* real eigenvalues: rotate an eigenvector into the first position */
+        double root = sqrt(scale) * sqrt(z);
+        double zz = p + (p < 0 ? -root : root);             /* eigenvalue d + zz, no cancellation */
+        double r = hypot(zz, c);
+        rs_rotate(T, U, n, l, zz / r, c / r);
+        RS(l + 1, l) = 0.0;
+        return;
+    }
+    /* complex pair: the rotation that makes the diagonal entries equal */
+    if (a == d) return;                                     /* they already are */
+    double sigma = b + c, tau = hypot(sigma, a - d);
+    double cs = sqrt(0.5 * (1.0 + fabs(sigma) / tau));
+    double sn = -(p / (tau * cs)) * (sigma < 0 ? -1.0 : 1.0);
+    rs_rotate(T, U, n, l, cs, sn);
+    double mean = 0.5 * (RS(l, l) + RS(l + 1, l + 1));
+    RS(l, l) = mean; RS(l + 1, l + 1) = mean;
+    b = RS(l, l + 1); c = RS(l + 1, l);
+    if (c != 0.0 && b * c >= 0.0) {
+        /* rounding made the pair real after all (a double eigenvalue): the
+         * block [mean b; c mean] has the eigenvector (sqrt|b|, +-sqrt|c|) */
+        double sb = sqrt(fabs(b)), sc = c < 0 ? -sqrt(fabs(c)) : sqrt(fabs(c));
+        double r = hypot(sb, sc);
+        rs_rotate(T, U, n, l, sb / r, sc / r);
+        RS(l + 1, l) = 0.0;
+    }
+}
+
+/* v, beta with (I - beta v v^T) x = (alpha, 0, ...); returns false for x = 0.
+ * Only the direction of x matters to the reflector, so x is scaled by its
+ * largest entry first: its squares then neither overflow nor underflow. */
+static bool rs_house(const double *x, uint32_t m, double *v, double *beta)
+{
+    double nrm = 0.0, big = 0.0;
+    for (uint32_t i = 0; i < m; i++) big = fmax(big, fabs(x[i]));
+    if (big == 0.0) return false;
+    for (uint32_t i = 0; i < m; i++) { v[i] = x[i] / big; nrm += v[i] * v[i]; }
+    nrm = sqrt(nrm);
+    v[0] -= v[0] < 0 ? nrm : -nrm;
+    double vv = 0.0;
+    for (uint32_t i = 0; i < m; i++) vv += v[i] * v[i];
+    *beta = 2.0 / vv;
+    return true;
+}
+
+static int t0_schur_d(const double *A, uint32_t n, double *T, double *U)
+{
+    memcpy(T, A, (size_t)n * n * sizeof *T);
+    for (uint32_t i = 0; i < n; i++) for (uint32_t j = 0; j < n; j++) RU(i, j) = (i == j);
+    if (n < 2) return 0;
+    /* work on P^T A P with its eigenvalues isolated; U's rows go back at the end */
+    unsigned char *nz = malloc((size_t)n * n);
+    uint32_t *perm = malloc(n * sizeof *perm);
+    for (size_t q = 0; q < (size_t)n * n; q++) nz[q] = A[q] != 0.0;
+    isolate_perm(nz, n, perm);
+    for (uint32_t i = 0; i < n; i++) for (uint32_t j = 0; j < n; j++) RS(i, j) = A[(size_t)perm[i] * n + perm[j]];
+    free(nz);
+    /* the iteration multiplies entries pairwise: a matrix of extreme size is
+     * brought to size one first and T scaled back at the end */
+    double amax = 0.0, unit = 1.0;
+    for (size_t q = 0; q < (size_t)n * n; q++) amax = fmax(amax, fabs(T[q]));
+    if (amax > 0.0 && (amax < 1e-100 || amax > 1e100)) {
+        unit = amax;
+        for (size_t q = 0; q < (size_t)n * n; q++) T[q] /= unit;
+    }
+    double *v = malloc(n * sizeof *v), *x = malloc(n * sizeof *x);
+
+    /* stage 1: Hessenberg form */
+    for (uint32_t k = 0; k + 2 < n; k++) {
+        uint32_t m = n - k - 1;
+        double beta;
+        for (uint32_t i = 0; i < m; i++) x[i] = RS(k + 1 + i, k);
+        if (!rs_house(x, m, v, &beta)) continue;
+        for (uint32_t j = 0; j < n; j++) {                  /* T <- P T */
+            double s = 0.0;
+            for (uint32_t i = 0; i < m; i++) s += v[i] * RS(k + 1 + i, j);
+            s *= beta;
+            for (uint32_t i = 0; i < m; i++) RS(k + 1 + i, j) -= s * v[i];
+        }
+        for (uint32_t r = 0; r < n; r++) {                  /* T <- T P, U <- U P */
+            double s = 0.0, t = 0.0;
+            for (uint32_t i = 0; i < m; i++) { s += RS(r, k + 1 + i) * v[i]; t += RU(r, k + 1 + i) * v[i]; }
+            s *= beta; t *= beta;
+            for (uint32_t i = 0; i < m; i++) { RS(r, k + 1 + i) -= s * v[i]; RU(r, k + 1 + i) -= t * v[i]; }
+        }
+        for (uint32_t i = k + 2; i < n; i++) RS(i, k) = 0.0;
+    }
+    free(v); free(x);
+
+    /* stage 2: QR iteration on the active block [l, hi] */
+    double norm = 0.0;
+    for (size_t q = 0; q < (size_t)n * n; q++) norm = fmax(norm, fabs(T[q]));
+    const double eps = 2.220446049250313e-16;
+    uint32_t hi = n - 1;
+    int iter = 0, rc = 0;
+    while (hi >= 1) {
+        uint32_t l = hi;                                    /* the block ends where a subdiagonal vanishes */
+        while (l > 0) {
+            double s = fabs(RS(l - 1, l - 1)) + fabs(RS(l, l));
+            if (s == 0.0) s = norm;
+            if (fabs(RS(l, l - 1)) <= eps * s) { RS(l, l - 1) = 0.0; break; }
+            l--;
+        }
+        if (l == hi) { hi--; iter = 0; continue; }          /* a 1x1 block has split off */
+        if (l + 1 == hi) {                                   /* a 2x2 block has split off */
+            rs_standardize(T, U, n, l);
+            if (hi < 2) break;
+            hi -= 2; iter = 0; continue;
+        }
+        if (++iter > 60) { rc = 1; break; }
+
+        /* the shifts are the eigenvalues of the trailing 2x2; s is their sum, t their product */
+        double s = RS(hi - 1, hi - 1) + RS(hi, hi);
+        double t = RS(hi - 1, hi - 1) * RS(hi, hi) - RS(hi - 1, hi) * RS(hi, hi - 1);
+        if (iter == 10 || iter == 20 || iter == 30 || iter == 40 || iter == 50) {
+            /* an exceptional shift, to break a cycle (EISPACK's) */
+            double w = fabs(RS(hi, hi - 1)) + fabs(RS(hi - 1, hi - 2));
+            s = 1.5 * w; t = w * w;
+        }
+        /* first column of (T - aI)(T - bI) */
+        double x = RS(l, l) * RS(l, l) + RS(l, l + 1) * RS(l + 1, l) - s * RS(l, l) + t;
+        double y = RS(l + 1, l) * (RS(l, l) + RS(l + 1, l + 1) - s);
+        double z = RS(l + 1, l) * RS(l + 2, l + 1);
+        for (uint32_t k = l; k + 2 <= hi; k++) {            /* chase the bulge */
+            double xv[3] = { x, y, z }, hv[3], beta;
+            if (rs_house(xv, 3, hv, &beta)) {
+                uint32_t c0 = k > l ? k - 1 : l;
+                for (uint32_t j = c0; j < n; j++) {
+                    double sm = beta * (hv[0] * RS(k, j) + hv[1] * RS(k + 1, j) + hv[2] * RS(k + 2, j));
+                    RS(k, j) -= sm * hv[0]; RS(k + 1, j) -= sm * hv[1]; RS(k + 2, j) -= sm * hv[2];
+                }
+                uint32_t rmax = k + 3 < hi ? k + 3 : hi;
+                for (uint32_t r = 0; r <= rmax; r++) {
+                    double sm = beta * (RS(r, k) * hv[0] + RS(r, k + 1) * hv[1] + RS(r, k + 2) * hv[2]);
+                    RS(r, k) -= sm * hv[0]; RS(r, k + 1) -= sm * hv[1]; RS(r, k + 2) -= sm * hv[2];
+                }
+                for (uint32_t r = 0; r < n; r++) {
+                    double sm = beta * (RU(r, k) * hv[0] + RU(r, k + 1) * hv[1] + RU(r, k + 2) * hv[2]);
+                    RU(r, k) -= sm * hv[0]; RU(r, k + 1) -= sm * hv[1]; RU(r, k + 2) -= sm * hv[2];
+                }
+            }
+            if (k > l) { RS(k + 1, k - 1) = 0.0; RS(k + 2, k - 1) = 0.0; }
+            x = RS(k + 1, k); y = RS(k + 2, k);
+            if (k + 3 <= hi) z = RS(k + 3, k);
+        }
+        {                                                    /* the last reflector is 2x2 */
+            double xv[2] = { x, y }, hv[2], beta;
+            if (rs_house(xv, 2, hv, &beta)) {
+                for (uint32_t j = hi - 2; j < n; j++) {
+                    double sm = beta * (hv[0] * RS(hi - 1, j) + hv[1] * RS(hi, j));
+                    RS(hi - 1, j) -= sm * hv[0]; RS(hi, j) -= sm * hv[1];
+                }
+                for (uint32_t r = 0; r <= hi; r++) {
+                    double sm = beta * (RS(r, hi - 1) * hv[0] + RS(r, hi) * hv[1]);
+                    RS(r, hi - 1) -= sm * hv[0]; RS(r, hi) -= sm * hv[1];
+                }
+                for (uint32_t r = 0; r < n; r++) {
+                    double sm = beta * (RU(r, hi - 1) * hv[0] + RU(r, hi) * hv[1]);
+                    RU(r, hi - 1) -= sm * hv[0]; RU(r, hi) -= sm * hv[1];
+                }
+            }
+            RS(hi, hi - 2) = 0.0;
+        }
+    }
+    if (unit != 1.0) for (size_t q = 0; q < (size_t)n * n; q++) T[q] *= unit;
+    {                                                        /* A = (P U) T (P U)^T */
+        double *W = malloc((size_t)n * n * sizeof *W);
+        memcpy(W, U, (size_t)n * n * sizeof *W);
+        for (uint32_t i = 0; i < n; i++) memcpy(&RU(perm[i], 0), &W[(size_t)i * n], n * sizeof *W);
+        free(W);
+    }
+    free(perm);
+    return rc;
+}
+#undef RS
+#undef RU
+
+/* The complex Schur form: A = U T U^H, U unitary, T upper triangular.
+ * Householder reduction to Hessenberg form, then QR steps with Wilkinson's
+ * shift on the active block; each rotation is also applied to the rest of
+ * its rows and columns and to U, so that T stays similar to A. */
+static int t0_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
+{
+#define ZS(i, j) T[(size_t)(i) * n + (j)]
+#define ZU(i, j) U[(size_t)(i) * n + (j)]
+    memcpy(T, A, (size_t)n * n * sizeof *T);
+    for (uint32_t i = 0; i < n; i++) for (uint32_t j = 0; j < n; j++) ZU(i, j) = (Cplx){ i == j, 0 };
+    if (n < 2) return 0;
+    unsigned char *nz = malloc((size_t)n * n);               /* as in the real kernel */
+    uint32_t *perm = malloc(n * sizeof *perm);
+    for (size_t q = 0; q < (size_t)n * n; q++) nz[q] = A[q].re != 0.0 || A[q].im != 0.0;
+    isolate_perm(nz, n, perm);
+    for (uint32_t i = 0; i < n; i++) for (uint32_t j = 0; j < n; j++) ZS(i, j) = A[(size_t)perm[i] * n + perm[j]];
+    free(nz);
+    double amax = 0.0, unit = 1.0;                           /* as in the real kernel */
+    for (size_t q = 0; q < (size_t)n * n; q++) amax = fmax(amax, fmax(fabs(T[q].re), fabs(T[q].im)));
+    if (amax > 0.0 && (amax < 1e-100 || amax > 1e100)) {
+        unit = amax;
+        for (size_t q = 0; q < (size_t)n * n; q++) T[q] = c_scale(1.0 / unit, T[q]);
+    }
+    Cplx *v = malloc(n * sizeof *v), *sn = malloc(n * sizeof *sn);
+    double *cs = malloc(n * sizeof *cs);
+
+    for (uint32_t k = 0; k + 2 < n; k++) {                   /* Hessenberg form */
+        double nrm = 0.0;
+        for (uint32_t i = k + 1; i < n; i++) { double a = c_abs(ZS(i, k)); nrm += a * a; }
+        nrm = sqrt(nrm);
+        if (nrm == 0.0) continue;
+        Cplx xk = ZS(k + 1, k); double axk = c_abs(xk);
+        Cplx alpha = axk > 0 ? c_scale(-nrm / axk, xk) : (Cplx){ -nrm, 0 };
+        for (uint32_t i = k + 1; i < n; i++) v[i] = ZS(i, k);
+        v[k + 1] = c_sub(v[k + 1], alpha);
+        double vn2 = 0.0;
+        for (uint32_t i = k + 1; i < n; i++) { double a = c_abs(v[i]); vn2 += a * a; }
+        if (vn2 == 0.0) continue;
+        double beta = 2.0 / vn2;
+        for (uint32_t j = 0; j < n; j++) {                   /* T <- P T, P = I - beta v v^H */
+            Cplx w = { 0, 0 };
+            for (uint32_t i = k + 1; i < n; i++) w = c_add(w, c_mul(c_conj(v[i]), ZS(i, j)));
+            w = c_scale(beta, w);
+            for (uint32_t i = k + 1; i < n; i++) ZS(i, j) = c_sub(ZS(i, j), c_mul(v[i], w));
+        }
+        for (uint32_t r = 0; r < n; r++) {                   /* T <- T P, U <- U P */
+            Cplx w = { 0, 0 }, u = { 0, 0 };
+            for (uint32_t j = k + 1; j < n; j++) { w = c_add(w, c_mul(ZS(r, j), v[j])); u = c_add(u, c_mul(ZU(r, j), v[j])); }
+            w = c_scale(beta, w); u = c_scale(beta, u);
+            for (uint32_t j = k + 1; j < n; j++) {
+                ZS(r, j) = c_sub(ZS(r, j), c_mul(w, c_conj(v[j])));
+                ZU(r, j) = c_sub(ZU(r, j), c_mul(u, c_conj(v[j])));
+            }
+        }
+        for (uint32_t i = k + 2; i < n; i++) ZS(i, k) = (Cplx){ 0, 0 };
+    }
+
+    double norm = 0.0;
+    for (size_t q = 0; q < (size_t)n * n; q++) norm = fmax(norm, c_abs(T[q]));
+    const double eps = 2.220446049250313e-16;
+    uint32_t hi = n - 1;
+    int iter = 0, rc = 0;
+    while (hi >= 1) {
+        uint32_t l = hi;
+        while (l > 0) {
+            double s = c_abs(ZS(l - 1, l - 1)) + c_abs(ZS(l, l));
+            if (s == 0.0) s = norm;
+            if (c_abs(ZS(l, l - 1)) <= eps * s) { ZS(l, l - 1) = (Cplx){ 0, 0 }; break; }
+            l--;
+        }
+        if (l == hi) { hi--; iter = 0; continue; }
+        if (++iter > 60) { rc = 1; break; }
+        /* Wilkinson's shift: the eigenvalue of the trailing 2x2 nearer its last entry */
+        Cplx a = ZS(hi - 1, hi - 1), b = ZS(hi - 1, hi), c = ZS(hi, hi - 1), d = ZS(hi, hi);
+        Cplx tr = c_add(a, d), det = c_sub(c_mul(a, d), c_mul(b, c));
+        Cplx disc = c_sqrtz(c_sub(c_mul(tr, tr), c_scale(4.0, det)));
+        Cplx mu1 = c_scale(0.5, c_add(tr, disc)), mu2 = c_scale(0.5, c_sub(tr, disc));
+        Cplx mu = c_abs(c_sub(mu1, d)) < c_abs(c_sub(mu2, d)) ? mu1 : mu2;
+        if (iter % 10 == 0)                                  /* an exceptional shift, to break a cycle */
+            mu = (Cplx){ d.re + c_abs(c) + (hi >= 2 ? c_abs(ZS(hi - 1, hi - 2)) : 0.0), d.im };
+        for (uint32_t i = l; i <= hi; i++) ZS(i, i) = c_sub(ZS(i, i), mu);
+        for (uint32_t i = l; i < hi; i++) {                  /* R = Q^H (T - mu I): rows i, i+1 */
+            double cc; Cplx ss; c_givens(ZS(i, i), ZS(i + 1, i), &cc, &ss);
+            cs[i] = cc; sn[i] = ss;
+            for (uint32_t j = i; j < n; j++) {
+                Cplx p = ZS(i, j), q = ZS(i + 1, j);
+                ZS(i, j)     = c_add(c_scale(cc, p), c_mul(ss, q));
+                ZS(i + 1, j) = c_sub(c_scale(cc, q), c_mul(c_conj(ss), p));
+            }
+            ZS(i + 1, i) = (Cplx){ 0, 0 };
+        }
+        for (uint32_t i = l; i < hi; i++) {                  /* R Q: columns i, i+1; U <- U Q */
+            double cc = cs[i]; Cplx ss = sn[i];
+            uint32_t rmax = i + 1;                           /* R is triangular: rows 0 .. i+1 */
+            for (uint32_t r = 0; r <= rmax; r++) {
+                Cplx p = ZS(r, i), q = ZS(r, i + 1);
+                ZS(r, i)     = c_add(c_scale(cc, p), c_mul(c_conj(ss), q));
+                ZS(r, i + 1) = c_sub(c_scale(cc, q), c_mul(ss, p));
+            }
+            for (uint32_t r = 0; r < n; r++) {
+                Cplx p = ZU(r, i), q = ZU(r, i + 1);
+                ZU(r, i)     = c_add(c_scale(cc, p), c_mul(c_conj(ss), q));
+                ZU(r, i + 1) = c_sub(c_scale(cc, q), c_mul(ss, p));
+            }
+        }
+        for (uint32_t i = l; i <= hi; i++) ZS(i, i) = c_add(ZS(i, i), mu);
+    }
+    if (unit != 1.0) for (size_t q = 0; q < (size_t)n * n; q++) T[q] = c_scale(unit, T[q]);
+    {
+        Cplx *W = malloc((size_t)n * n * sizeof *W);
+        memcpy(W, U, (size_t)n * n * sizeof *W);
+        for (uint32_t i = 0; i < n; i++) memcpy(&ZU(perm[i], 0), &W[(size_t)i * n], n * sizeof *W);
+        free(W);
+    }
+    free(v); free(sn); free(cs); free(perm);
+    return rc;
+#undef ZS
+#undef ZU
 }
 
 /* ---- svd: thin SVD via one-sided Jacobi (S descending) ------------------
@@ -500,6 +898,8 @@ static const LinalgKernels tier0 = {
     .det      = t0_det,
     .eig_herm = t0_eig_herm,
     .eig_gen  = t0_eig_gen,
+    .schur    = t0_schur,
+    .schur_d  = t0_schur_d,
     .svd      = t0_svd,
     .chol     = t0_chol,
 };

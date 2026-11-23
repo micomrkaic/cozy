@@ -1657,16 +1657,31 @@ static Value omit_missing(Value v)
     for (size_t k = 0; k < c; k++) if (!isnan(d[k])) o[w++] = d[k];
     return out;
 }
-#define OMIT_HOOK(fn_self)                                                     \
-    if (n >= 2 && args[n-1].kind == VAL_STRING &&                              \
-        as_str(args[n-1])->len == 4 && !memcmp(as_str(args[n-1])->data, "omit", 4)) { \
-        Value filtered = omit_missing(args[0]);                                \
-        Value a2[3] = { filtered, val_null(), val_null() };                    \
-        for (uint32_t q = 1; q + 1 < n; q++) a2[q] = args[q];                  \
-        Value r0 = fn_self(I, a2, n - 1);                                      \
-        value_release(filtered);                                               \
-        return r0;                                                             \
+static bool is_omit(Value v)
+{
+    return v.kind == VAL_STRING && as_str(v)->len == 4 && !memcmp(as_str(v)->data, "omit", 4);
+}
+/* Reduce the filtered copy and release it whichever way the reduction ends:
+ * if it raises (nothing left after omitting, a bad argument), the copy is
+ * released before the error goes on to whoever was listening. */
+static Value omit_call(Interp *I, BuiltinFn self, Value *args, uint32_t n)
+{
+    Value filtered = omit_missing(args[0]);
+    Value a2[3] = { filtered, val_null(), val_null() };
+    for (uint32_t q = 1; q + 1 < n; q++) a2[q] = args[q];
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        value_release(filtered);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        longjmp(I->jmp, 1);
     }
+    Value r0 = self(I, a2, n - 1);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    value_release(filtered);
+    return r0;
+}
+#define OMIT_HOOK(fn_self)                                                     \
+    if (n >= 2 && is_omit(args[n-1])) return omit_call(I, fn_self, args, n);
 
 static Value bi_sum(Interp *I, Value *args, uint32_t n)
 {
@@ -2001,7 +2016,7 @@ static Value sqrt_scalar(Interp *I, Value v)
     }
     if (v.kind == VAL_INT || v.kind == VAL_FLOAT) {
         double d = as_double(v);
-        if (d >= 0) return val_float(sqrt(d));
+        if (!(d < 0)) return val_float(sqrt(d));  /* NaN stays a real NaN (missing data, entry 15) */
         return val_complex(0.0, sqrt(-d));        /* tower: sqrt of a negative real is complex */
     }
     if (v.kind == VAL_COMPLEX) {
@@ -5884,7 +5899,7 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 
     bool hermitian = true;                              /* detect symmetric/Hermitian */
     for (uint32_t i = 0; i < N && hermitian; i++)
-        for (uint32_t j = i+1; j < N; j++) {
+        for (uint32_t j = i; j < N; j++) {              /* j = i: a Hermitian diagonal is real */
             Cplx d = c_sub(A[(size_t)i*N+j], c_conj(A[(size_t)j*N+i]));
             if (c_abs(d) > 1e-9 * (1.0 + c_abs(A[(size_t)i*N+j]))) { hermitian = false; break; }
         }
@@ -5923,15 +5938,26 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 
     /* general: kernels return matched (value, vector-column) pairs */
     Cplx *w = malloc((N ? N : 1) * sizeof *w);
-    if (real_in && cozy_linalg()->eig_gen_d) {   /* entry 10 residue: dgeev */
+    bool finite = true;                                 /* missing data propagates: nan in, nan out */
+    for (size_t k2 = 0; k2 < (size_t)N*N; k2++)
+        if (!isfinite(A[k2].re) || !isfinite(A[k2].im)) { finite = false; break; }
+    int rc = 0;
+    if (!finite) {
+        for (uint32_t i = 0; i < N; i++) w[i] = (Cplx){ nan(""), 0.0 };
+        for (size_t k2 = 0; k2 < (size_t)N*N; k2++) V[k2] = (Cplx){ nan(""), 0.0 };
+    } else if (real_in && cozy_linalg()->eig_gen_d) {   /* entry 10 residue: dgeev */
         size_t cc = (size_t)(N ? N*N : 1);
         double *Ad = malloc(cc * sizeof *Ad);
         if (!Ad) abort();
         for (size_t k2 = 0; k2 < (size_t)N*N; k2++) Ad[k2] = A[k2].re;
-        cozy_linalg()->eig_gen_d(Ad, N, w, V);
+        rc = cozy_linalg()->eig_gen_d(Ad, N, w, V);
         free(Ad);
     } else
-    cozy_linalg()->eig_gen(A, N, w, V);
+        rc = cozy_linalg()->eig_gen(A, N, w, V);
+    if (rc != 0) {                                      /* never hand back numbers that are not eigenvalues */
+        free(A); free(V); free(ord); free(Vc); free(w);
+        runtime_error(I, "eig: the QR iteration did not converge");
+    }
 
     /* Snap epsilon-noise components to exact zero before sorting: backends
      * differ in whether a mathematically-zero part comes back as 0.0 or
@@ -6006,6 +6032,57 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
 /* thin SVD -> {U, S, V}, A = U * diag(S) * V' with S descending (part of the
  * seam contract, so every backend agrees). Marshalling here; math behind the
  * kernel table. */
+/* Schur decomposition -> {U, T} with A = U * T * U' and U unitary. A real
+ * matrix gets the real form (U orthogonal, T quasi-triangular with a 2x2
+ * block for each complex pair of eigenvalues) unless "complex" is asked for;
+ * a complex matrix has only the complex form (T triangular). The order of
+ * the eigenvalues along T's diagonal is the backend's and is not part of the
+ * language (eig sorts; this does not). Missing data propagates: a matrix
+ * with a nan or inf entry gives U and T of nan, as eig and svd do. */
+static Value bi_schur(Interp *I, Value *args, uint32_t n)
+{
+    uint32_t N, c; Cplx *A = to_cplx(I, args[0], &N, &c, "schur");
+    if (c != N) { free(A); runtime_error(I, "schur: matrix must be square (got %ux%u)", N, c); }
+    bool real_in = arr_real(args[0]), want_complex = !real_in;
+    if (n == 2) {
+        StrObj *m = args[1].kind == VAL_STRING ? as_str(args[1]) : nullptr;
+        bool is_real = m && m->len == 4 && !memcmp(m->data, "real", 4);
+        bool is_cplx = m && m->len == 7 && !memcmp(m->data, "complex", 7);
+        if (!is_real && !is_cplx) { free(A); runtime_error(I, "schur: the second argument is \"real\" or \"complex\""); }
+        if (is_real && !real_in) {
+            free(A);
+            runtime_error(I, "schur: a complex matrix has no real Schur form — use schur(A)");
+        }
+        want_complex = is_cplx;
+    }
+    size_t cells = (size_t)N * N, room = cells ? cells : 1;
+    bool finite = true;
+    for (size_t k = 0; k < cells; k++) if (!isfinite(A[k].re) || !isfinite(A[k].im)) { finite = false; break; }
+    Cplx *T = malloc(room * sizeof *T), *U = malloc(room * sizeof *U);
+    int rc = 0;
+    if (!finite) {
+        for (size_t k = 0; k < cells; k++) T[k] = U[k] = (Cplx){ nan(""), want_complex ? nan("") : 0.0 };
+    } else if (!want_complex) {
+        double *Ad = malloc(room * sizeof *Ad), *Td = malloc(room * sizeof *Td), *Ud = malloc(room * sizeof *Ud);
+        for (size_t k = 0; k < cells; k++) Ad[k] = A[k].re;
+        rc = cozy_linalg()->schur_d(Ad, N, Td, Ud);
+        for (size_t k = 0; k < cells; k++) { T[k] = (Cplx){ Td[k], 0 }; U[k] = (Cplx){ Ud[k], 0 }; }
+        free(Ad); free(Td); free(Ud);
+    } else {
+        rc = cozy_linalg()->schur(A, N, T, U);
+    }
+    if (rc != 0) {
+        free(A); free(T); free(U);
+        runtime_error(I, "schur: the QR iteration did not converge");
+    }
+    for (size_t k = 0; k < cells; k++) {               /* no negative zeros in the output */
+        T[k].re += 0.0; T[k].im += 0.0; U[k].re += 0.0; U[k].im += 0.0;
+    }
+    Value Uv = from_cplx(U, N, N, !want_complex), Tv = from_cplx(T, N, N, !want_complex);
+    free(A); free(T); free(U);
+    return record2("U", Uv, "T", Tv);
+}
+
 static Value bi_svd(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -6094,13 +6171,15 @@ ENTIRE_UNARY(atan,  atan,  c_atanz,  1.0 / (1.0 + x * x), -2.0 * x / ((1.0 + x *
 ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0), -x / pow(x * x + 1.0, 1.5))
 #undef ENTIRE_UNARY
 
-/* tower: real in domain -> real; real out of domain or complex -> complex */
+/* tower: real in domain -> real; real out of domain or complex -> complex.
+ * NaN is not "out of domain": it is missing data (entry 15) and stays a real
+ * NaN, so one missing cell never turns a whole real array complex. */
 #define TOWER_UNARY(name, rfn, cfn, indomain, dexpr, d2expr)                          \
     static Value sc_##name(Interp *I, Value v) {                                      \
         if (v.kind == VAL_COMPLEX) { Cplx r = cfn(v.as.z); return val_complex(r.re, r.im); } \
         if (v.kind == VAL_DUAL || v.kind == VAL_HDUAL) {                              \
             double x = v.kind == VAL_DUAL ? v.as.d.v : v.as.h.v;                      \
-            if (!(indomain))                                                          \
+            if (!(indomain) && !isnan(x))                                             \
                 runtime_error(I, #name ": dual input outside the real domain "        \
                                  "(the result would be complex, and dual and "        \
                                  "complex do not mix)");                              \
@@ -6108,7 +6187,7 @@ ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0), -x / pow(x * x + 1
             HDual r = hd_chain(v.as.h, rfn(x), (dexpr), (d2expr));                    \
             return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         double x = as_double(v);                                                      \
-        if (indomain) return val_float(rfn(x));                                       \
+        if ((indomain) || isnan(x)) return val_float(rfn(x));                         \
         Cplx r = cfn((Cplx){ x, 0.0 }); return val_complex(r.re, r.im); }             \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
 TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x,               -1.0 / (x * x))
@@ -6132,7 +6211,7 @@ TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x), 
             HDual r = hd_chain(v.as.h, log(x)/l, 1.0/(x*l), -1.0/(x*x*l));            \
             return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         double x = as_double(v);                                                      \
-        if (x >= 0.0) return val_float(log(x)/l);                                      \
+        if (!(x < 0.0)) return val_float(log(x)/l);   /* NaN stays real */            \
         Cplx r = c_logz((Cplx){ x, 0.0 }); return val_complex(r.re/l, r.im/l); }       \
     static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
 LOGB_UNARY(log10, 10.0)
@@ -6406,13 +6485,14 @@ static Value bi_kron(Interp *I, Value *args, uint32_t n)
 
 static Value sc_sign(Interp *I, Value v) { (void)I;
     if (v.kind == VAL_INT)   return val_int((v.as.i > 0) - (v.as.i < 0));
-    if (v.kind == VAL_FLOAT) { double x = v.as.f; return val_float((double)((x > 0) - (x < 0))); }
+    if (v.kind == VAL_FLOAT) { double x = v.as.f;                /* NaN has no sign */
+        return val_float(isnan(x) ? x : (double)((x > 0) - (x < 0))); }
     if (v.kind == VAL_COMPLEX) { double m = hypot(v.as.z.re, v.as.z.im);
         return m == 0.0 ? val_complex(0, 0) : val_complex(v.as.z.re/m, v.as.z.im/m); }
     if (v.kind == VAL_DUAL) { double x = v.as.d.v;
-        return val_dual((double)((x > 0) - (x < 0)), 0.0); }   /* locally constant */
+        return val_dual(isnan(x) ? x : (double)((x > 0) - (x < 0)), 0.0); }   /* locally constant */
     if (v.kind == VAL_HDUAL) { double x = v.as.h.v;
-        return val_hdual((double)((x > 0) - (x < 0)), 0, 0, 0); }
+        return val_hdual(isnan(x) ? x : (double)((x > 0) - (x < 0)), 0, 0, 0); }
     runtime_error(I, "sign: expected a number, got %s", type_name(v.kind)); }
 static Value bi_sign(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_sign); }
 
@@ -6503,6 +6583,7 @@ static Value bi_rem  (Interp *I, Value *a, uint32_t n) { (void)n; return map_bin
 /* reductions over all elements */
 static Value bi_min(Interp *I, Value *args, uint32_t n)
 {
+    if (n == 2 && is_omit(args[1])) return omit_call(I, bi_min, args, n);   /* skip the missing */
     if (n == 3) {                                     /* min(A, [], dim): axis reduction */
         if (!(is_array(args[1]) && (size_t)as_arr(args[1])->rows * as_arr(args[1])->cols == 0))
             runtime_error(I, "min: the 3-argument form is min(A, [], dim)");
@@ -6520,11 +6601,17 @@ static Value bi_min(Interp *I, Value *args, uint32_t n)
     size_t nn = (size_t)a->rows * a->cols;
     if (nn == 0) runtime_error(I, "min: empty array");
     Value best = arr_get(a, 0);
-    for (size_t k = 1; k < nn; k++) { Value e = arr_get(a, k); if (as_double(e) < as_double(best)) best = e; }
+    if (isnan(as_double(best))) return best;          /* a missing element makes the answer missing */
+    for (size_t k = 1; k < nn; k++) {
+        Value e = arr_get(a, k); double x = as_double(e);
+        if (isnan(x)) return e;
+        if (x < as_double(best)) best = e;
+    }
     return best;
 }
 static Value bi_max(Interp *I, Value *args, uint32_t n)
 {
+    if (n == 2 && is_omit(args[1])) return omit_call(I, bi_max, args, n);   /* skip the missing */
     if (n == 3) {                                     /* max(A, [], dim): axis reduction */
         if (!(is_array(args[1]) && (size_t)as_arr(args[1])->rows * as_arr(args[1])->cols == 0))
             runtime_error(I, "max: the 3-argument form is max(A, [], dim)");
@@ -6542,7 +6629,12 @@ static Value bi_max(Interp *I, Value *args, uint32_t n)
     size_t nn = (size_t)a->rows * a->cols;
     if (nn == 0) runtime_error(I, "max: empty array");
     Value best = arr_get(a, 0);
-    for (size_t k = 1; k < nn; k++) { Value e = arr_get(a, k); if (as_double(e) > as_double(best)) best = e; }
+    if (isnan(as_double(best))) return best;          /* a missing element makes the answer missing */
+    for (size_t k = 1; k < nn; k++) {
+        Value e = arr_get(a, k); double x = as_double(e);
+        if (isnan(x)) return e;
+        if (x > as_double(best)) best = e;
+    }
     return best;
 }
 /* ------------------------------------------------------------------ */
@@ -6695,6 +6787,7 @@ static double st_median(Interp *I, double *buf, size_t n, double unused)
 {
     (void)I; (void)unused;
     qsort(buf, n, sizeof *buf, dbl_cmp);
+    if (isnan(buf[n - 1])) return buf[n - 1];         /* NaNs sort last: missing in, missing out */
     return (n & 1) ? buf[n / 2] : 0.5 * (buf[n/2 - 1] + buf[n/2]);
 }
 /* Linear interpolation between order statistics (NumPy default / R type 7). */
@@ -6702,6 +6795,7 @@ static double st_quantile(Interp *I, double *buf, size_t n, double p)
 {
     (void)I;
     qsort(buf, n, sizeof *buf, dbl_cmp);
+    if (isnan(buf[n - 1])) return buf[n - 1];         /* NaNs sort last: missing in, missing out */
     if (n == 1) return buf[0];
     double h = (double)(n - 1) * p;
     size_t lo = (size_t)h;
@@ -6905,7 +6999,8 @@ static Value bi_median(Interp *I, Value *args, uint32_t n)
 /* quantile(x, p): p a probability in [0, 1], scalar or vector -> matching shape. */
 static Value bi_quantile(Interp *I, Value *args, uint32_t n)
 {
-    (void)n;
+    OMIT_HOOK(bi_quantile)
+    if (n == 3) runtime_error(I, "quantile: the third argument can only be \"omit\"");
     Value pv = args[1];
     if (is_num(pv)) {
         double p = stat_elt(I, pv, "quantile");
@@ -7096,7 +7191,9 @@ static int cmp_val_asc(const void *x, const void *y)
     Value vx = *(const Value *)x, vy = *(const Value *)y;
     if (vx.kind == VAL_STRING && vy.kind == VAL_STRING) return str_val_cmp(vx, vy);
     double a = as_double(vx), b = as_double(vy);
-    return (a < b) ? -1 : (a > b) ? 1 : 0;
+    if (isnan(a)) return isnan(b) ? 0 : 1;      /* NaNs sort last. Without this the  */
+    if (isnan(b)) return -1;                    /* order is not total and qsort may  */
+    return (a < b) ? -1 : (a > b) ? 1 : 0;      /* leave the rest unsorted.          */
 }
 
 static Value bi_sort(Interp *I, Value *args, uint32_t n)
@@ -7542,8 +7639,24 @@ static double cmp_key(Interp *I, Value v)
     default:        runtime_error(I, "min/max: undefined for %s", type_name(v.kind));
     }
 }
-static Value sc_min(Interp *I, Value a, Value b) { return cmp_key(I, a) <= cmp_key(I, b) ? a : b; }
-static Value sc_max(Interp *I, Value a, Value b) { return cmp_key(I, a) >= cmp_key(I, b) ? a : b; }
+/* NaN is missing data and propagates (entry 15): the smaller or larger of a
+ * number and a missing value is missing, whichever side it is on. (A bare
+ * comparison would return the right-hand operand whenever either is NaN,
+ * so max(nan, 1) and max(1, nan) used to differ.) */
+static Value sc_min(Interp *I, Value a, Value b)
+{
+    double x = cmp_key(I, a), y = cmp_key(I, b);
+    if (isnan(x)) return a;
+    if (isnan(y)) return b;
+    return x <= y ? a : b;
+}
+static Value sc_max(Interp *I, Value a, Value b)
+{
+    double x = cmp_key(I, a), y = cmp_key(I, b);
+    if (isnan(x)) return a;
+    if (isnan(y)) return b;
+    return x >= y ? a : b;
+}
 
 static void def_builtin(EnvObj *e, const char *name, BuiltinFn fn, uint32_t lo, uint32_t hi)
 {
@@ -7585,6 +7698,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "qr",      bi_qr,      1, 1);
     def_builtin(e, "chol",    bi_chol,    1, 1);
     def_builtin(e, "eig",     bi_eig,     1, 1);
+    def_builtin(e, "schur",   bi_schur,   1, 2);
     def_builtin(e, "svd",     bi_svd,     1, 1);
     def_builtin(e, "exp",     bi_exp,     1, 1);
     def_builtin(e, "log",     bi_log,     1, 1);
@@ -7668,7 +7782,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "var",     bi_var,     1, 3);
     def_builtin(e, "std",     bi_std,     1, 3);
     def_builtin(e, "median",  bi_median,  1, 2);
-    def_builtin(e, "quantile",bi_quantile,2, 2);
+    def_builtin(e, "quantile",bi_quantile,2, 3);
     def_builtin(e, "mean",    bi_mean,    1, 2);
     def_builtin(e, "prod",    bi_prod,    1, 2);
     def_builtin(e, "length",  bi_length,  1, 1);

@@ -27,8 +27,19 @@
 static inline Cplx c_add(Cplx a, Cplx b){ return (Cplx){ a.re + b.re, a.im + b.im }; }
 static inline Cplx c_sub(Cplx a, Cplx b){ return (Cplx){ a.re - b.re, a.im - b.im }; }
 static inline Cplx c_mul(Cplx a, Cplx b){ return (Cplx){ a.re*b.re - a.im*b.im, a.re*b.im + a.im*b.re }; }
-static inline Cplx c_div(Cplx a, Cplx b){ double d = b.re*b.re + b.im*b.im;
-    return (Cplx){ (a.re*b.re + a.im*b.im)/d, (a.im*b.re - a.re*b.im)/d }; }
+/* Smith's algorithm: divide through by the larger part of b first, so that
+ * nothing is squared. The textbook formula computes |b|^2, which overflows
+ * or underflows once |b| passes about 1e154 or 1e-154 and turned
+ * (1+1i)/1e200 into 0 and (1e200+1e200i)/(2e200+1e200i) into nan. Dividing by
+ * a real number is now exact in each part. */
+static inline Cplx c_div(Cplx a, Cplx b){
+    if (fabs(b.re) >= fabs(b.im)) {
+        double r = b.im / b.re, d = b.re + b.im * r;
+        return (Cplx){ (a.re + a.im * r) / d, (a.im - a.re * r) / d };
+    }
+    double r = b.re / b.im, d = b.re * r + b.im;
+    return (Cplx){ (a.re * r + a.im) / d, (a.im * r - a.re) / d };
+}
 static inline Cplx   c_conj(Cplx a)     { return (Cplx){ a.re, -a.im }; }
 static inline double c_abs(Cplx a)      { return hypot(a.re, a.im); }
 static inline Cplx   c_scale(double s, Cplx a) { return (Cplx){ s * a.re, s * a.im }; }
@@ -82,6 +93,18 @@ typedef struct LinalgKernels {
      * applies the phase convention (both are observable language behavior,
      * so they live above the seam). */
     int (*eig_gen)(const Cplx *A, uint32_t n, Cplx *w, Cplx *V);
+
+    /* Schur decomposition. A (n×n) is preserved; T and U (both n×n) are
+     * written, with A = U T U^H and U unitary. schur gives the complex form
+     * (T upper triangular). schur_d gives the real form of a real matrix: U
+     * orthogonal, T quasi-upper-triangular with a 2×2 block for each
+     * complex-conjugate pair of eigenvalues, in LAPACK's standard form
+     * (equal diagonal entries, off-diagonal entries of opposite sign), and
+     * every entry below those blocks exactly zero. The order of the
+     * eigenvalues along the diagonal is the backend's. Returns nonzero if
+     * the QR iteration did not converge. */
+    int (*schur)(const Cplx *A, uint32_t n, Cplx *T, Cplx *U);
+    int (*schur_d)(const double *A, uint32_t n, double *T, double *U);
 
     /* Thin SVD of A (m×n), any shape: A = U * diag(s) * V^H with
      * k = min(m, n); U is m×k, s length k DESCENDING (part of the

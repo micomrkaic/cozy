@@ -207,6 +207,7 @@
     "rng"
     "round"
     "save"
+    "schur"
     "setfield"
     "sign"
     "sin"

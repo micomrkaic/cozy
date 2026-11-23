@@ -1,0 +1,98 @@
+# NaN is missing data (design entry 15): it propagates through every
+# function, it is never a reason to go complex, and it sorts last.
+
+# The functions that go complex outside their real domain do so for a real
+# number outside it, not for a missing one. (sqrt([4.0; nan]) used to come
+# back as a complex array.)
+sqrt(nan)
+=> nan
+sqrt([4.0; nan])
+=> [2; nan]
+log(nan)
+=> nan
+log([1.0, nan])
+=> [0, nan]
+[log10(nan), log2(nan)]
+=> [nan, nan]
+[asin(nan), acos(nan), acosh(nan), atanh(nan)]
+=> [nan, nan, nan, nan]
+isnan(sqrt(nan))
+=> true
+# ... and a real number outside the domain still does
+sqrt(-4)
+=> 2i
+sqrt([-4.0; nan])
+=> [2i; nan+0i]
+asin(2.0)
+=> 1.5708-1.31696i
+# through dual numbers too: a missing value is not "outside the real domain"
+dualval(log(dual(nan, 1.0)))
+=> nan
+dualval(sqrt(dual(nan, 1.0)))
+=> nan
+
+# sign: a missing number has none (it used to be 0)
+sign(nan)
+=> nan
+sign([-2.0, nan, 3.0])
+=> [-1, nan, 1]
+
+# min and max of a number and a missing value are missing, on either side.
+# (max(nan, 1) used to be 1 while max(1, nan) was nan.)
+[max(nan, 1.0), max(1.0, nan), min(nan, 1.0), min(1.0, nan)]
+=> [nan, nan, nan, nan]
+max([1.0; nan], 0.0)
+=> [1; nan]
+min(0.0, [1.0; nan])
+=> [0; nan]
+max([1.0, nan], [nan, 2.0])
+=> [nan, nan]
+# the reductions: one missing element makes the answer missing, wherever it is
+[max([1.0, nan, 3.0]), min([1.0, nan, 3.0]), max([nan, 1.0]), min([3.0, 1.0, nan])]
+=> [nan, nan, nan, nan]
+max([1.0, nan; 3.0, 4.0], [], 1)
+=> [3, nan]
+min([1.0, nan; 3.0, 4.0], [], 2)
+=> [nan; 3]
+# "omit" skips the missing, as it does for mean, sum, std and median
+[max([1.0, nan, 3.0], "omit"), min([1.0, nan, 3.0], "omit")]
+=> [3, 1]
+max([nan, nan], "omit")
+=> !empty array
+# without missing values nothing has changed
+[max(3, 2), max([1, 5, 2]), min(2, 7)]
+=> [3, 5, 2]
+max([true, false])
+=> true
+max([1.0, 3.0, 2.0])
+=> 3
+dualval(max(dual(nan, 1.0), dual(2.0, 0.0)))
+=> nan
+
+# median and quantile
+[median([1.0, nan, 3.0]), median([nan, 1.0, 3.0]), median([3.0, 1.0, 2.0])]
+=> [nan, nan, 2]
+median([3.0, 1.0, nan], "omit")
+=> 2
+quantile([1.0, nan, 3.0], 0.5)
+=> nan
+quantile([1.0, nan, 3.0, 5.0], 0.5, "omit")
+=> 3
+quantile([1.0, nan, 3.0, 5.0], [0.0, 1.0], "omit")
+=> [1, 5]
+quantile([1.0, 2.0], 0.5, "keep")
+=> !third argument can only be "omit"
+
+# sort: missing values go last. (The comparison was not a total order, and
+# sort([3.0, nan, 1.0]) came back unsorted.)
+sort([3.0, nan, 1.0, 2.0])
+=> [1, 2, 3, nan]
+sort([1.0, nan, 3.0, 2.0, nan])
+=> [1, 2, 3, nan, nan]
+sort([3.0, nan; 1.0, 2.0; nan, 0.0])
+=> [1, 0; 3, 2; nan, nan]
+sort([3.0, nan, 1.0]')
+=> [1; 3; nan]
+# unique keeps every nan (nan equals nothing, itself included), last
+unique([2.0, nan, 1.0, nan, 2.0])
+=> [1, 2, nan, nan]
