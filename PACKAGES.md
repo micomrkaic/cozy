@@ -646,7 +646,8 @@ the date column is the axis you plot against, not a thing to filter.
 Write a dynamic stochastic general equilibrium model the way Dynare's
 model block reads — `x(+1)` for tomorrow's value in expectation, `x(-1)`
 for yesterday's, parameters by name — and get its steady state, its
-first-order solution, impulse responses, simulations and moments. Timing
+solution to first or second order, impulse responses, simulations and
+moments. Timing
 is Dynare's: a stock chosen today for use tomorrow enters production as
 `k(-1)`. The stochastic growth model, three equations for consumption,
 capital and technology:
@@ -717,7 +718,7 @@ page for one function:
 ```
 cozy> load("packages/dsge.cz")
 cozy> help(dsge)
-  dsge — a record of 12 functions
+  dsge — a record of 16 functions
     dsge.model       compile a model from a spec record.
     dsge.steady      the steady state, as a record by variable name.
     dsge.bk          the Blanchard-Kahn check, as a value not an error.
@@ -727,6 +728,10 @@ cozy> help(dsge)
     dsge.moments     theoretical moments of the solved model.
     dsge.vardecomp   the unconditional variance decomposition, in percent.
     dsge.occbin      a model with one occasionally binding constraint.
+    dsge.solve2      the solution to second order.
+    dsge.simulate2   a simulated path of a second-order solution, in levels.
+    dsge.irf2        impulse responses to second order.
+    dsge.mean2       the unconditional means to second order, by variable name.
     dsge.rbc         the stochastic growth model, a ready-made spec.
     dsge.nk          the three-equation New Keynesian model, a ready-made spec.
     dsge.zlb         the New Keynesian model with a floor on the interest rate.
@@ -782,6 +787,40 @@ agents expect no more of them, and the periods in which the constraint
 will bind are found by guessing, solving backward from the last of them,
 and checking the path against the guess.
 
+**To second order.** A first-order solution is certainty-equivalent:
+the size of the shocks does not change what agents do, a response is
+proportional to its shock, and every mean is a steady state. The
+second-order solution adds the curvature of the decision rule and the
+effect of risk:
+
+```
+cozy> load("packages/dsge.cz")
+cozy> let s = dsge.solve2(dsge.model(dsge.rbc()));
+cozy> s.states
+["k", "a"]
+cozy> format(4); s.s2'
+[0.000, -3.852e-05, 3.852e-05, 3.852e-05, 0.000]
+cozy> [s.ss.k, dsge.mean2(s).k]
+[28.35, 28.40]
+cozy> let up = dsge.irf2(s, "e", 20, 3); let dn = dsge.irf2(s, "e", 20, -3);
+cozy> 100 * [up.c[1], -dn.c[1]]
+[2.256, 2.212]
+```
+
+The rule is `y = ybar + P y(-1) + Q e + 1/2 [Gxx (x ⊗ x) + 2 Gxu (x ⊗ e) +
+Guu (e ⊗ e) + s2]`, with `x` the state variables (`s.states`) as they were
+last period. `s2` is the correction for risk: knowing that shocks will
+come, households in the growth model consume a little less and invest a
+little more (the second and third entries), and the capital stock is on
+average higher than its steady state — precautionary saving, which the
+first-order solution cannot see. A boom of three standard deviations
+raises consumption by more than a slump of the same size lowers it.
+`dsge.simulate2` simulates with pruning (the second-order terms are fed
+by the first-order path only), so a simulated path cannot explode;
+`dsge.irf2` takes the size and sign of the shock; `dsge.mean2` gives the
+means. The functions for first order — `dsge.irf`, `dsge.moments` and the
+rest — accept a second-order solution and read its first-order part.
+
 **Discussion.** A contractionary policy shock lowers the output gap and
 inflation and raises the rate, each decaying at the shock's own
 persistence — and the numbers are Gali's closed form, which the golden
@@ -800,9 +839,8 @@ pass per column, so there is no step size to choose. The linear system
 runs unchanged on the zero-dependency kernels and in the browser. The
 remaining roots are the eigenvalues of the factor the solution leaves
 behind, so the Blanchard-Kahn count is read from the solution itself;
-unit roots count as stable, as in Dynare. Scope: first order, one lead
-and one lag per variable (add an auxiliary variable for more),
-independent shocks. Cross-checked against an independent solver —
+unit roots count as stable, as in Dynare. Scope: one lead and one lag
+per variable (add an auxiliary variable for more), independent shocks. Cross-checked against an independent solver —
 SymPy derivatives and SciPy's ordered QZ, `tests/ref_dsge.py` — on the
 growth model, Hansen's model with labour, and the New Keynesian model
 (`tests/71_dsge.test`). `dsge.occbin` linearises both regimes at the
@@ -815,6 +853,28 @@ of looping. Checked against Dynare 6.0's OccBin on the floor on the
 policy rate and on a growth model with irreversible investment
 (`tests/ref_occbin.py`, `tests/77_occbin.test`): the paths agree to
 rounding error.
+
+`dsge.solve2` differentiates the model a second time along the
+first-order solution. The Hessian of the equations is never formed: what
+is needed is the Hessian applied to pairs of first-order directions, and
+each such column is one pass of the equations on hyper-dual numbers
+seeded with the two directions — exact, like the Jacobians, and
+`(nx + k)(nx + k + 1) / 2` passes for `nx` states and `k` shocks. The
+curvature `Gxx` then solves a generalized Sylvester equation,
+`M Gxx + A Gxx (Pxx ⊗ Pxx) = -Rxx` with `M = A P + B`, in `n nx²`
+unknowns; on the complex Schur forms of `M \ A` and `Pxx` (`schur`) it
+separates into `nx²` triangular systems of order `n`, solved in turn.
+`Gxu`, `Guu` and `s2` are one linear solve each. Checked against Dynare
+6.0's `stoch_simul(order = 2)` — `ghxx`, `ghxu`, `ghuu`, `ghs2`, the
+second-order mean and a pruned simulation — on the growth model,
+Collard's model with labour and two shocks, a model with a labour choice,
+and Fernández-Villaverde's medium-scale New Keynesian model (28
+variables, 11 states, 5 shocks; `tests/data/nk_baseline.cz`): agreement
+to ten digits or better (`tests/ref_dsge2.py`, `tests/78_dsge2.test`).
+One caution carries over from Dynare: a lead of two periods inside a
+nonlinear term needs an auxiliary variable for the whole term, not for
+the variable alone, or the risk correction is wrong while everything
+else is right.
 
 In the table, `m` is `dsge.model(dsge.nk())` and `s` is `dsge.solve(m)`.
 

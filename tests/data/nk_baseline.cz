@@ -1,0 +1,49 @@
+% nk_baseline.cz — a medium-scale New Keynesian model, as a test fixture.
+%
+% The model of Fernandez-Villaverde (2010), "The econometrics of DSGE
+% models": 28 variables, 5 shocks, sticky prices and wages with indexation,
+% habits, investment adjustment costs, variable capital utilisation, trend
+% growth. It is the model block of NK_baseline.mod from the examples of
+% Dynare 6.0 (Copyright (C) 2013-2020 Dynare Team, GPL-3.0-or-later; written
+% by Benjamin Born and Johannes Pfeifer), translated equation for equation
+% into a dsge spec by the DSGE workbench's .mod reader, with the
+% predetermined capital stock shifted to this package's timing. The
+% parameter values are those of the example after its steady-state file
+% has run, and init is the steady state that file computes; Newton's
+% method here only polishes it.
+%
+% tests/78_dsge2.test solves it to second order and compares with Dynare.
+let nk_baseline = dsge.model({
+  vars = "d c mu_z mu_I mu_A lambda R PI r x u q f ld w wstar PIstarw PIstar g1 g2 yd mc k vp vw l phi F",
+  shocks = "epsd epsphi epsmu_I epsA epsm",
+  params = {delta = 0.025, epsilon = 10.0, eta = 10.0, Phi = 0.0, gammma2 = 0.001, betta = 0.998, h = 0.97, varpsi = 8.92, gammma = 1.17, kappa = 9.51, alppha = 0.21, thetap = 0.82, chi = 0.63, thetaw = 0.68, chiw = 0.62, gammmaR = 0.77, gammmay = 0.19, gammmaPI = 1.29, PIbar = 1.01, rhod = 0.12, rhophi = 0.93, sigma_A = 0.01887343313515149, sigma_d = 0.2209099779593782, sigma_phi = 0.09442022319630235, sigma_mu = 0.004383095802668776, sigma_m = 0.002879899158088243, Lambdamu = 0.0034, LambdaA = 0.0028, gammma1 = 0.03489877588693624, Rbar = 1.0165356601604938, Lambdax = 1.0044580087526465, LambdaYd = 0.004448101265822784},
+  sd = {epsd = 1.0, epsphi = 1.0, epsmu_I = 1.0, epsA = 1.0, epsm = 1.0},
+  init = {d = 1.0, c = 0.4081899838471836, mu_z = 1.0044580087526465, mu_I = 1.0034057865562385, mu_A = 1.0028039236612292, lambda = 2.587766606734911, R = 1.0165356601604938, PI = 1.01, r = 0.03489877588693624, x = 0.08845789196514077, u = 1.0, q = 1.0, f = 2.5567286062579986, ld = 0.3178450104513741, w = 1.1112732584577993, wstar = 1.1335158818104045, PIstarw = 1.0200154401118884, PIstar = 1.0186852828361062, g1 = 7.647842252450022, g2 = 8.497602502722247, yd = 0.49664787581232434, mc = 0.898249882349655, k = 2.7116064517175738, vp = 1.0022208173087117, vw = 1.0030474200760138, l = 0.3188136177172844, phi = 1.0, F = 0.049543242332765136},
+  model = ["d * (c - h * c(-1) * mu_z^(-1))^(-1) - h * betta * d(+1) * (c(+1) * mu_z(+1) - h * c)^(-1) - lambda";
+    "lambda - betta * lambda(+1) * mu_z(+1)^(-1) / PI(+1) * R";
+    "r - (gammma1 + gammma2 * (u - 1))";
+    "q - betta * lambda(+1) / lambda * mu_z(+1)^(-1) * mu_I(+1)^(-1) * ((1 - delta) * q(+1) + r(+1) * u(+1) - (gammma1 * (u(+1) - 1) + gammma2 / 2 * (u(+1) - 1)^2))";
+    "1 - (q * (1 - kappa / 2 * (x / x(-1) * mu_z - Lambdax)^2 - kappa * (x / x(-1) * mu_z - Lambdax) * x / x(-1) * mu_z) + betta * q(+1) * lambda(+1) / lambda * mu_z(+1)^(-1) * kappa * (x(+1) / x * mu_z(+1) - Lambdax) * (x(+1) / x * mu_z(+1))^2)";
+    "f - ((eta - 1) / eta * wstar^(1 - eta) * lambda * w^eta * ld + betta * thetaw * (PI^chiw / PI(+1))^(1 - eta) * (wstar(+1) / wstar * mu_z(+1))^(eta - 1) * f(+1))";
+    "f - (varpsi * d * phi * PIstarw^((-eta) * (1 + gammma)) * ld^(1 + gammma) + betta * thetaw * (PI^chiw / PI(+1))^((-eta) * (1 + gammma)) * (wstar(+1) / wstar * mu_z(+1))^(eta * (1 + gammma)) * f(+1))";
+    "g1 - (lambda * mc * yd + betta * thetap * (PI^chi / PI(+1))^(-epsilon) * g1(+1))";
+    "g2 - (lambda * PIstar * yd + betta * thetap * (PI^chi / PI(+1))^(1 - epsilon) * PIstar / PIstar(+1) * g2(+1))";
+    "epsilon * g1 - (epsilon - 1) * g2";
+    "u * k(-1) / ld - alppha / (1 - alppha) * w / r * mu_z * mu_I";
+    "mc - (1 / (1 - alppha))^(1 - alppha) * (1 / alppha)^alppha * w^(1 - alppha) * r^alppha";
+    "1 - (thetaw * (PI(-1)^chiw / PI)^(1 - eta) * (w(-1) / w * mu_z^(-1))^(1 - eta) + (1 - thetaw) * PIstarw^(1 - eta))";
+    "1 - (thetap * (PI(-1)^chi / PI)^(1 - epsilon) + (1 - thetap) * PIstar^(1 - epsilon))";
+    "R / Rbar - (R(-1) / Rbar)^gammmaR * ((PI / PIbar)^gammmaPI * (yd / yd(-1) * mu_z / exp(LambdaYd))^gammmay)^(1 - gammmaR) * exp(sigma_m * epsm)";
+    "yd - (c + x + mu_z^(-1) * mu_I^(-1) * (gammma1 * (u - 1) + gammma2 / 2 * (u - 1)^2) * k(-1))";
+    "yd - (mu_A * mu_z^(-1) * (u * k(-1))^alppha * ld^(1 - alppha) - Phi) / vp";
+    "l - vw * ld";
+    "vp - (thetap * (PI(-1)^chi / PI)^(-epsilon) * vp(-1) + (1 - thetap) * PIstar^(-epsilon))";
+    "vw - (thetaw * (w(-1) / w * mu_z^(-1) * PI(-1)^chiw / PI)^(-eta) * vw(-1) + (1 - thetaw) * PIstarw^(-eta))";
+    "k * mu_z * mu_I - (1 - delta) * k(-1) - mu_z * mu_I * (1 - kappa / 2 * (x / x(-1) * mu_z - Lambdax)^2) * x - 0";
+    "F - (yd - 1 / (1 - alppha) * w * ld)";
+    "PIstarw - wstar / w";
+    "log(d) - (rhod * log(d(-1)) + sigma_d * epsd)";
+    "log(phi) - (rhophi * log(phi(-1)) + sigma_phi * epsphi)";
+    "log(mu_I) - (Lambdamu + sigma_mu * epsmu_I)";
+    "log(mu_A) - (LambdaA + sigma_A * epsA)";
+    "mu_z - mu_A^(1 / (1 - alppha)) * mu_I^(alppha / (1 - alppha))"]});

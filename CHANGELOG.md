@@ -1,5 +1,72 @@
 # Cozy changelog
 
+## 0.1.34 — second-order solutions
+
+### Added
+- **`dsge.solve2(m, over)` solves a model to second order** (owner's
+  request). It returns what dsge.solve returns and the second-order
+  terms of the decision rule
+  `y = ybar + P y(-1) + Q e + 1/2 [Gxx (x ⊗ x) + 2 Gxu (x ⊗ e) + Guu (e ⊗ e) + s2]`
+  with `x` the state variables as they were last period: `Gxx`, `Gxu`,
+  `Guu` (Dynare's ghxx, ghxu, ghuu), `s2` (ghs2, the correction for
+  risk), `states` and `order = 2`.
+  - The second derivatives are exact. The Hessian of the equations is
+    never formed: each column the solution needs is the Hessian applied
+    to two first-order directions, and that is one pass of the
+    equations on hyper-dual numbers seeded with those directions —
+    `(nx + k)(nx + k + 1) / 2` passes for `nx` states and `k` shocks.
+  - `Gxx` solves a generalized Sylvester equation in `n nx²` unknowns.
+    On the complex Schur forms of `M \ A` and `Pxx` — `schur`, the
+    reason it was added in 0.1.31 — it separates into `nx²` triangular
+    systems of order `n`. A product of two stable roots meeting an
+    unstable one (a resonance) is reported, not divided by.
+  - `Gxx` is made exactly symmetric in its two state arguments.
+- **`dsge.simulate2(s, T)`**: a simulated path with the second-order
+  terms, pruned (Kim, Kim, Schaumburg and Sims): the first-order path
+  feeds the second-order correction and never the other way, so the
+  path cannot explode.
+- **`dsge.irf2(s, shock, T, size)`**: responses to an innovation of
+  `size` standard deviations from the steady state. To second order
+  twice the shock is not twice the response and a negative shock is not
+  the mirror image of a positive one.
+- **`dsge.mean2(s)`**: the unconditional means to second order — the
+  steady state, shifted by risk and by the curvature of the rule.
+- The first-order functions (dsge.irf, dsge.moments, dsge.vardecomp,
+  dsge.simulate) accept a second-order solution and read its
+  first-order part.
+
+### Validated
+- **Against Dynare 6.0, `stoch_simul(order = 2)`** (tests/ref_dsge2.py
+  runs it; tests/78_dsge2.test pins its numbers): ghxx, ghxu, ghuu,
+  ghs2, the second-order mean and a pruned simulation of forty periods
+  for a fixed path of shocks, on the growth model, Collard's model with
+  labour and two shocks, and a model with a labour choice — agreement
+  to 1e-11 or better relative to each quantity's size, 2e-14 on the
+  simulated path.
+- **At medium scale**: Fernández-Villaverde's New Keynesian model
+  (Dynare's NK_baseline.mod: 28 variables, 11 states, 5 shocks,
+  translated by the DSGE workbench's reader into
+  tests/data/nk_baseline.cz) — every coefficient to 1e-11, in 0.2 s.
+- And Dynare's fs2000 (cash in advance, leads of two periods) to 1e-13,
+  once its lead is given an auxiliary variable the way Dynare gives it
+  one — see the note.
+
+### Notes
+- **A lead of two periods needs care at second order.** `x(+2)` inside
+  a nonlinear term cannot be replaced by `x1(+1)` with `x1 = x(+1)`:
+  that takes the expectation of a curved function at the wrong date.
+  The curvature terms come out right and `s2`, and with it the mean,
+  come out wrong (on fs2000, by six times). The whole term needs the
+  variable: `z = g(x(+1))`, then `z(+1)`. Dynare's preprocessor does
+  this silently; this package asks for one lead per variable, so the
+  choice is the modeller's, and the package's header now says how to
+  make it. The DSGE workbench's reader makes the first-order choice
+  automatically — correct for what it computes today, and a thing to
+  change before it offers second order.
+- Scope: independent shocks, as everywhere in the package. Third order
+  is not written; neither are second-order moments beyond the mean.
+- tests/78_dsge2.test (60 cases).
+
 ## 0.1.33 — occasionally binding constraints
 
 ### Added

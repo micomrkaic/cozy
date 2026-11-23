@@ -1,6 +1,7 @@
 % dsge.cz — a mini Dynare: write a dynamic stochastic general equilibrium
 % model the way Dynare's model block reads, and get its steady state, its
-% first-order solution, impulse responses, simulations and moments.
+% solution to first or second order, impulse responses, simulations and
+% moments.
 %
 %   let m = dsge.model({vars = "c k a", shocks = "e",
 %                 params = {alpha = 0.33, beta = 0.99, ...},
@@ -12,7 +13,12 @@
 %
 % Timing is Dynare's: x is decided today, x(-1) yesterday, x(+1) is
 % tomorrow's value in expectation — so a stock chosen today for use
-% tomorrow enters production as k(-1). One lead and one lag per variable.
+% tomorrow enters production as k(-1). One lead and one lag per variable;
+% for a longer lead or lag add a variable (x1 = x(+1), and write x1(+1)).
+% To second order that is exact only where x enters linearly: if x(+2) sits
+% inside a nonlinear term, give the whole term a variable instead
+% (z = g(x(+1)), and write z(+1)), as Dynare does, or the expectation of a
+% curved function is taken at the wrong date and the risk correction is off.
 %
 % How it works. The equations are compiled once into a residual function
 % f(v, p) of v = [y(+1); y; y(-1); shocks]. The steady state solves
@@ -33,9 +39,15 @@
 % guess and verify. Cross-checked against Dynare's OccBin; see
 % tests/77_occbin.test.
 %
+% The solution to second order (dsge.solve2) adds the curvature of the
+% decision rule and the effect of risk; dsge.simulate2, dsge.irf2 and
+% dsge.mean2 use it. Cross-checked against Dynare's stoch_simul(order = 2);
+% see tests/78_dsge2.test.
+%
 % The public face is the record dsge: dsge.model, dsge.steady, dsge.bk,
 % dsge.solve, dsge.irf, dsge.simulate, dsge.moments, dsge.vardecomp,
-% dsge.occbin, and the ready-made models dsge.rbc, dsge.nk and dsge.zlb. The functions behind it (dsge_*)
+% dsge.occbin, dsge.solve2, dsge.simulate2, dsge.irf2, dsge.mean2, and the
+% ready-made models dsge.rbc, dsge.nk and dsge.zlb. The functions behind it (dsge_*)
 % and the helpers (dg_*) are ordinary globals: keep() must spare them.
 % To unload the package, clear("packages/dsge.cz"): clear("dsge") finds the
 % record first and removes only that.
@@ -571,6 +583,227 @@ let dsge_vardecomp = fn s -> (
   100 * V ./ (sum(V, 2) * ones(1, k))
 )
 
+% ---- second order -------------------------------------------------------
+% The solution to second order in the states x (the variables that appear
+% with a lag, as they stood last period, in deviation from the steady
+% state) and the shocks e:
+%
+%   y = ybar + P y(-1) + Q e
+%            + 1/2 [ Gxx (x (x) x) + 2 Gxu (x (x) e) + Guu (e (x) e) + s2 ]
+%
+% (x) is the Kronecker product, so entry (a - 1) nx + b of x (x) x is
+% x[a] x[b]. Gxx, Gxu and Guu are the second derivatives of the decision
+% rule and s2 is the effect of risk: with shocks still to come, the point
+% the economy settles at is not the steady state of the equations.
+%
+% How it is computed. Differentiating the model twice along the solution
+% gives, with M = A P + B and x restricted to the states,
+%
+%   M Gxx + A Gxx (Pxx (x) Pxx) = -Rxx
+%
+% and Gxu, Guu and s2 then follow from one linear solve each. R is the
+% Hessian of the equations applied to pairs of first-order directions; it
+% is never formed as a Hessian. Each column is one pass of the equations
+% on hyper-dual numbers seeded with two directions, which returns the
+% exact mixed second derivative along them: (nx + k)(nx + k + 1) / 2
+% passes, and no differencing. The equation for Gxx is a generalized
+% Sylvester equation in n nx^2 unknowns; it is solved on the complex Schur
+% forms of M \ A and Pxx, where it falls apart into nx^2 triangular
+% systems of order n taken in turn.
+
+% internal: for every equation, the second derivative of its residual at v
+% along the directions d1 and d2 (d1' H d2, H the equation's Hessian).
+let dg_d2 = fn m, p, v, d1, d2 -> hdual12(m.f(hdual(v, d1, d2), p))
+
+% internal: c * kron(V, V) for every row c of C, without forming the
+% Kronecker product: a row read as a q x q matrix Z becomes V.' Z V.
+let dg_rowkron = fn C, V -> (
+  let q = size(V)[1]; let out = C;
+  let Vt = V.';
+  for i = 1 : size(C)[1] do out[i, :] = reshape(Vt * reshape(C[i, :], q, q) * V, 1, q * q) end;
+  out
+)
+
+% internal: the X that solves X + K X (S (x) S) = C, for K n x n, S q x q and
+% C n x q^2. With K = U T U' and S = V R V' (complex Schur forms) and
+% Y = U' X (V (x) V) it reads Y + T Y (R (x) R) = U' C (V (x) V); R (x) R is
+% upper triangular, so the columns of Y come one after another, each from
+% a triangular system (I + R[a,a] R[b,b] T) y = c - T (Y times a column of
+% R (x) R, which involves only columns already found).
+let dg_sylv2 = fn K, S, C -> (
+  let n = size(K)[1]; let q = size(S)[1];
+  if q == 0 then return zeros(n, 0) end;
+  let sk = schur(K, "complex"); let ss = schur(S, "complex");
+  let T = sk.T; let R = ss.T;
+  let Ct = dg_rowkron(sk.U' * C, ss.U);
+  let Y = 0.0 * Ct;
+  let I = eye(n);
+  for a = 1 : q do for b = 1 : q do (
+    let j = (a - 1) * q + b;
+    let lhs = I + (R[a, a] * R[b, b]) * T;
+    if dg_rcond(lhs) < 1e-13 then
+      error("dsge: the second-order solution does not exist here — a product of two stable roots meets an unstable one (a resonance)")
+    end;
+    Y[:, j] = lhs \ (Ct[:, j] - T * (Y * kron(R[:, a], R[:, b])))
+  ) end end;
+  let X = sk.U * dg_rowkron(Y, ss.U');
+  if max(abs(imag(X))) > 1e-8 * max(1.0, max(abs(real(X)))) then
+    error("dsge: the second-order coefficients came out complex — the Schur forms were not accurate enough")
+  end;
+  real(X)
+)
+
+% dsge.solve2(m, over = {}): the solution to second order.
+% Returns what dsge.solve returns — ss, ybar, P, Q, roots, sd, params, model —
+% and the second-order terms of the decision rule
+%   y = ybar + P y(-1) + Q e + 1/2 [Gxx (x (x) x) + 2 Gxu (x (x) e) + Guu (e (x) e) + s2]
+% where x holds the state variables (those that appear with a lag) as they
+% were last period, in deviation from the steady state, and (x) is the
+% Kronecker product: Gxx (n by nx^2), Gxu (n by nx k), Guu (n by k^2), s2 (n
+% by 1, the correction for risk, which scales with the shocks' variances),
+% states (the names of the state variables, in the order of x) and order =
+% 2. The derivatives are exact (hyper-dual numbers). Use dsge.simulate2,
+% dsge.irf2 and dsge.mean2 on the result; dsge.irf, dsge.moments and the
+% rest read its first-order part.
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); [size(s.Gxx), size(s.Gxu), size(s.Guu)] %= [5, 4, 5, 2, 5, 1]
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); s.states %= ["k", "a"]
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.Guu[2, 1] %= 0.490011
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.s2[4] %= 3.85224e-05
+% e.g. let s = dsge.solve2(dsge.model(dsge.nk())); max(abs([s.Gxx[:]; s.Gxu[:]; s.Guu[:]; s.s2])) %= 0
+let dsge_solve2 = fn m, over = {} -> (
+  let s = dsge_solve(m, over);
+  let p = s.params; let n = m.n; let k = m.k;
+  let L = dg_lin_at(m, p, s.ybar);
+  let P = s.P; let Q = s.Q;
+  let st = find(m.lag > 0); let nx = numel(st);
+  let Px = P[:, st]; let Pxx = P[st, st]; let Qx = Q[st, :];
+  let M = L.A * P + L.B;
+  % how [y(+1); y; y(-1); e] moves, to first order, with z = [x; e]
+  let G1 = [Px, Q];
+  let back = zeros(n, nx + k);
+  for a = 1 : nx do back[st[a], a] = 1.0 end;
+  let V1 = [Px * G1[st, :]; G1; back; zeros(k, nx), eye(k)];
+  let v = [s.ybar; s.ybar; s.ybar; zeros(k, 1)];
+  let Rxx = zeros(n, nx * nx); let Rxu = zeros(n, nx * k); let Ruu = zeros(n, k * k);
+  for a = 1 : nx + k do for b = a : nx + k do (
+    let r = dg_d2(m, p, v, V1[:, a], V1[:, b]);
+    if b <= nx then ( Rxx[:, (a - 1) * nx + b] = r; Rxx[:, (b - 1) * nx + a] = r )
+    elseif a <= nx then ( Rxu[:, (a - 1) * k + b - nx] = r )
+    else ( Ruu[:, (a - nx - 1) * k + b - nx] = r; Ruu[:, (b - nx - 1) * k + a - nx] = r ) end
+  ) end end;
+  if dg_size([Rxx[:]; Rxu[:]; Ruu[:]]) == inf then
+    error("dsge: the equations have no finite second derivatives at the steady state")
+  end;
+  let Gxx = dg_sylv2(M \ L.A, Pxx, 0.0 - (M \ Rxx));
+  % a second derivative does not depend on the order of its two arguments;
+  % the solve leaves that true to rounding, and this makes it exact
+  for a = 1 : nx do for b = a + 1 : nx do (
+    let g = 0.5 * (Gxx[:, (a - 1) * nx + b] + Gxx[:, (b - 1) * nx + a]);
+    Gxx[:, (a - 1) * nx + b] = g; Gxx[:, (b - 1) * nx + a] = g
+  ) end end;
+  let Gxu = 0.0 - (M \ (Rxu + L.A * Gxx * kron(Pxx, Qx)));
+  let Guu = 0.0 - (M \ (Ruu + L.A * Gxx * kron(Qx, Qx)));
+  % risk: tomorrow's shocks have variance sd^2, and the equations are curved
+  let rhs = zeros(n, 1);
+  for j = 1 : k do (
+    let d = [Q[:, j]; zeros(2 * n + k, 1)];
+    rhs = rhs + (s.sd[j]^2) * (L.A * Guu[:, (j - 1) * k + j] + dg_d2(m, p, v, d, d))
+  ) end;
+  let s2 = 0.0 - ((L.A * P + L.A + L.B) \ rhs);
+  let clean = fn X -> pick(abs(X) < 1e-13 * max(1e-300, max(abs(X))), 0.0, X);
+  {model = m, params = p, ss = s.ss, ybar = s.ybar, P = P, Q = Q, roots = s.roots, sd = s.sd,
+   order = 2, states = m.vars[st], Gxx = clean(Gxx), Gxu = clean(Gxu), Guu = clean(Guu), s2 = clean(s2)}
+)
+
+% internal: a second-order solution or an error that says what was given.
+let dg_need2 = fn s, who -> (
+  if dg_find(fields(s), "Gxx") == 0 then
+    error("dsge: {} needs a second-order solution — use dsge.solve2(m), not dsge.solve(m)", who)
+  end;
+  true
+)
+
+% internal: the pruned path of a second-order solution for the shocks in E
+% (T by k, one row per period), from the steady state. Pruning (Kim, Kim,
+% Schaumburg and Sims) keeps a first-order state and a second-order
+% correction apart, and squares only the first: the path cannot explode
+% the way iterating the quadratic rule itself can. Returns {Y1, Y2}, the
+% two parts as T by n deviations; the path is ybar + Y1 + Y2.
+let dg_path2 = fn s, E -> (
+  let n = s.model.n; let T = size(E)[1];
+  let st = find(s.model.lag > 0);
+  let Y1 = zeros(T, n); let Y2 = zeros(T, n);
+  let y1 = zeros(n, 1); let y2 = zeros(n, 1);
+  for t = 1 : T do (
+    let e = E[t, :]';
+    let x = y1[st, 1];
+    y2 = s.P * y2 + 0.5 * (s.Gxx * kron(x, x) + 2.0 * (s.Gxu * kron(x, e)) + s.Guu * kron(e, e) + s.s2);
+    y1 = s.P * y1 + s.Q * e;
+    Y1[t, :] = y1'; Y2[t, :] = y2'
+  ) end;
+  {Y1 = Y1, Y2 = Y2}
+)
+
+% dsge.simulate2(s, T = 200): a simulated path of a second-order solution, in levels.
+% Like dsge.simulate — from the steady state, shocks from the session's
+% generator, a record of columns by variable — but with the second-order
+% terms, simulated with pruning so that the path stays bounded.
+% e.g. rng(1); let s = dsge.solve2(dsge.model(dsge.rbc())); length(dsge.simulate2(s, 50).c) %= 50
+% e.g. rng(1); let s = dsge.solve2(dsge.model(dsge.rbc())); let a = dsge.simulate2(s, 30); rng(1); let b = dsge.simulate(s, 30); max(abs(a.a - b.a)) %= 0
+let dsge_simulate2 = fn s, T = 200 -> (
+  dg_need2(s, "simulate2");
+  let k = s.model.k;
+  let E = zeros(T, k);
+  for t = 1 : T do E[t, :] = (s.sd .* randn(k, 1))' end;
+  let r = dg_path2(s, E);
+  dg_table(r.Y1 + r.Y2 + ones(T, 1) * s.ybar', s.model.vars)
+)
+
+% dsge.irf2(s, shock, T = 40, size = 1): impulse responses to second order.
+% The effect of one innovation of size standard deviations (negative for a
+% shock the other way) on a path that starts at the steady state and has no
+% other shocks, as deviations: a record of columns like dsge.irf's. To first
+% order a response scales with the shock; here twice the shock is not twice
+% the response, and a negative shock is not the mirror image of a positive
+% one.
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); length(dsge.irf2(s, "e").c) %= 40
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); let r = dsge.irf2(s, "e", 20); let q = dsge.irf(s, "e", 20); max(abs(r.a - q.a)) < 1e-15 %= true
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); let up = dsge.irf2(s, "e", 20, 3); let dn = dsge.irf2(s, "e", 20, -3); up.c[1] + dn.c[1] > 0 %= true
+let dsge_irf2 = fn s, shock, T = 40, size = 1 -> (
+  dg_need2(s, "irf2");
+  let j = dg_shock(s, shock);
+  let k = s.model.k;
+  let E = zeros(T, k); let E0 = zeros(T, k);
+  E[1, j] = size * s.sd[j];
+  let a = dg_path2(s, E); let b = dg_path2(s, E0);
+  dg_table(a.Y1 + a.Y2 - b.Y2, s.model.vars)
+)
+
+% dsge.mean2(s): the unconditional means to second order, by variable name.
+% To first order a variable's mean is its steady state. To second order it
+% is not: risk shifts the decision rule (s2) and the rule's curvature turns
+% the variance of the states and shocks into a change in the mean. Needs a
+% stationary model.
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); dsge.mean2(s).k %= 28.3955
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); dsge.mean2(s).k > s.ss.k %= true
+% e.g. let s = dsge.solve2(dsge.model(dsge.nk())); dsge.mean2(s).pi %= 0
+let dsge_mean2 = fn s -> (
+  dg_need2(s, "mean2");
+  let n = s.model.n; let k = s.model.k;
+  let st = find(s.model.lag > 0);
+  let QS = s.Q .* (ones(n, 1) * s.sd');
+  let Sy = dg_lyap(s.P, QS * QS');
+  let Sx = Sy[st, st];
+  let vu = zeros(k * k, 1);
+  for j = 1 : k do vu[(j - 1) * k + j] = s.sd[j]^2 end;
+  let nx = numel(st);
+  let drift = 0.5 * (s.Gxx * reshape(Sx, nx * nx, 1) + s.Guu * vu + s.s2);
+  let mu = s.ybar + (eye(n) - s.P) \ drift;
+  let r = {};
+  for i = 1 : n do r = setfield(r, s.model.vars[i], mu[i]) end;
+  r
+)
+
 % internal: the parameters of m with those entries of over that m has (the
 % two regimes of occbin share most parameters, and each may have its own).
 let dg_params_shared = fn m, over -> (
@@ -804,4 +1037,5 @@ let dsge_nk = fn -> {
 let dsge = {model = dsge_model, steady = dsge_steady, bk = dsge_bk, solve = dsge_solve,
             irf = dsge_irf, simulate = dsge_simulate, moments = dsge_moments,
             vardecomp = dsge_vardecomp, occbin = dsge_occbin,
+            solve2 = dsge_solve2, simulate2 = dsge_simulate2, irf2 = dsge_irf2, mean2 = dsge_mean2,
             rbc = dsge_rbc, nk = dsge_nk, zlb = dsge_zlb}

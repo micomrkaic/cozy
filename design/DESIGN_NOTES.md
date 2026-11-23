@@ -692,3 +692,26 @@ the method is an algorithm, not a theorem, and agreement to rounding
 error on a linear and a nonlinear model is the evidence
 (tests/ref_occbin.py). RESIDUE: two constraints (four regimes); a
 workbench that reads Dynare's occbin_constraints block.
+
+## 22. Second-order solutions — SHIPPED 0.1.34 (owner's request; the
+reason for entries 19's schur). dsge.solve2 and simulate2, irf2,
+mean2. DECIDED: never build the Hessian. The solution needs H applied
+to pairs of first-order directions, and hdual(v, d1, d2) with hdual12
+returns exactly that for all equations in one pass — exact, (nx+k)^2/2
+passes, no n x (3n+k)^2 array, no sparsity bookkeeping. DECIDED: the
+generalized Sylvester equation is solved on complex Schur forms, column
+by column, in the package (Cozy), not by a new kernel: n nx^2 unknowns
+separate into nx^2 triangular systems, 0.2 s for a 28-variable model.
+A real-arithmetic recursion on the real forms would be faster and is
+not needed yet. DECIDED: states are the variables that appear with a
+lag, so the Kronecker blocks are nx^2 wide, not n^2. DECIDED: pruning
+is the only simulation offered at second order — the unpruned
+recursion explodes, and offering it would be offering a trap.
+DECIDED: validation is against Dynare, coefficient by coefficient,
+including a medium-scale model translated mechanically from its .mod
+file (tests/data/nk_baseline.cz). LEARNED: auxiliary variables for
+leads of two periods are a first-order device unless the whole
+nonlinear term is moved (fs2000's risk correction was off sixfold
+with everything else right). RESIDUE: second-order variances and
+autocorrelations (the pruned state space); correlated shocks; third
+order.

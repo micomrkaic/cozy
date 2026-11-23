@@ -1,0 +1,168 @@
+# dsge.solve2 and its companions — the solution to second order.
+# The reference numbers come from Dynare 6.0, stoch_simul(order = 2), on the
+# same models (tests/ref_dsge2.py, which needs Octave and Dynare and is not
+# part of the suite): the second derivatives of the decision rule (Dynare's
+# ghxx, ghxu, ghuu), the correction for risk (ghs2), the second-order mean,
+# and a pruned simulation for a fixed path of shocks. Assertions are
+# closeness to those numbers, relative to the size of each quantity.
+
+# --- the stochastic growth model (dsge.rbc) ---
+load("dsge"); let m = dsge.model(dsge.rbc()); let s = dsge.solve2(m); [s.order, numel(s.states)]
+=> [2, 2]
+.. s.states
+=> ["k", "a"]
+.. [size(s.Gxx), size(s.Gxu), size(s.Guu), size(s.s2)]
+=> [5, 4, 5, 2, 5, 1, 5, 1]
+.. max(abs(s.Gxx - [-0.000829593943741, 0.03334595959596, 0.03334595959596, 2.721333256934; -0.0005531948613831, 0.00785293730135, 0.00785293730135, 0.4422351444002; -0.0002763990823579, 0.02549302229461, 0.02549302229461, 2.279098112533; -0.0002763990823579, 0.02549302229461, 0.02549302229461, 2.279098112533; 0, 0, 0, 0])) < 2.72e-09
+=> true
+.. max(abs(s.Gxu - [0.03510101010101, 2.864561323088; 0.008266249790895, 0.465510678316; 0.02683476031012, 2.399050644772; 0.02683476031012, 2.399050644772; 0, 0])) < 2.86e-09
+=> true
+.. max(abs(s.Guu - [3.015327708514; 0.4900112403327; 2.525316468181; 2.525316468181; 0])) < 3.02e-09
+=> true
+.. max(abs(s.s2 - [0; -3.852237213175e-05; 3.852237213175e-05; 3.852237213175e-05; 0])) < 3.85e-13
+=> true
+# Gxx is symmetric in its two state arguments: the derivative with respect to (a, b) is the one with respect to (b, a)
+.. let sym = 0.0; for a = 1 : 2 do for b = 1 : 2 do sym = max(sym, max(abs(s.Gxx[:, (a - 1) * 2 + b] - s.Gxx[:, (b - 1) * 2 + a]))) end end; sym
+=> 0
+# the mean to second order
+.. let mu = dsge.mean2(s); let mv = zeros(5, 1); for i = 1 : 5 do mv[i] = getfield(mu, m.vars[i]) end; max(abs(mv - [3.018773462666; 2.308886135914; 0.7098873267516; 28.39549307007; 0])) < 1e-10
+=> true
+# a pruned simulation, for the shocks sd * sin(1.3 t + j): Dynare's path at periods 1, 20 and 40
+.. let E = zeros(40, 1); for t = 1 : 40 do for j = 1 : 1 do E[t, j] = s.sd[j] * sin(1.3 * t + j) end end; let pth = dg_path2(s, E); let Y = pth.Y1 + pth.Y2 + ones(40, 1) * s.ybar'; max(abs(Y[[1, 20, 40], :] - [3.037897002009, 2.312164802642, 0.7257321993667, 28.36544078389, 0.007457052121767; 3.034645537936, 2.310328812776, 0.7243167251603, 28.3384111982, 0.006692183263205; 3.039040820214, 2.311801494242, 0.7272393259721, 28.35098264328, 0.008024304115393])) < 1e-10
+=> true
+# the first-order part of that path is the first-order solution's
+.. let y1 = zeros(5, 1); let worst = 0.0; for t = 1 : 40 do ( y1 = s.P * y1 + s.Q * E[t, :]'; worst = max(worst, max(abs(y1' - pth.Y1[t, :]))) ) end; worst
+=> 0
+
+# --- Collard's model with labour and two shocks (Dynare's example1, shocks independent) ---
+load("dsge"); let m = dsge.model({vars = "y c k a h b", shocks = "e u", params = {alpha = 0.36, rho = 0.95, tau = 0.025, beta = 0.99, delta = 0.025, psi = 0.0, theta = 2.95}, sd = {e = 0.009, u = 0.009}, init = {y = 1.08068253095672, c = 0.80359242014163, h = 0.29175631001732, k = 11.08360443260358, a = 0.0, b = 0.0}, model = ["c * theta * h^(1 + psi) = (1 - alpha) * y"; "k = beta * (((exp(b) * c) / (exp(b(+1)) * c(+1))) * (exp(b(+1)) * alpha * y(+1) + (1 - delta) * k))"; "y = exp(a) * (k(-1)^alpha) * (h^(1 - alpha))"; "k = exp(b) * (y - c) + (1 - delta) * k(-1)"; "a = rho * a(-1) + tau * b(-1) + e"; "b = tau * a(-1) + rho * b(-1) + u"]}); let s = dsge.solve2(m); [s.order, numel(s.states)]
+=> [2, 3]
+.. s.states
+=> ["k", "a", "b"]
+.. [size(s.Gxx), size(s.Gxu), size(s.Guu), size(s.s2)]
+=> [6, 9, 6, 6, 6, 4, 6, 1]
+.. max(abs(s.Gxx - [-0.0013850708393, 0.03101329764224, 0.02605690032999, 0.03101329764224, 2.709679047514, 1.010715686141, 0.02605690032999, 1.010715686141, 0.236411315317; -0.001240594353999, 0.01120079583079, -0.02445019126798, 0.01120079583079, 0.3966537877919, 0.003914876400689, -0.02445019126798, 0.003914876400689, 0.2987497294932; -0.0001444764853011, 0.01898291830371, 0.01898291830371, 0.01898291830371, 2.383805168068, 2.383805168068, 0.01898291830371, 2.383805168068, 2.383805168068; 0, -4.798047682263e-18, 0, -4.798047682263e-18, -2.357082768003e-16, -3.97498815332e-17, 0, -3.97498815332e-17, -4.518672957588e-17; 0.001279986103189, -0.005454016682691, -0.005454016682691, -0.005454016682691, 0.2264379832927, 0.2264379832927, -0.005454016682691, 0.2264379832927, 0.2264379832927; -7.393794713829e-64, -1.715770653735e-48, 0, 0, 0, -3.197157050844e-32, 0, -3.235055540185e-32, 0])) < 2.71e-09
+=> true
+.. max(abs(s.Gxu - [0.03194590187319, 0.02658763450859, 2.826253308923, 0.9895361614921, 1.058095211588, 0.2210094052919; 0.01247624207451, -0.02606536559984, 0.4177111312458, -0.006871475663637, -0.004157572453693, 0.3145828092679; 0.01946965979867, 0.01946965979867, 2.444928377505, 2.444928377505, 2.444928377505, 2.444928377505; -5.075128541095e-18, 0, -2.651376167096e-16, 0, 0, -1.624041133151e-16; -0.005593863264299, -0.005593863264299, 0.2322440854284, 0.2322440854284, 0.2322440854284, 0.2322440854284; 0, 0, -1.029344028685e-16, 0, 0, 0])) < 2.83e-09
+=> true
+.. max(abs(s.Guu - [2.947734733957, 1.036212466567, 1.036212466567, 0.2053727301344; 0.4401158852333, -0.01595838903634, -0.01595838903634, 0.3315597568356; 2.507618848723, 2.507618848723, 2.507618848723, 2.507618848723; 0, -2.030051416438e-17, 0, -1.624041133151e-16; 0.2381990619779, 0.2381990619779, 0.2381990619779, 0.2381990619779; 0, 0, 0, 0])) < 2.95e-09
+=> true
+.. max(abs(s.s2 - [0.0004914014385399; -0.0002055401412713; 0.0006969415798113; -4.29135236793e-21; 0.000207290107089; 0])) < 6.97e-12
+=> true
+# Gxx is symmetric in its two state arguments: the derivative with respect to (a, b) is the one with respect to (b, a)
+.. let sym = 0.0; for a = 1 : 3 do for b = 1 : 3 do sym = max(sym, max(abs(s.Gxx[:, (a - 1) * 3 + b] - s.Gxx[:, (b - 1) * 3 + a]))) end end; sym
+=> 0
+# the mean to second order
+.. let mu = dsge.mean2(s); let mv = zeros(6, 1); for i = 1 : 6 do mv[i] = getfield(mu, m.vars[i]) end; max(abs(mv - [1.084393764876; 0.8062445393991; 11.17756755853; 0; 0.2916772084026; 0])) < 1e-10
+=> true
+# a pruned simulation, for the shocks sd * sin(1.3 t + j): Dynare's path at periods 1, 20 and 40
+.. let E = zeros(40, 2); for t = 1 : 40 do for j = 1 : 2 do E[t, j] = s.sd[j] * sin(1.3 * t + j) end end; let pth = dg_path2(s, E); let Y = pth.Y1 + pth.Y2 + ones(40, 1) * s.ybar'; max(abs(Y[[1, 20, 40], :] - [1.092634288174, 0.8070542962483, 11.09168971233, 0.00671134690959, 0.2937178861432, -0.001419711247289; 1.092695791071, 0.8004803931806, 11.00445424798, 0.004692194382766, 0.2961469576828, 0.003975989830776; 1.092991812676, 0.8031145348737, 11.02134594604, 0.006214567001342, 0.295255868557, 0.0006737492084115])) < 1e-10
+=> true
+# the first-order part of that path is the first-order solution's
+.. let y1 = zeros(6, 1); let worst = 0.0; for t = 1 : 40 do ( y1 = s.P * y1 + s.Q * E[t, :]'; worst = max(worst, max(abs(y1' - pth.Y1[t, :]))) ) end; worst
+=> 0
+
+# --- a growth model with a labour choice, wage and rental rate ---
+load("dsge"); let m = dsge.model({vars = "y c i n k w r a", shocks = "e", params = {alpha = 0.33, beta = 0.99, delta = 0.025, rho = 0.95, sigma = 2.0, phi = 1.0, psi = 8.0}, sd = {e = 0.007}, init = {y = 1.0, c = 0.75, i = 0.25, n = 0.33, k = 10.0, w = 2.0, r = 0.035, a = 0.0}, model = ["c^(-sigma) = beta * c(+1)^(-sigma) * (r(+1) + 1 - delta)"; "psi * n^phi * c^sigma = w"; "y = exp(a) * k(-1)^alpha * n^(1 - alpha)"; "w = (1 - alpha) * y / n"; "r = alpha * y / k(-1)"; "k = (1 - delta) * k(-1) + i"; "y = c + i"; "a = rho * a(-1) + e"]}); let s = dsge.solve2(m); [s.order, numel(s.states)]
+=> [2, 2]
+.. s.states
+=> ["k", "a"]
+.. [size(s.Gxx), size(s.Gxu), size(s.Guu), size(s.s2)]
+=> [8, 4, 8, 2, 8, 1, 8, 1]
+.. max(abs(s.Gxx - [-0.001610507292701, 0.02579530290865, 0.02579530290865, 1.258692031898; -0.001513302881412, 0.001725959127565, 0.001725959127565, 0.1425570703985; -9.72044112891e-05, 0.02406934378108, 0.02406934378108, 1.116134961499; 0.001100534604071, 0.002616876547573, 0.002616876547573, -0.01739992420537; -9.72044112891e-05, 0.02406934378108, 0.02406934378108, 1.116134961499; -0.004315127235476, 0.06417804328596, 0.06417804328596, 1.609786099102; 0.0005257434311805, -0.002949423703624, -0.002949423703624, 0.0404683181278; -9.763698826487e-19, 0, 0, 0])) < 1.61e-09
+=> true
+.. max(abs(s.Gxu - [0.02715295043016, 1.324938980945; 0.001816799081647, 0.1500600741037; 0.02533615134851, 1.174878906841; 0.002754606892182, -0.01831570968986; 0.02533615134851, 1.174878906841; 0.06755583503785, 1.694511683266; -0.003104656530131, 0.04259822960821; 0, 0])) < 1.69e-09
+=> true
+.. max(abs(s.Guu - [1.394672611521; 0.1579579727407; 1.236714638781; -0.01927969441038; 1.236714638781; 1.783696508701; 0.04484024169285; 0])) < 1.78e-09
+=> true
+.. max(abs(s.s2 - [0.0001504769760188; -0.0001142504478896; 0.0002647274239084; 7.448361280484e-05; 0.0002647274239084; -0.0001371496083126; 4.837998479466e-06; 0])) < 2.65e-12
+=> true
+# Gxx is symmetric in its two state arguments: the derivative with respect to (a, b) is the one with respect to (b, a)
+.. let sym = 0.0; for a = 1 : 2 do for b = 1 : 2 do sym = max(sym, max(abs(s.Gxx[:, (a - 1) * 2 + b] - s.Gxx[:, (b - 1) * 2 + a]))) end end; sym
+=> 0
+# the mean to second order
+.. let mu = dsge.mean2(s); let mv = zeros(8, 1); for i = 1 : 8 do mv[i] = getfield(mu, m.vars[i]) end; max(abs(mv - [1.092416151144; 0.8354587598584; 0.2569573912854; 0.3620412954866; 10.27829565141; 2.021916847834; 0.03509136867829; -7.065744567597e-19])) < 1e-10
+=> true
+# a pruned simulation, for the shocks sd * sin(1.3 t + j): Dynare's path at periods 1, 20 and 40
+.. let E = zeros(40, 1); for t = 1 : 40 do for j = 1 : 1 do E[t, j] = s.sd[j] * sin(1.3 * t + j) end end; let pth = dg_path2(s, E); let Y = pth.Y1 + pth.Y2 + ones(40, 1) * s.ybar'; max(abs(Y[[1, 20, 40], :] - [1.098474595014, 0.8365698314003, 0.2619047636136, 0.3625645240653, 10.26934218625, 2.029923686509, 0.03531715323509, 0.005219936485237; 1.097700601459, 0.8362335325121, 0.2614670689473, 0.3625825221293, 10.26276414766, 2.028392299804, 0.03531397853624, 0.004684528284244; 1.098947024354, 0.8366119992407, 0.2623350251138, 0.362624227073, 10.26743660585, 2.030461935916, 0.03534066020829, 0.005617012880775])) < 1e-10
+=> true
+# the first-order part of that path is the first-order solution's
+.. let y1 = zeros(8, 1); let worst = 0.0; for t = 1 : 40 do ( y1 = s.P * y1 + s.Q * E[t, :]'; worst = max(worst, max(abs(y1' - pth.Y1[t, :]))) ) end; worst
+=> 0
+# --- responses and simulations to second order ---
+load("dsge"); let s = dsge.solve2(dsge.model(dsge.rbc())); let r = dsge.irf2(s, "e", 20); let q = dsge.irf(s, "e", 20); fields(r)
+=> ["y"; "c"; "i"; "k"; "a"]
+# the shock's own process is linear, so its response is the first-order one; the others differ by a second-order term
+.. [max(abs(r.a - q.a)) == 0, max(abs(r.c - q.c)) > 0, max(abs(r.c - q.c)) < 1e-4]
+=> [true, true, true]
+# a response is size * (first order) + size^2 * (second order): twice the shock is not twice the response
+.. let r2 = dsge.irf2(s, "e", 20, 2); max(abs((r2.c - 2 * r.c) - 2 * (r.c - q.c))) < 1e-15
+=> true
+# ... and a negative shock is not the mirror image of a positive one: on impact the two differ by Guu e^2
+.. let up = dsge.irf2(s, "e", 20, 3); let dn = dsge.irf2(s, "e", 20, -3); abs(up.c[1] + dn.c[1] - s.Guu[2, 1] * 0.03^2) < 1e-15
+=> true
+.. [up.c[1] > -dn.c[1], length(dsge.irf2(s, "e").k) == 40]
+=> [true, true]
+# simulate2 draws the shocks simulate draws: the linear variable is the same, the others carry the correction
+.. rng(4); let a = dsge.simulate2(s, 60); rng(4); let b = dsge.simulate(s, 60); [max(abs(a.a - b.a)) == 0, max(abs(a.k - b.k)) > 0, length(a.y) == 60]
+=> [true, true, true]
+# the path is bounded and near the first-order one (pruning), and it satisfies the resource constraint to second order
+.. [max(abs(a.k - b.k)) < 0.5, max(abs(a.y - a.c - a.i)) < 1e-12]
+=> [true, true]
+# the first-order functions read the first-order part of a second-order solution
+.. let s1 = dsge.solve(dsge.model(dsge.rbc())); [max(abs(dsge.moments(s).sd - dsge.moments(s1).sd)), max(abs(s.P - s1.P)), max(abs(dsge.irf(s, "e", 5).k - dsge.irf(s1, "e", 5).k))]
+=> [0, 0, 0]
+# risk raises the mean of capital (precautionary saving) and the mean of consumption with it
+.. let mu = dsge.mean2(s); [mu.k > s.ss.k, mu.c > s.ss.c, mu.a == 0]
+=> [true, true, true]
+# no risk, no correction: with the shock's size at zero s2 vanishes and the mean is the steady state
+.. let m0 = dsge.model(setfield(dsge.rbc(), "sd", {e = 0.0})); let s0 = dsge.solve2(m0); [max(abs(s0.s2)), abs(dsge.mean2(s0).k - s0.ss.k)]
+=> [0, 0]
+# the correction scales with the variance: twice the standard deviation, four times s2
+.. let m2 = dsge.model(setfield(dsge.rbc(), "sd", {e = 0.02})); max(abs(dsge.solve2(m2).s2 - 4 * s.s2)) < 1e-15
+=> true
+# over reaches the second-order solution too
+.. let so = dsge.solve2(dsge.model(dsge.rbc()), {rho = 0.9}); [so.P[5, 5] == 0.9, max(abs(so.Gxx - s.Gxx)) > 0]
+=> [true, true]
+
+# a linear model has no second-order terms, and its second-order functions agree with the first-order ones
+load("dsge"); let s = dsge.solve2(dsge.model(dsge.nk())); [max(abs(s.Gxx)), max(abs(s.Gxu)), max(abs(s.Guu)), max(abs(s.s2))]
+=> [0, 0, 0, 0]
+.. [max(abs(dsge.irf2(s, "ev", 12).pi - dsge.irf(s, "ev", 12).pi)), dsge.mean2(s).x]
+=> [0, 0]
+
+# --- what is refused, and why ---
+load("dsge"); let s1 = dsge.solve(dsge.model(dsge.rbc())); dsge.irf2(s1, "e")
+=> !irf2 needs a second-order solution — use dsge.solve2(m)
+.. dsge.simulate2(s1, 10)
+=> !simulate2 needs a second-order solution
+.. dsge.mean2(s1)
+=> !mean2 needs a second-order solution
+.. dsge.irf2(dsge.solve2(dsge.model(dsge.rbc())), "nope")
+=> !'nope' is not a shock of this model
+.. dsge.solve2(dsge.model(dsge.nk()), {phi_pi = 0.9})
+=> !indeterminacy
+# a model with a unit root has no unconditional mean
+.. let w = dsge.model({vars = "x d", shocks = "e", params = {g = 0.5}, init = {x = 0.0, d = 0.0}, model = ["x = x(-1) + e"; "d = g * (x - x(-1))^2"]}); dsge.mean2(dsge.solve2(w))
+=> !unit root
+
+# --- a medium-scale model: Fernandez-Villaverde's New Keynesian model (Dynare's NK_baseline.mod) ---
+# 28 variables, 11 states, 5 shocks: 66 unknown state pairs for each variable, found on Schur forms
+load("dsge"); load("tests/data/nk_baseline.cz"); let s = dsge.solve2(nk_baseline); [nk_baseline.n, numel(s.states), nk_baseline.k]
+=> [28, 11, 5]
+.. s.states
+=> ["d", "c", "R", "PI", "x", "w", "yd", "k", "vp", "vw", "phi"]
+# Dynare's ghxx: the sum of its entries and of their squares (neither depends on how the columns are ordered)
+.. [abs(sum(sum(s.Gxx)) / 386.6727168234 - 1) < 1e-7, abs(sum(sum(s.Gxx .^ 2)) / 120135.0715673 - 1) < 1e-7]
+=> [true, true]
+# Dynare's ghxu: the sum of its entries and of their squares (neither depends on how the columns are ordered)
+.. [abs(sum(sum(s.Gxu)) / -5.513283988871 - 1) < 1e-7, abs(sum(sum(s.Gxu .^ 2)) / 39.89234316405 - 1) < 1e-7]
+=> [true, true]
+# Dynare's ghuu: the sum of its entries and of their squares (neither depends on how the columns are ordered)
+.. [abs(sum(sum(s.Guu)) / 0.1098163538253 - 1) < 1e-7, abs(sum(sum(s.Guu .^ 2)) / 0.01386039168891 - 1) < 1e-7]
+=> [true, true]
+# the correction for risk and the second-order mean, variable by variable
+.. max(abs(s.s2 - [0.000000000000; -0.004271716445468; 0.000000000000; 0.000000000000; 0.000000000000; 0.7748164017331; 0.0005026157526289; 0.003305092066787; -0.00001101288510662; -0.0001093358486834; -0.01101288510662; 0.002623142850275; 0.6592942080606; -0.003186143508911; -0.001449374512903; 0.004623505506221; 0.005490899597777; 0.01854359905412; 2.905783375900; 3.228648195445; -0.005415073805572; -0.0009850422752999; -0.0001093358486834; 0.0006729090371693; 0.0004461752166787; -0.003054038460197; 0.000000000000; -0.0003500705951121])) < 3.23e-7
+=> true
+.. let mu = dsge.mean2(s); let mv = zeros(28, 1); for i = 1 : 28 do mv[i] = getfield(mu, nk_baseline.vars[i]) end; max(abs(mv - [1.024757111588; 0.3832372294954; 1.004745338872; 1.003415425036; 1.002982526288; 2.805743448569; 1.014258426380; 1.008251958960; 0.03424611356926; 0.1589450386945; 0.3473376823235; 0.9992594029440; 2.592842196344; 0.2954571655119; 1.110434577132; 1.132826935078; 1.020513226610; 1.017757879094; 7.724910669719; 8.583234077465; 0.4623851912250; 0.8940815768119; 4.883596634210; 1.004656829277; 1.005587818290; 0.2971150905172; 1.032994739261; 0.04669705913315])) < 1e-8
+=> true
