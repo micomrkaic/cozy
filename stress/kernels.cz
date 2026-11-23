@@ -1,0 +1,180 @@
+% kernels.cz — svd, eig and rcond against what they must satisfy, on about
+% two thousand matrices (seeded: reproducible) of every size to 40 and every
+% scale from 1e-150 to 1e150, real and complex, and the awkward kinds: rank
+% deficient, graded, repeated and defective spectra, triangular, cyclic.
+% Run under each backend (make stress, make BACKEND=openblas stress): the
+% built-in kernels and LAPACK's must both pass.
+%
+% Scale is the point. Until 0.1.35 the built-in svd and symmetric eig stopped
+% on absolute thresholds: svd was wrong for entries below about 1e-7 and
+% eig for entries below about 1e-15, and no test here used such a matrix.
+% Every check below is relative to the size of the matrix it is made on.
+rng(35);
+let count = 0; let suspects = 0;
+let worst = 0.0;
+let note = fn what, value, limit -> (
+  count = count + 1;
+  if !(value <= limit) then (
+    suspects = suspects + 1;
+    if suspects <= 20 then print("  SUSPECT", what, value, "limit", limit) end
+  ) end;
+  if value > worst then (worst = value) end;
+  0
+)
+let must = fn what, ok -> (
+  count = count + 1;
+  if !ok then (
+    suspects = suspects + 1;
+    if suspects <= 20 then print("  SUSPECT", what) end
+  ) end;
+  0
+)
+let big = fn M -> max(1e-300, max(max(abs(M))))
+let scales = [1e-150, 1e-30, 1e-16, 1e-8, 1.0, 1e8, 1e30, 1e150];
+let unitcols = fn V -> (let n = size(V)[2]; let w = 0.0; for j = 1 : n do (w = max(w, abs(norm(V[:, j]) - 1))) end; w)
+
+% ---- svd ---------------------------------------------------------------------
+let svdcheck = fn tag, A -> (
+  let f = svd(A); let k = numel(f.S); let s = big(A);
+  note(tag + " recon", max(max(abs(f.U * diag(f.S) * f.V' - A))) / s, 1e-12);
+  note(tag + " orth U", max(max(abs(f.U' * f.U - eye(k)))), 1e-12);
+  note(tag + " orth V", max(max(abs(f.V' * f.V - eye(k)))), 1e-12);
+  let order = 0.0;
+  for i = 1 : k do (
+    if f.S[i] < 0 then (order = 1.0) end;
+    if (i > 1) && (f.S[i] > f.S[max(i - 1, 1)]) then (order = 1.0) end
+  ) end;
+  note(tag + " order", order, 0.0);
+  % the squared singular values add up to the squared entries
+  let B = A / s;
+  note(tag + " sum", abs(sum((f.S / s) .^ 2) - sum(sum(abs(B) .^ 2))) / max(1e-300, sum(sum(abs(B) .^ 2))), 1e-12);
+  0
+)
+worst = 0.0; let before = count;
+for sc = scales do (
+  for n = [1, 2, 3, 5, 8, 13, 21, 40] do (
+    svdcheck("svd square", randn(n, n) * sc);
+    svdcheck("svd complex", (randn(n, n) + 1i * randn(n, n)) * sc)
+  ) end;
+  let shapes = [1, 6; 6, 1; 3, 7; 7, 3; 12, 30; 30, 12; 2, 40];
+  for q = 1 : 7 do (
+    svdcheck("svd rectangular", randn(shapes[q, 1], shapes[q, 2]) * sc)
+  ) end;
+  % rank deficient: the trailing singular values are rounding, relative to the first
+  let ranks = [4, 1; 9, 3; 20, 6];
+  for q = 1 : 3 do (
+    let n = ranks[q, 1]; let r = ranks[q, 2];
+    let A = randn(n, r) * randn(r, n) * sc;
+    svdcheck("svd low rank", A);
+    let S = svd(A).S;
+    note("svd low rank tail", S[r + 1] / S[1], 1e-12)
+  ) end;
+  % known singular values: orthogonal times diagonal times orthogonal
+  for n = [3, 6, 15] do (
+    let d = zeros(n, 1); for i = 1 : n do (d[i] = 10 ^ (-8 * (i - 1) / (n - 1))) end;
+    let A = qr(randn(n, n)).Q * diag(d) * qr(randn(n, n)).Q' * sc;
+    svdcheck("svd graded", A);
+    note("svd graded values", max(abs(svd(A).S / sc - d)), 1e-13)
+  ) end;
+  svdcheck("svd zero", zeros(4, 4) * sc);
+  svdcheck("svd identity", eye(5) * sc);
+  svdcheck("svd rank one", ones(5, 3) * sc)
+) end;
+print("  svd:", count - before, "checks, worst =", worst);
+
+% ---- eig, symmetric and Hermitian ----------------------------------------------
+let symcheck = fn tag, H -> (
+  let f = eig(H); let n = size(H)[1]; let s = big(H);
+  note(tag + " residual", max(max(abs(H * f.vectors - f.vectors * diag(f.values)))) / s, 1e-12);
+  note(tag + " orth", max(max(abs(f.vectors' * f.vectors - eye(n)))), 1e-12);
+  let order = 0.0;
+  for i = 2 : n do (if f.values[i] < f.values[i - 1] then (order = 1.0) end) end;
+  note(tag + " order", order, 0.0);
+  note(tag + " trace", abs(sum(f.values) - real(trace(H))) / (n * s), 1e-13);
+  0
+)
+worst = 0.0; before = count;
+for sc = scales do (
+  for n = [1, 2, 3, 5, 8, 13, 21, 40] do (
+    let A = randn(n, n); symcheck("eig symmetric", (A + A') * sc);
+    let Z = randn(n, n) + 1i * randn(n, n); symcheck("eig hermitian", (Z + Z') * sc);
+    symcheck("eig positive", A * A' * sc)
+  ) end;
+  symcheck("eig sym identity", eye(6) * sc);
+  symcheck("eig sym zero diagonal", [0, 1; 1, 0] * sc);
+  symcheck("eig sym diagonal", diag([3, -1, 2, 2, 0]) * sc);
+  symcheck("eig sym ones", ones(7, 7) * sc);
+  % known eigenvalues, spread over eight orders of magnitude
+  let d = [1; 1e-2; 1e-4; 1e-6; 1e-8; -3; 0.5];
+  let Q = qr(randn(7, 7)).Q; let H = Q * diag(d) * Q'; H = (H + H') / 2 * sc;
+  symcheck("eig sym graded", H);
+  note("eig sym graded values", max(abs(eig(H).values / sc - sort(d))), 1e-13)
+) end;
+print("  eig, symmetric:", count - before, "checks, worst =", worst);
+
+% ---- eig, general -----------------------------------------------------------------
+let gencheck = fn tag, A, tol -> (
+  let f = eig(A); let s = big(A);
+  note(tag + " residual", max(max(abs(A * f.vectors - f.vectors * diag(f.values)))) / s, tol);
+  note(tag + " unit", unitcols(f.vectors), 1e-12);
+  note(tag + " trace", abs(sum(f.values) - trace(A)) / (size(A)[1] * s), 1e-12);
+  0
+)
+worst = 0.0; before = count;
+for sc = scales do (
+  for n = [1, 2, 3, 5, 8, 13, 21, 40] do (
+    gencheck("eig general", randn(n, n) * sc, 1e-11);
+    gencheck("eig general complex", (randn(n, n) + 1i * randn(n, n)) * sc, 1e-11)
+  ) end;
+  % triangular either way round: the eigenvalues are the diagonal, exactly
+  let T = [2, 5, 1; 0, 3, 4; 0, 0, -1] * sc;
+  gencheck("eig triangular", T, 1e-13);
+  % (to rounding, not to the bit: at the far scales LAPACK rescales by a number that is not a power of two)
+  note("eig triangular values", max(abs(eig(T).values - [-1; 2; 3] * sc)) / sc, 1e-15);
+  note("eig triangular values, lower", max(abs(eig(T').values - [-1; 2; 3] * sc)) / sc, 1e-15);
+  % an eigenvalue that occurs twice with two eigenvectors: both must be found
+  let S = [1, 2, 0; 0, 1, 3; 1, 0, 1]; let A = S * diag([2, 2, 5]) * inv(S) * sc;
+  gencheck("eig repeated", A, 1e-12);
+  let V = eig(A).vectors; let sv = svd(V).S;
+  must("eig repeated: independent vectors", sv[3] / sv[1] > 1e-6);
+  % a defective matrix has one eigenvector for its double eigenvalue: the equation still holds
+  gencheck("eig defective", [1, 1; 0, 1] * sc, 1e-12);
+  gencheck("eig jordan", [2, 1, 0; 0, 2, 1; 0, 0, 2] * sc, 1e-12);
+  % a cyclic shift: eigenvalues on the unit circle
+  let C = zeros(6, 6); for i = 1 : 6 do (C[i, mod(i, 6) + 1] = 1) end;
+  gencheck("eig cyclic", C * sc, 1e-12);
+  note("eig cyclic moduli", max(abs(abs(eig(C * sc).values) / sc - 1)), 1e-12);
+  % a rotation: a complex pair from a real matrix
+  gencheck("eig rotation", [0, -1; 1, 0] * sc, 1e-13);
+  % a companion matrix: the roots of (x - 1)(x - 2)(x - 3)(x - 4)
+  let P = [10, -35, 50, -24; 1, 0, 0, 0; 0, 1, 0, 0; 0, 0, 1, 0];
+  note("eig companion", max(abs(real(eig(P).values) - [1; 2; 3; 4])), 1e-10)
+) end;
+print("  eig, general:", count - before, "checks, worst =", worst);
+
+% ---- rcond ------------------------------------------------------------------------------
+worst = 0.0; before = count;
+let norm1 = fn M -> max(sum(abs(M), 1))
+for sc = scales do (
+  for n = [1, 2, 3, 5, 8, 13, 21, 40] do (
+    let A = randn(n, n) + n * eye(n);                   % comfortably invertible
+    let r = rcond(A * sc);
+    note("rcond definition", abs(r * norm1(A) * norm1(inv(A)) - 1), 1e-10);
+    note("rcond scale", abs(r / rcond(A) - 1), 1e-12);
+    must("rcond range", (r > 0) && (r <= 1));
+    % within a factor n of the ratio of the extreme singular values, either way
+    let S = svd(A).S; let r2 = S[n] / S[1];
+    must("rcond against svd", (r <= n * r2) && (r2 <= n * r));
+    let Z = A + 1i * randn(n, n);
+    note("rcond complex", abs(rcond(Z * sc) * norm1(Z) * norm1(inv(Z)) - 1), 1e-10)
+  ) end;
+  note("rcond identity", abs(rcond(eye(7) * sc) - 1), 0.0);
+  must("rcond zero row", rcond([1, 2, 3; 0, 0, 0; 4, 5, 6] * sc) == 0);
+  must("rcond zero column", rcond([1, 0, 3; 2, 0, 1; 4, 0, 6] * sc) == 0);
+  must("rcond singular in exact arithmetic", rcond([1, 2, 3; 4, 5, 6; 7, 8, 9] * sc) < 1e-15);
+  must("rcond nearly singular", rcond([1, 1; 1, 1 + 1e-10] * sc) < 1e-9)
+) end;
+print("  rcond:", count - before, "checks, worst =", worst);
+
+assert(suspects == 0, "kernels: a decomposition failed its checks");
+print("kernels: all green,", count, "checks")

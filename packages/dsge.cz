@@ -286,14 +286,16 @@ let dg_params = fn m, over -> (
 
 % internal: the size of a residual — its largest entry, or inf if any entry
 % is not a finite real number (so a search never steps there).
-let dg_size = fn r -> if any(isnan(real(r))) || any(isinf(real(r))) || any(imag(r) != 0) then inf else max(abs(r)) end
-
-% internal: smallest over largest singular value (0 for a singular matrix).
-let dg_rcond = fn M -> (
-  if any(isnan(M)) || any(isinf(M)) then return 0.0 end;
-  let sv = svd(M).S;
-  if max(sv) == 0 then 0.0 else min(sv) / max(sv) end
+let dg_size = fn r -> (
+  let m = max(abs(r));                     % nan if any entry is (max does not skip it), inf if any is
+  if isnan(m) || isinf(m) || any(imag(r) != 0) then inf else m end
 )
+
+% internal: how far a matrix is from singular, on a scale from 1 (perfect)
+% to 0 (singular, or not made of finite numbers). The core's rcond: one LU
+% factorisation, where the ratio of the extreme singular values that stood
+% here before cost a whole SVD on every pass of every loop.
+let dg_rcond = fn M -> (let r = rcond(M); if isnan(r) then 0.0 else r end)
 
 % internal: the steady state as a column — from the model's steady function
 % if it has one (checked against the equations), else by damped Newton from
@@ -372,7 +374,8 @@ let dg_cr = fn A, B, C -> (
   while (state == 0) && (it < 60) do (
     if dg_rcond(A1) < 1e-14 then (state = 2)
     else (
-      let K0 = A1 \ A0; let K2 = A1 \ A2;
+      let K = A1 \ [A0, A2];                % one factorisation for both
+      let K0 = K[:, 1 : n]; let K2 = K[:, n + 1 : 2 * n];
       let dA = A2 * K0;
       A1 = A1 - A0 * K2 - dA;
       Ah = Ah - dA;

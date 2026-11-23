@@ -5664,6 +5664,77 @@ static Value bi_inv(Interp *I, Value *args, uint32_t n)
     return inv_via_solve(I, args[0], a->rows);
 }
 
+/* rcond(A): the reciprocal condition number of a square matrix in the
+ * 1-norm, 1 / (norm1(A) * norm1(inv(A))). It is 1 for the identity, falls
+ * towards 1e-16 as the matrix approaches a singular one, and is exactly 0
+ * when elimination meets a zero pivot (or the inverse overflows). It is the
+ * cheap question to ask before solving: one LU factorisation and n
+ * substitutions, through the same solve kernels as A \ b, where the ratio
+ * of the extreme singular values costs a whole SVD. A number or a 1x1
+ * matrix is its own inverse's reciprocal: 1 unless it is 0.
+ *
+ * Unlike LAPACK's dgecon and MATLAB's rcond, which estimate norm1(inv(A))
+ * from a few solves, this forms the inverse and takes its norm: exact up
+ * to rounding, the same on every backend, and at the sizes a dense solve
+ * is used for the difference in cost does not matter.
+ *
+ * Missing data propagates (a nan entry gives nan); an infinite entry gives
+ * 0, since no finite matrix is further from invertible. */
+static Value bi_rcond(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    if (is_num(args[0]) && args[0].kind != VAL_DUAL && args[0].kind != VAL_HDUAL) {
+        double m = vmag(args[0]);
+        return val_float(isnan(m) ? nan("") : (m == 0.0 || isinf(m)) ? 0.0 : 1.0);
+    }
+    uint32_t N, c; Cplx *A = to_cplx(I, args[0], &N, &c, "rcond");
+    if (c != N) { free(A); runtime_error(I, "rcond: matrix must be square (got %ux%u)", N, c); }
+    bool real_in = arr_real(args[0]);
+    if (N == 0) { free(A); return val_float(INFINITY); }
+    size_t cells = (size_t)N * N;
+    bool has_nan = false, has_inf = false;
+    for (size_t k = 0; k < cells; k++) {
+        if (isnan(A[k].re) || isnan(A[k].im)) has_nan = true;
+        else if (isinf(A[k].re) || isinf(A[k].im)) has_inf = true;
+    }
+    if (has_nan || has_inf) { free(A); return val_float(has_nan ? nan("") : 0.0); }
+
+    double na = 0.0, ni = 0.0;                          /* largest column sum of |A| and of |inv(A)| */
+    for (uint32_t j = 0; j < N; j++) {
+        double col = 0.0;
+        for (uint32_t i = 0; i < N; i++) col += c_abs(A[(size_t)i * N + j]);
+        if (col > na) na = col;
+    }
+    int rc;
+    if (real_in && cozy_linalg()->solve_d) {
+        double *Ad = malloc(cells * sizeof *Ad), *X = calloc(cells, sizeof *X);
+        if (!Ad || !X) abort();
+        for (size_t k = 0; k < cells; k++) Ad[k] = A[k].re;
+        for (uint32_t i = 0; i < N; i++) X[(size_t)i * N + i] = 1.0;
+        rc = cozy_linalg()->solve_d(Ad, X, N, N);
+        for (uint32_t j = 0; j < N && rc == 0; j++) {
+            double col = 0.0;
+            for (uint32_t i = 0; i < N; i++) col += fabs(X[(size_t)i * N + j]);
+            if (!(col <= ni)) ni = col;                 /* a nan sum is kept, and caught below */
+        }
+        free(Ad); free(X);
+    } else {
+        Cplx *X = calloc(cells, sizeof *X);
+        if (!X) abort();
+        for (uint32_t i = 0; i < N; i++) X[(size_t)i * N + i] = (Cplx){ 1, 0 };
+        rc = cozy_linalg()->solve(A, X, N, N);          /* destroys A */
+        for (uint32_t j = 0; j < N && rc == 0; j++) {
+            double col = 0.0;
+            for (uint32_t i = 0; i < N; i++) col += c_abs(X[(size_t)i * N + j]);
+            if (!(col <= ni)) ni = col;
+        }
+        free(X);
+    }
+    free(A);
+    if (rc != 0 || na == 0.0 || !isfinite(ni) || ni == 0.0) return val_float(0.0);
+    return val_float((1.0 / na) / ni);
+}
+
 static Value bi_dot(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -5944,7 +6015,16 @@ static Value bi_chol(Interp *I, Value *args, uint32_t n)
  * pair ordering (Hermitian: ascending real; general: by (re, im)), and the
  * general path's phase convention (largest entry real > 0) are observable
  * language behavior and live here, above the seam; the kernels answer in
- * backend order. */
+ * backend order.
+ *
+ * Every tolerance below is relative to `unit`, the largest entry of the
+ * matrix. They used to be relative to 1: "symmetric to within 1e-9", "an
+ * imaginary part below 1e-12 is noise". For a matrix of ordinary size that
+ * is the same thing. For [1, 2; 3, 4] * 1e-10 it made the matrix symmetric
+ * (the difference between 2e-10 and 3e-10 is below 1e-9) and returned the
+ * eigenvalues of a different matrix, and below about 1e-12 every eigenvalue
+ * of a non-symmetric matrix was "noise" and came back as 0. eig(A * c) is
+ * now c * eig(A) for any c > 0 that keeps the entries in range. */
 static Value bi_eig(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -5952,11 +6032,18 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
     if (c != N) { free(A); runtime_error(I, "eig: matrix must be square (got %ux%u)", N, c); }
     bool real_in = arr_real(args[0]);
 
+    double unit = 0.0;                                  /* the size of the matrix: its largest entry */
+    for (size_t k = 0; k < (size_t)N * N; k++) {
+        double m = c_abs(A[k]);
+        if (isfinite(m) && m > unit) unit = m;
+    }
+    if (unit == 0.0) unit = 1.0;
+
     bool hermitian = true;                              /* detect symmetric/Hermitian */
     for (uint32_t i = 0; i < N && hermitian; i++)
         for (uint32_t j = i; j < N; j++) {              /* j = i: a Hermitian diagonal is real */
             Cplx d = c_sub(A[(size_t)i*N+j], c_conj(A[(size_t)j*N+i]));
-            if (c_abs(d) > 1e-9 * (1.0 + c_abs(A[(size_t)i*N+j]))) { hermitian = false; break; }
+            if (c_abs(d) > 1e-9 * (unit + c_abs(A[(size_t)i*N+j]))) { hermitian = false; break; }
         }
 
     size_t cells = (size_t)(N ? N*N : 1);
@@ -6020,7 +6107,7 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
      * observable language behavior — the same 1e-12 relative rule that
      * already decides realness. Backend-invariance by construction. */
     for (uint32_t i = 0; i < N; i++) {
-        double mag = 1.0 + c_abs(w[i]);
+        double mag = unit + c_abs(w[i]);
         if (fabs(w[i].re) <= 1e-12 * mag) w[i].re = 0.0;
         if (fabs(w[i].im) <= 1e-12 * mag) w[i].im = 0.0;
     }
@@ -6042,7 +6129,7 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
             if (!split) {
                 double a1 = w[ord[i2-1]].re, b1 = w[ord[i2]].re;
                 double sc = fabs(a1) > fabs(b1) ? fabs(a1) : fabs(b1);
-                split = fabs(b1 - a1) > 1e-12 * (1.0 + sc);
+                split = fabs(b1 - a1) > 1e-12 * (unit + sc);
             }
             if (split) {
                 for (uint32_t x = g0 + 1; x < i2; x++) {
@@ -6059,7 +6146,7 @@ static Value bi_eig(Interp *I, Value *args, uint32_t n)
     for (uint32_t jj = 0; jj < N; jj++) {
         uint32_t src = ord[jj];
         Cplx lam = w[src];
-        if (fabs(lam.im) > 1e-12 * (1.0 + c_abs(lam))) eig_real = false;
+        if (fabs(lam.im) > 1e-12 * (unit + c_abs(lam))) eig_real = false;
         /* normalize phase: FIRST near-maximal entry real > 0. The anchor
          * selection is tolerance-aware (the 1e-12 relative rule): with two
          * components of equal magnitude (a 2-state Markov chain's
@@ -7845,6 +7932,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "trace",   bi_trace,   1, 1);
     def_builtin(e, "det",     bi_det,     1, 1);
     def_builtin(e, "inv",     bi_inv,     1, 1);
+    def_builtin(e, "rcond",   bi_rcond,   1, 1);
     def_builtin(e, "dot",     bi_dot,     2, 2);
     def_builtin(e, "norm",    bi_norm,    1, 2);
     def_builtin(e, "kron",    bi_kron,    2, 2);

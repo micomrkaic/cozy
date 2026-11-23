@@ -690,10 +690,29 @@ The decompositions return records, so the pieces have names:
 | `ordschur(s, select)` | `{U, T, k}` | the same, with `k` chosen eigenvalues first |
 
 `eig` handles both Hermitian matrices (Jacobi; real ascending eigenvalues,
-orthonormal vectors) and general ones (complex QR + inverse iteration; complex
+orthonormal vectors) and general ones (from the Schur form; complex
 pairs come out right). All of it is complex-capable — `'` being the conjugate
 transpose is what makes the identities hold. `kron(A, B)` is the Kronecker
-product, `det`, `inv`, `trace`, `norm`, `dot` round out the set.
+product, `det`, `inv`, `rcond`, `trace`, `norm`, `dot` round out the set.
+
+The units of a matrix do not matter to any of them: `svd(A * c).S` is
+`c * svd(A).S` and `eig(A * c).values` is `c * eig(A).values` for any
+positive `c`, whether the entries are of size 1e-150 or 1e150.
+
+`rcond(A)` says how safe `A \ b` is before you ask for it: 1 for a
+perfectly conditioned matrix, about 1e-16 for one that is singular to
+rounding, exactly 0 for one where elimination meets a zero pivot. It
+costs one factorisation, where the ratio of the extreme singular values
+costs an SVD.
+
+```
+cozy> rcond([2, 0; 0, 4])
+0.5
+cozy> rcond([1, 2; 2, 4])
+0
+cozy> rcond([1, 2, 3; 4, 5, 6; 7, 8, 9]) < 1e-15
+true
+```
 
 `schur` is the decomposition to reach for when eigenvectors are not to be
 trusted — a matrix always has a Schur form, and `U` is always perfectly
@@ -1647,6 +1666,7 @@ cozy> clear("scatter"); who
 | `trace(A)` | sum of the diagonal |
 | `det(A)` | determinant via LU |
 | `inv(A)` | matrix inverse (solves A \ I) |
+| `rcond(A)` | reciprocal condition number in the 1-norm, 1 / (norm1(A) * norm1(inv(A))): 1 is perfect, about 1e-16 is singular to rounding, 0 is singular |
 | `lu(A)` | LU with partial pivoting -> {L, U, p}, so P*A = L*U |
 | `qr(A)` | Householder QR -> {Q, R} (real or complex) |
 | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) |

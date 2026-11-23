@@ -9,6 +9,8 @@ echo "== stress: calculus (derivatives vs finite differences; optimizers vs trut
 ./cozy stress/calculus.cz
 echo "== stress: schur (about nine hundred matrices; reconstruction, orthogonality, shape, spectrum)"
 ./cozy stress/schur.cz | grep -v "^<fn"
+echo "== stress: kernels (svd, eig and rcond on about three thousand checks, from 1e-150 to 1e150)"
+./cozy stress/kernels.cz | grep -v "^<fn\|^0$"
 echo "== stress: sparse at scale"
 ./cozy stress/sparse_scale.cz
 echo "== stress: parser fuzz under ASan (400 lines of token soup; clean errors only)"

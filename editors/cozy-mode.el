@@ -199,6 +199,7 @@
     "rand"
     "randi"
     "randn"
+    "rcond"
     "readcsv"
     "readtable"
     "real"

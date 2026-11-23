@@ -161,6 +161,7 @@
     { "trace", "trace(A)", "sum of the diagonal", "linalg", "trace([1, 2; 3, 4])               %= 5" },
     { "det", "det(A)", "determinant via LU", "linalg", "det([1, 2; 3, 4])                 %= -2" },
     { "inv", "inv(A)", "matrix inverse (solves A \\ I)", "linalg", "inv([2, 0; 0, 4])                 %= [0.5, 0; 0, 0.25]" },
+    { "rcond", "rcond(A)", "reciprocal condition number in the 1-norm, 1 / (norm1(A) * norm1(inv(A))): 1 is perfect, about 1e-16 is singular to rounding, 0 is singular", "linalg", "rcond([2, 0; 0, 4])               %= 0.5" },
     { "lu", "lu(A)", "LU with partial pivoting -> {L, U, p}, so P*A = L*U", "linalg", "let f = lu([4, 3; 6, 3]); f.L * f.U   % equals P*A" },
     { "qr", "qr(A)", "Householder QR -> {Q, R} (real or complex)", "linalg", "let f = qr([1, 2; 3, 4]); f.Q * f.R   % reconstructs A" },
     { "chol", "chol(A)", "Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD)", "linalg", "chol([4, 2; 2, 3])                % lower L with L*L' = A" },

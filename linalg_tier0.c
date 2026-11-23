@@ -12,37 +12,10 @@
  * Nothing here raises, prints, touches Values, or decides observable
  * conventions — pair ordering and eigenvector phase are eval.c's law.
  */
+#include <float.h>
 #include <stdlib.h>
 #include <string.h>
 #include "linalg.h"
-
-/* ---- shared elimination core ------------------------------------------- */
-
-/* Solve A x = b in place (A,b modified, x left in b); false if singular. */
-static bool csolve_inplace(Cplx *A, uint32_t N, Cplx *b)
-{
-    for (uint32_t k = 0; k < N; k++) {
-        uint32_t p = k; double best = c_abs(A[(size_t)k*N+k]);
-        for (uint32_t i = k+1; i < N; i++) { double m = c_abs(A[(size_t)i*N+k]); if (m > best) { best = m; p = i; } }
-        if (best < 1e-300) return false;
-        if (p != k) {
-            for (uint32_t j = 0; j < N; j++) { Cplx t = A[(size_t)k*N+j]; A[(size_t)k*N+j] = A[(size_t)p*N+j]; A[(size_t)p*N+j] = t; }
-            Cplx t = b[k]; b[k] = b[p]; b[p] = t;
-        }
-        Cplx akk = A[(size_t)k*N+k];
-        for (uint32_t i = k+1; i < N; i++) {
-            Cplx f = c_div(A[(size_t)i*N+k], akk);
-            for (uint32_t j = k+1; j < N; j++) A[(size_t)i*N+j] = c_sub(A[(size_t)i*N+j], c_mul(f, A[(size_t)k*N+j]));
-            b[i] = c_sub(b[i], c_mul(f, b[k]));
-        }
-    }
-    for (int64_t i = (int64_t)N-1; i >= 0; i--) {
-        Cplx s = b[i];
-        for (uint32_t j = (uint32_t)i+1; j < N; j++) s = c_sub(s, c_mul(A[(size_t)i*N+j], b[j]));
-        b[i] = c_div(s, A[(size_t)i*N+i]);
-    }
-    return true;
-}
 
 /* ---- solve: A X = B, Gaussian elimination with partial pivoting --------- */
 
@@ -130,21 +103,47 @@ static void c_givens(Cplx a, Cplx b, double *c, Cplx *s)
     *s = c_scale(1.0/(aa*t), c_mul(a, c_conj(b)));      /* (a/|a|)*conj(b)/t */
 }
 
-/* ---- eig_herm: cyclic complex Jacobi, accumulating vectors in V --------- */
+/* ---- eig_herm: cyclic complex Jacobi, accumulating vectors in V ---------
+ *
+ * Every test here is relative to the matrix. The kernel used to stop when
+ * the sum of squares off the diagonal fell below 1e-30, an absolute number:
+ * a matrix with entries of 1e-16 passed that test before the first rotation
+ * and came back with its diagonal as its eigenvalues, and a matrix with
+ * entries of 1000 never passed it and ran all hundred sweeps. Now the
+ * matrix is first scaled by a power of two (exact) so that its largest
+ * entry is near 1, the sweeps stop when what is left off the diagonal is
+ * 1e-15 of the whole, and a rotation is skipped when its entry is too small
+ * to change either diagonal entry it sits between. */
 
 static int t0_eig_herm(Cplx *A, uint32_t N, double *w, Cplx *V)
 {
     memset(V, 0, (size_t)(N ? N*N : 1) * sizeof *V);
     for (uint32_t i = 0; i < N; i++) V[(size_t)i*N+i] = (Cplx){1,0};
+    double amax = 0.0; int ex = 0;
+    for (size_t q = 0; q < (size_t)N * N; q++) amax = fmax(amax, fmax(fabs(A[q].re), fabs(A[q].im)));
+    if (amax > 0.0 && isfinite(amax)) {
+        (void)frexp(amax, &ex);
+        for (size_t q = 0; q < (size_t)N * N; q++) A[q] = (Cplx){ ldexp(A[q].re, -ex), ldexp(A[q].im, -ex) };
+    }
     for (int sweep = 0; sweep < 100; sweep++) {
-        double off = 0;
-        for (uint32_t i = 0; i < N; i++) for (uint32_t j = i+1; j < N; j++) { double a = c_abs(A[(size_t)i*N+j]); off += a*a; }
-        if (off < 1e-30) break;
+        double off = 0, dia = 0;
+        for (uint32_t i = 0; i < N; i++) {
+            dia += A[(size_t)i*N+i].re * A[(size_t)i*N+i].re;
+            for (uint32_t j = i+1; j < N; j++) { double a = c_abs(A[(size_t)i*N+j]); off += a*a; }
+        }
+        if (off <= 1e-30 * (dia + 2.0 * off)) break;
+        bool rotated = false;
         for (uint32_t p = 0; p < N; p++)
             for (uint32_t q = p+1; q < N; q++) {
                 Cplx apq = A[(size_t)p*N+q];
-                if (c_abs(apq) < 1e-300) continue;
+                double a = c_abs(apq);
+                if (a == 0.0) continue;
                 double app = A[(size_t)p*N+p].re, aqq = A[(size_t)q*N+q].re;
+                if (fabs(app) + 100.0 * a == fabs(app) && fabs(aqq) + 100.0 * a == fabs(aqq)) {
+                    A[(size_t)p*N+q] = A[(size_t)q*N+p] = (Cplx){0,0};   /* below rounding on both sides */
+                    continue;
+                }
+                rotated = true;
                 double cc; Cplx sp; jacobi_rot(app, aqq, apq, &cc, &sp);
                 for (uint32_t k = 0; k < N; k++) {     /* A <- A R */
                     Cplx kp = A[(size_t)k*N+p], kq = A[(size_t)k*N+q];
@@ -162,8 +161,9 @@ static int t0_eig_herm(Cplx *A, uint32_t N, double *w, Cplx *V)
                     V[(size_t)k*N+q] = c_add(c_mul(sp, kp), c_scale(cc, kq));
                 }
             }
+        if (!rotated) break;
     }
-    for (uint32_t i = 0; i < N; i++) w[i] = A[(size_t)i*N+i].re;
+    for (uint32_t i = 0; i < N; i++) w[i] = ldexp(A[(size_t)i*N+i].re, ex);
     return 0;
 }
 
@@ -204,135 +204,6 @@ static void isolate_perm(const unsigned char *nz, uint32_t n, uint32_t *perm)
             if (alone) { uint32_t t = perm[j]; perm[j] = perm[lo]; perm[lo] = t; lo++; moved = true; break; }
         }
     }
-}
-
-/* ---- eig_gen: Hessenberg + shifted complex QR, inverse iteration -------- */
-
-/* Reduce A to upper Hessenberg form in place by Householder similarity. */
-static void hessenberg(Cplx *A, uint32_t N)
-{
-    Cplx *v = malloc((N ? N : 1) * sizeof *v);
-    for (uint32_t k = 0; k + 2 < N; k++) {
-        double nrm = 0; for (uint32_t i = k+1; i < N; i++) { double a = c_abs(A[(size_t)i*N+k]); nrm += a*a; }
-        nrm = sqrt(nrm);
-        if (nrm == 0.0) continue;
-        Cplx xk = A[(size_t)(k+1)*N+k]; double axk = c_abs(xk);
-        Cplx alpha = axk > 0 ? c_scale(-nrm/axk, xk) : (Cplx){ -nrm, 0 };
-        for (uint32_t i = 0; i < N; i++) v[i] = (Cplx){0,0};
-        for (uint32_t i = k+1; i < N; i++) v[i] = A[(size_t)i*N+k];
-        v[k+1] = c_sub(v[k+1], alpha);
-        double vn2 = 0; for (uint32_t i = k+1; i < N; i++) { double a = c_abs(v[i]); vn2 += a*a; }
-        if (vn2 == 0.0) continue;
-        double beta = 2.0 / vn2;
-        for (uint32_t j = 0; j < N; j++) {                 /* A <- (I - beta v v^H) A */
-            Cplx w = {0,0}; for (uint32_t i = k+1; i < N; i++) w = c_add(w, c_mul(c_conj(v[i]), A[(size_t)i*N+j]));
-            w = c_scale(beta, w);
-            for (uint32_t i = k+1; i < N; i++) A[(size_t)i*N+j] = c_sub(A[(size_t)i*N+j], c_mul(v[i], w));
-        }
-        for (uint32_t i = 0; i < N; i++) {                 /* A <- A (I - beta v v^H) */
-            Cplx w = {0,0}; for (uint32_t j = k+1; j < N; j++) w = c_add(w, c_mul(A[(size_t)i*N+j], v[j]));
-            w = c_scale(beta, w);
-            for (uint32_t j = k+1; j < N; j++) A[(size_t)i*N+j] = c_sub(A[(size_t)i*N+j], c_mul(w, c_conj(v[j])));
-        }
-    }
-    free(v);
-}
-
-/* Eigenvalues of a (Hessenberg) matrix H by shifted complex QR; writes N
- * eigenvalues to eig. Returns false if a block did not converge. */
-static bool qr_eig(Cplx *H, uint32_t N, Cplx *eig)
-{
-    hessenberg(H, N);
-    double *cs = malloc((N ? N : 1) * sizeof *cs);
-    Cplx   *sn = malloc((N ? N : 1) * sizeof *sn);
-    uint32_t hi = N;
-    int iters = 0;
-    bool converged = true;
-    while (hi > 0) {
-        uint32_t lo = hi - 1;                               /* find bottom block [lo, hi) */
-        while (lo > 0) {
-            double s = c_abs(H[(size_t)(lo-1)*N+(lo-1)]) + c_abs(H[(size_t)lo*N+lo]);
-            if (s == 0.0) s = 1.0;
-            if (c_abs(H[(size_t)lo*N+(lo-1)]) <= 1e-15 * s) break;
-            lo--;
-        }
-        if (lo == hi - 1) { eig[hi-1] = H[(size_t)(hi-1)*N+(hi-1)]; hi--; iters = 0; continue; }
-        if (++iters > 300) {                                /* give up, and say so: the diagonal */
-            for (uint32_t i = lo; i < hi; i++) eig[i] = H[(size_t)i*N+i];   /* is not the spectrum */
-            hi = lo; iters = 0; converged = false; continue;
-        }
-        Cplx a = H[(size_t)(hi-2)*N+(hi-2)], b = H[(size_t)(hi-2)*N+(hi-1)];
-        Cplx cc2 = H[(size_t)(hi-1)*N+(hi-2)], d = H[(size_t)(hi-1)*N+(hi-1)];
-        Cplx tr = c_add(a, d), det = c_sub(c_mul(a, d), c_mul(b, cc2));
-        Cplx disc = c_sqrtz(c_sub(c_mul(tr, tr), c_scale(4.0, det)));
-        Cplx mu1 = c_scale(0.5, c_add(tr, disc)), mu2 = c_scale(0.5, c_sub(tr, disc));
-        Cplx mu = c_abs(c_sub(mu1, d)) < c_abs(c_sub(mu2, d)) ? mu1 : mu2;
-        /* An exceptional shift every tenth step. With the usual shift the
-         * step can be a fixed point: a cyclic shift matrix has a zero shift
-         * and is mapped to itself, and the loop used to run out and return
-         * its all-zero diagonal as the eigenvalues. */
-        if (iters % 10 == 0)
-            mu = (Cplx){ d.re + c_abs(cc2) + (hi - lo > 2 ? c_abs(H[(size_t)(hi-2)*N+(hi-3)]) : 0.0), d.im };
-        for (uint32_t i = lo; i < hi; i++) H[(size_t)i*N+i] = c_sub(H[(size_t)i*N+i], mu);   /* H - muI */
-        for (uint32_t i = lo; i + 1 < hi; i++) {            /* QR: zero subdiagonals -> R */
-            double c; Cplx s; c_givens(H[(size_t)i*N+i], H[(size_t)(i+1)*N+i], &c, &s);
-            cs[i] = c; sn[i] = s;
-            for (uint32_t j = i; j < hi; j++) {
-                Cplx hi_ = H[(size_t)i*N+j], hj_ = H[(size_t)(i+1)*N+j];
-                H[(size_t)i*N+j]     = c_add(c_scale(c, hi_), c_mul(s, hj_));
-                H[(size_t)(i+1)*N+j] = c_sub(c_scale(c, hj_), c_mul(c_conj(s), hi_));
-            }
-        }
-        for (uint32_t i = lo; i + 1 < hi; i++) {            /* H <- R Q (postmultiply by G^H) */
-            double c = cs[i]; Cplx s = sn[i];
-            uint32_t rmax = i + 2 < hi ? i + 2 : hi;
-            for (uint32_t r = lo; r < rmax; r++) {
-                Cplx mi = H[(size_t)r*N+i], mj = H[(size_t)r*N+(i+1)];
-                H[(size_t)r*N+i]     = c_add(c_scale(c, mi), c_mul(c_conj(s), mj));
-                H[(size_t)r*N+(i+1)] = c_sub(c_scale(c, mj), c_mul(s, mi));
-            }
-        }
-        for (uint32_t i = lo; i < hi; i++) H[(size_t)i*N+i] = c_add(H[(size_t)i*N+i], mu);   /* + muI */
-    }
-    free(cs); free(sn);
-    return converged;
-}
-
-static int t0_eig_gen(const Cplx *A0, uint32_t N, Cplx *w, Cplx *V)
-{
-    size_t cells = (size_t)(N ? N*N : 1);
-    Cplx *H = malloc(cells * sizeof *H);                     /* consumed by qr_eig */
-    Cplx *M = malloc(cells * sizeof *M);
-    Cplx *x = malloc((N ? N : 1) * sizeof *x);
-    {                                                        /* H = P^T A0 P, eigenvalues isolated */
-        unsigned char *nz = calloc(cells, 1);
-        uint32_t *perm = malloc((N ? N : 1) * sizeof *perm);
-        for (size_t q = 0; q < (size_t)N * N; q++) nz[q] = A0[q].re != 0.0 || A0[q].im != 0.0;
-        isolate_perm(nz, N, perm);
-        for (uint32_t i = 0; i < N; i++)
-            for (uint32_t j = 0; j < N; j++) H[(size_t)i * N + j] = A0[(size_t)perm[i] * N + perm[j]];
-        free(nz); free(perm);
-    }
-    if (!qr_eig(H, N, w)) { free(H); free(M); free(x); return 1; }
-
-    for (uint32_t j = 0; j < N; j++) {                       /* one vector per value */
-        Cplx lam = w[j];
-        double shift = 1e-8 * (1.0 + c_abs(lam));            /* perturb off the exact eigenvalue */
-        Cplx mu = { lam.re + shift, lam.im + shift };
-        for (uint32_t i = 0; i < N; i++) x[i] = (Cplx){ 1.0 / (i + 1.0), 0 };   /* start vector */
-        for (int it = 0; it < 6; it++) {
-            memcpy(M, A0, (size_t)N*N * sizeof *M);
-            for (uint32_t i = 0; i < N; i++) M[(size_t)i*N+i] = c_sub(M[(size_t)i*N+i], mu);
-            if (!csolve_inplace(M, N, x)) break;             /* x <- (A - mu I)^{-1} x */
-            double nrm = 0; for (uint32_t i = 0; i < N; i++) { double a = c_abs(x[i]); nrm += a*a; }
-            nrm = sqrt(nrm);
-            if (nrm == 0) break;
-            for (uint32_t i = 0; i < N; i++) x[i] = c_scale(1.0/nrm, x[i]);
-        }
-        for (uint32_t i = 0; i < N; i++) V[(size_t)i*N+j] = x[i];
-    }
-    free(H); free(M); free(x);
-    return 0;
 }
 
 /* ---- schur: Hessenberg reduction and shifted QR, transformations kept ---- */
@@ -442,7 +313,7 @@ static int t0_schur_d(const double *A, uint32_t n, double *T, double *U)
     double amax = 0.0, unit = 1.0;
     for (size_t q = 0; q < (size_t)n * n; q++) amax = fmax(amax, fabs(T[q]));
     if (amax > 0.0 && (amax < 1e-100 || amax > 1e100)) {
-        unit = amax;
+        { int ex; (void)frexp(amax, &ex); unit = ldexp(1.0, ex); }   /* a power of two: the scaling is exact */
         for (size_t q = 0; q < (size_t)n * n; q++) T[q] /= unit;
     }
     double *v = malloc(n * sizeof *v), *x = malloc(n * sizeof *x);
@@ -577,7 +448,7 @@ static int t0_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
     double amax = 0.0, unit = 1.0;                           /* as in the real kernel */
     for (size_t q = 0; q < (size_t)n * n; q++) amax = fmax(amax, fmax(fabs(T[q].re), fabs(T[q].im)));
     if (amax > 0.0 && (amax < 1e-100 || amax > 1e100)) {
-        unit = amax;
+        { int ex; (void)frexp(amax, &ex); unit = ldexp(1.0, ex); }   /* a power of two: the scaling is exact */
         for (size_t q = 0; q < (size_t)n * n; q++) T[q] = c_scale(1.0 / unit, T[q]);
     }
     Cplx *v = malloc(n * sizeof *v), *sn = malloc(n * sizeof *sn);
@@ -675,6 +546,69 @@ static int t0_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
     return rc;
 #undef ZS
 #undef ZU
+}
+
+/* ---- eig_gen: eigenvalues and eigenvectors from the Schur form ----------
+ *
+ * A = U T U^H with T upper triangular. The eigenvalues are T's diagonal.
+ * The eigenvector of T for its j-th eigenvalue has a 1 in position j, zeros
+ * below, and above it the solution of a triangular system, found by back
+ * substitution; U times that vector is the eigenvector of A (LAPACK's
+ * ztrevc does the same). All n vectors cost about as much as the Schur form
+ * itself.
+ *
+ * The kernel this replaces found each vector by inverse iteration on the
+ * whole matrix, six solves of an n x n system per eigenvalue: for n = 40,
+ * a hundred times the work of everything else. It also returned the same
+ * vector twice for an eigenvalue that occurs twice with two independent
+ * eigenvectors, because both started from the same guess.
+ *
+ * If two eigenvalues agree to rounding, the pivot of the triangular system
+ * is replaced by a number of the size of rounding in T, as ztrevc does: for
+ * a defective matrix the second vector then comes out (nearly) parallel to
+ * the first, which is the right answer for a matrix with only one. */
+static int t0_eig_gen(const Cplx *A, uint32_t n, Cplx *w, Cplx *V)
+{
+    size_t cells = (size_t)(n ? n * n : 1);
+    Cplx *T = malloc(cells * sizeof *T), *U = malloc(cells * sizeof *U);
+    Cplx *y = malloc((n ? n : 1) * sizeof *y);
+    if (!T || !U || !y) abort();
+    if (t0_schur(A, n, T, U) != 0) { free(T); free(U); free(y); return 1; }
+    double tnorm = 0.0;
+    for (uint32_t i = 0; i < n; i++)
+        for (uint32_t j = i; j < n; j++) tnorm = fmax(tnorm, c_abs(T[(size_t)i * n + j]));
+    double smin = fmax(DBL_EPSILON * tnorm, DBL_MIN / DBL_EPSILON);
+    for (uint32_t j = 0; j < n; j++) {
+        Cplx lam = T[(size_t)j * n + j];
+        w[j] = lam;
+        y[j] = (Cplx){ 1, 0 };
+        for (int64_t ii = (int64_t)j - 1; ii >= 0; ii--) {
+            uint32_t i = (uint32_t)ii;
+            Cplx sum = { 0, 0 };
+            for (uint32_t k = i + 1; k <= j; k++) sum = c_sub(sum, c_mul(T[(size_t)i * n + k], y[k]));
+            Cplx d = c_sub(T[(size_t)i * n + i], lam);
+            if (c_abs(d) < smin) d = (Cplx){ smin, 0 };
+            y[i] = c_div(sum, d);
+            double big = fmax(fabs(y[i].re), fabs(y[i].im));
+            if (big > 1e100)                                 /* growing without bound: keep it finite */
+                for (uint32_t k = i; k <= j; k++) y[k] = c_scale(1.0 / big, y[k]);
+        }
+        double vmax = 0.0;                                   /* v = U y, of unit length */
+        for (uint32_t r = 0; r < n; r++) {
+            Cplx acc = { 0, 0 };
+            for (uint32_t k = 0; k <= j; k++) acc = c_add(acc, c_mul(U[(size_t)r * n + k], y[k]));
+            V[(size_t)r * n + j] = acc;
+            vmax = fmax(vmax, fmax(fabs(acc.re), fabs(acc.im)));
+        }
+        if (vmax > 0.0) {
+            double nrm = 0.0;
+            for (uint32_t r = 0; r < n; r++) { double a = c_abs(V[(size_t)r * n + j]) / vmax; nrm += a * a; }
+            nrm = vmax * sqrt(nrm);
+            for (uint32_t r = 0; r < n; r++) V[(size_t)r * n + j] = c_scale(1.0 / nrm, V[(size_t)r * n + j]);
+        }
+    }
+    free(T); free(U); free(y);
+    return 0;
 }
 
 /* ---- ordschur: reordering a Schur form ------------------------------------
@@ -891,7 +825,17 @@ static int t0_ordschur(Cplx *T, Cplx *U, uint32_t n, const unsigned char *sel, u
 }
 
 /* ---- svd: thin SVD via one-sided Jacobi (S descending) ------------------
- * Works on the tall orientation; for m<n it factors A^H and swaps U,V. */
+ * Works on the tall orientation; for m<n it factors A^H and swaps U,V.
+ *
+ * Two columns are left alone once they are orthogonal to rounding relative
+ * to their own lengths (LAPACK's test in dgesvj), and the sweeps stop when
+ * a whole sweep leaves every pair alone. The kernel used to stop when the
+ * sum of the squared inner products fell below 1e-28, an absolute number.
+ * With entries of 1e-7 or less that was true after the first sweep,
+ * whatever state the columns were in, and the "singular values" returned
+ * were wrong in the first digit; with 40 columns of ordinary size it was
+ * never true and every call ran sixty sweeps. The matrix is also scaled by
+ * a power of two (exact) so that nothing over- or underflows when squared. */
 
 static int t0_svd(const Cplx *Araw, uint32_t m, uint32_t nc,
                   Cplx *Uout, double *sout, Cplx *Vout)
@@ -903,9 +847,16 @@ static int t0_svd(const Cplx *Araw, uint32_t m, uint32_t nc,
     else     for (uint32_t i = 0; i < M; i++) for (uint32_t j = 0; j < N; j++) U[(size_t)i*N+j] = c_conj(Araw[(size_t)j*nc+i]);
     Cplx *V = calloc((size_t)(N ? N*N : 1), sizeof *V);
     for (uint32_t i = 0; i < N; i++) V[(size_t)i*N+i] = (Cplx){1,0};
+    double amax = 0.0; int ex = 0;
+    for (size_t q = 0; q < (size_t)M * N; q++) amax = fmax(amax, fmax(fabs(U[q].re), fabs(U[q].im)));
+    if (amax > 0.0 && isfinite(amax)) {
+        (void)frexp(amax, &ex);
+        for (size_t q = 0; q < (size_t)M * N; q++) U[q] = (Cplx){ ldexp(U[q].re, -ex), ldexp(U[q].im, -ex) };
+    }
+    const double tol = DBL_EPSILON * sqrt((double)(M ? M : 1));
 
     for (int sweep = 0; sweep < 60; sweep++) {
-        double off = 0;
+        bool rotated = false;
         for (uint32_t p = 0; p < N; p++)
             for (uint32_t q = p+1; q < N; q++) {
                 double app = 0, aqq = 0; Cplx apq = {0,0};
@@ -915,8 +866,9 @@ static int t0_svd(const Cplx *Araw, uint32_t m, uint32_t nc,
                     aqq += uq.re*uq.re + uq.im*uq.im;
                     apq = c_add(apq, c_mul(c_conj(up), uq));
                 }
-                double a = c_abs(apq); off += a*a;
-                if (a < 1e-300) continue;
+                double a = c_abs(apq);
+                if (a <= tol * sqrt(app) * sqrt(aqq)) continue;   /* orthogonal already (or a zero column) */
+                rotated = true;
                 double cc; Cplx sp; jacobi_rot(app, aqq, apq, &cc, &sp);
                 for (uint32_t k = 0; k < M; k++) {
                     Cplx kp = U[(size_t)k*N+p], kq = U[(size_t)k*N+q];
@@ -929,13 +881,41 @@ static int t0_svd(const Cplx *Araw, uint32_t m, uint32_t nc,
                     V[(size_t)k*N+q] = c_add(c_mul(sp, kp), c_scale(cc, kq));
                 }
             }
-        if (off < 1e-28) break;
+        if (!rotated) break;
     }
     double *sv = malloc((N ? N : 1) * sizeof *sv);
     for (uint32_t j = 0; j < N; j++) {
         double s = 0; for (uint32_t k = 0; k < M; k++) { Cplx u = U[(size_t)k*N+j]; s += u.re*u.re + u.im*u.im; }
         sv[j] = sqrt(s);
         if (sv[j] > 0) for (uint32_t k = 0; k < M; k++) U[(size_t)k*N+j] = c_div(U[(size_t)k*N+j], (Cplx){ sv[j], 0 });
+        sv[j] = ldexp(sv[j], ex);                            /* back in the units of A */
+    }
+    /* A column of U whose singular value is exactly zero is what the
+     * rotations left of a column of A: nothing. Put a unit vector there,
+     * orthogonal to the other columns, so that U^H U = I as the contract
+     * says (and as LAPACK returns it). Of the coordinate vectors, the one
+     * with the most left after projecting out the columns already there is
+     * the safest start; two rounds of Gram-Schmidt finish it. */
+    for (uint32_t j = 0; j < N; j++) {
+        if (sv[j] > 0) continue;
+        uint32_t best = 0; double left = -1.0;
+        for (uint32_t e = 0; e < M; e++) {
+            double used = 0.0;
+            for (uint32_t c = 0; c < N; c++) { Cplx u = U[(size_t)e*N+c]; used += u.re*u.re + u.im*u.im; }
+            if (1.0 - used > left) { left = 1.0 - used; best = e; }
+        }
+        for (uint32_t k = 0; k < M; k++) U[(size_t)k*N+j] = (Cplx){ k == best, 0 };
+        for (int pass = 0; pass < 2; pass++)
+            for (uint32_t c = 0; c < N; c++) {
+                if (c == j) continue;
+                Cplx dot = {0,0};
+                for (uint32_t k = 0; k < M; k++) dot = c_add(dot, c_mul(c_conj(U[(size_t)k*N+c]), U[(size_t)k*N+j]));
+                for (uint32_t k = 0; k < M; k++) U[(size_t)k*N+j] = c_sub(U[(size_t)k*N+j], c_mul(dot, U[(size_t)k*N+c]));
+            }
+        double nrm = 0.0;
+        for (uint32_t k = 0; k < M; k++) { Cplx u = U[(size_t)k*N+j]; nrm += u.re*u.re + u.im*u.im; }
+        nrm = sqrt(nrm);
+        if (nrm > 0) for (uint32_t k = 0; k < M; k++) U[(size_t)k*N+j] = c_scale(1.0 / nrm, U[(size_t)k*N+j]);
     }
     uint32_t *ord = malloc((N ? N : 1) * sizeof *ord);
     for (uint32_t i = 0; i < N; i++) ord[i] = i;

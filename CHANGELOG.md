@@ -1,5 +1,105 @@
 # Cozy changelog
 
+## 0.1.35 — the built-in kernels, at every scale and ten times faster
+
+### Fixed
+- **`svd` returned wrong singular values for a matrix in small units**
+  (built-in backend, which is also the browser's; found while profiling
+  the dsge solver). The one-sided Jacobi kernel stopped when the sum of
+  squared inner products of the columns fell below 1e-28 — an absolute
+  number. With entries of about 1e-7 or less that was true after the
+  first sweep, whatever state the columns were in:
+  `svd([1, 2, 3; 4, 5, 6; 7, 8, 10] * 1e-9).S` came back as
+  `[17.41, 0.683, 0.582] * 1e-9`, not `[17.41, 0.875, 0.197] * 1e-9`,
+  with a `U` whose columns were not orthogonal. Two columns are now left
+  alone once they are orthogonal to rounding relative to their own
+  lengths (LAPACK's test in dgesvj), the sweeps stop when a sweep
+  leaves every pair alone, and the matrix is scaled by a power of two
+  first so that nothing over- or underflows when squared.
+- **`eig` of a symmetric matrix with entries below about 1e-15 returned
+  its diagonal** (built-in backend): `eig([2, 1; 1, 2] * 1e-16).values`
+  was `[2e-16; 2e-16]`, not `[1e-16; 3e-16]`. The same absolute
+  threshold, in the two-sided Jacobi kernel; the same cure.
+- **`eig` of a matrix that is not symmetric was wrong in small units, on
+  every backend.** The test for symmetry and the rule that calls a
+  small real or imaginary part noise were relative to 1, not to the
+  matrix. Below about 1e-9 a matrix was taken for a symmetric one
+  (`eig([1, 2; 3, 4] * 1e-10)` returned the eigenvalues of a different
+  matrix), and below about 1e-12 every eigenvalue was noise and came
+  back as 0. Both are now relative to the largest entry:
+  `eig(A * c).values` is `c * eig(A).values` for any `c > 0` that keeps
+  the entries in range.
+- **`eig` returned the same eigenvector twice for an eigenvalue that
+  occurs twice with two independent eigenvectors** (built-in backend):
+  each vector came from inverse iteration, and both started from the
+  same guess. See the new kernel below.
+- **`svd` left a column of zeros in `U` where a singular value is exactly
+  zero** (built-in backend): `svd(ones(4, 3)).U` did not have
+  orthonormal columns. The column is now completed to a unit vector
+  orthogonal to the others, as the contract says and LAPACK does.
+- The Schur kernels scale a very large or very small matrix by a power
+  of two, not by its largest entry, so the scaling is exact and the
+  eigenvalues of a triangular matrix are its diagonal to the last bit
+  at every scale.
+
+### Added
+- **`rcond(A)`: the reciprocal condition number in the 1-norm**,
+  `1 / (norm1(A) * norm1(inv(A)))`. 1 for the identity, of the size of
+  rounding for a matrix singular to working precision, exactly 0 where
+  elimination meets a zero pivot. It is the cheap question to ask
+  before a solve: one LU factorisation through the same kernels as
+  `A \ b`, where the ratio of the extreme singular values costs an
+  SVD. The inverse's norm is computed, not estimated (LAPACK's dgecon
+  and MATLAB's rcond estimate it), so the answer is the same on every
+  backend to rounding. nan in, nan out; an infinite entry gives 0.
+
+### Changed
+- **The built-in `eig` of a general matrix is computed from its Schur
+  form.** The eigenvalues are the diagonal of `T`; each eigenvector is
+  a back substitution in `T`, carried back by `U` (LAPACK's ztrevc).
+  All the vectors together cost about what the Schur form costs. The
+  kernel this replaces ran inverse iteration on the whole matrix, six
+  solves of an n × n system for each eigenvalue — n⁴ work. For a
+  random 40 × 40 matrix: 7.7 ms before, 1.1 ms now.
+- **The built-in `svd` and symmetric `eig` no longer run every sweep
+  they are allowed.** The absolute thresholds that were wrong for small
+  matrices were unreachable for large ones (forty columns of ordinary
+  size never got the sum of squares below 1e-28), so each call ran all
+  sixty, or a hundred, sweeps. A random 40 × 40 `svd`: 12 ms before,
+  1.7 ms now.
+- **dsge: the decision-rule solver is ten times faster on the built-in
+  backend** (owner's request). It asked, on every pass of cyclic
+  reduction, whether the pivot matrix was close to singular, and asked
+  with an SVD: 98 of the 100 ms it spent on Smets and Wouters (2007)
+  were that question. It now asks `rcond`. With the new `eig` for the
+  roots and one factorisation instead of two per pass:
+
+  | one first-order solve, ms | 0.1.34 | 0.1.35 |
+  |---|---:|---:|
+  | Smets–Wouters (40 variables), built-in | 90 | 14 |
+  | the same, OpenBLAS | 16 | 13 |
+  | the same, WebAssembly | 125 | 31 |
+  | Fernández-Villaverde (28 variables), built-in | 61 | 6 |
+  | the same, WebAssembly | 82 | 12 |
+
+  The built-in backend is now as fast as LAPACK at these sizes; what is
+  left is mostly the interpreter, not the kernels. The solution does
+  not change: the 2-norm condition number and the 1-norm one differ by
+  a factor of two to four on these models, six orders of magnitude from
+  the threshold either is compared with.
+
+### Verified
+- **stress/kernels.cz** (in `make stress`): about 3,200 checks of `svd`,
+  `eig` and `rcond` on matrices of every size to 40 and every scale
+  from 1e-150 to 1e150, real and complex, rank deficient, graded,
+  repeated, defective, triangular, cyclic — reconstruction,
+  orthogonality, order, traces, known spectra. Green on the built-in
+  kernels and on OpenBLAS. No test before this one used a matrix whose
+  entries were not of ordinary size, which is how the scale bugs lived.
+- tests/79_kernels.test: 58 cases pinning the same rules.
+- Every existing test passes unchanged on both backends: no number that
+  was right before has moved in the digits the tests pin.
+
 ## 0.1.34 — second-order solutions
 
 ### Added

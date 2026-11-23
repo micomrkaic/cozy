@@ -715,3 +715,34 @@ nonlinear term is moved (fs2000's risk correction was off sixfold
 with everything else right). RESIDUE: second-order variances and
 autocorrelations (the pruned state space); correlated shocks; third
 order.
+
+## 23. Scale-free kernels and rcond — SHIPPED 0.1.35 (owner's request:
+"speed up the decision-rule solver on the built-in backend"). The
+profile said the solver was an SVD in a loop; the SVD said more.
+LEARNED: an absolute threshold in a numerical kernel is two bugs. For a
+small matrix it is met before the work starts (svd wrong below 1e-7,
+symmetric eig below 1e-15); for a large one it is never met (every
+call ran all its sweeps). The same line of code was the correctness
+bug and the performance bug. DECIDED: every stopping rule and every
+tolerance in the linear algebra is relative to the matrix — in the
+kernels (Jacobi rotations skipped by LAPACK's relative test, sweeps
+ended by "nothing rotated", power-of-two scaling so the scaling is
+exact) and above the seam in eig (symmetry, noise snapping and pair
+ordering are relative to the largest entry, not to 1). The contract is
+eig(cA) = c eig(A), svd(cA) = c svd(A), rcond(cA) = rcond(A).
+DECIDED: the built-in general eig is Schur plus back substitution
+(ztrevc's method), not QR plus inverse iteration: n^3 not n^4, and an
+eigenvalue with two eigenvectors gets two. DECIDED: rcond computes
+norm1(inv(A)) through the existing solve kernels (A X = I) rather than
+estimating it behind a new kernel: no new seam, the same number on
+every backend, and the cost is that of inv. DECIDED: the dsge solver's
+singularity guards keep their thresholds (1e-13, 1e-14) with the
+1-norm number in place of the 2-norm one; the two differ by at most a
+factor n and the guards are for matrices that are singular, not
+ill-conditioned (the residual check on the solvent is what protects
+the answer). LEARNED: no test used a matrix whose entries were not of
+ordinary size; stress/kernels.cz now runs every decomposition from
+1e-150 to 1e150. RESIDUE: the built-in svd and symmetric eig still do
+real problems in complex arithmetic (a real path would be about four
+times faster); the dsge linearisation and the interpreter's own
+overhead are now most of a solve.

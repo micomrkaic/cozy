@@ -53,7 +53,7 @@ bool cozy_scalar(const char *name, double *value);
  * until the next cozy_eval that rebinds or clears the name. */
 const char *cozy_string(const char *name);
 
-/* The interpreter's version, e.g. "0.1.34". */
+/* The interpreter's version, e.g. "0.1.35". */
 const char *cozy_version(void);
 
 #ifdef __cplusplus
