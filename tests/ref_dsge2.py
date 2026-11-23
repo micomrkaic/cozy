@@ -11,6 +11,8 @@ models in Dynare's language, solved with stoch_simul(order = 2).
   rbc     the stochastic growth model of dsge.rbc()
   twoshk  Collard's growth model with labour and two shocks (Dynare's
           example1.mod, with the shocks independent)
+  twocorr the same model with correlated shocks of different sizes, for
+          the covariance that dg_second and dg_mean2 take
   hours   a growth model with a labour choice, wage and rental rate
 
 The JSON holds, with rows in the order the variables are declared and the
@@ -55,6 +57,22 @@ b = tau*a(-1)+rho*b(-1) + u;
 end;
 initval; y = 1.08068253095672; c = 0.80359242014163; h = 0.29175631001732; k = 11.08360443260358; a = 0; b = 0; end;
 shocks; var e; stderr 0.009; var u; stderr 0.009; end;
+""",
+    "twocorr": r"""
+var y c k a h b;
+varexo e u;
+parameters beta rho alpha delta theta psi tau;
+alpha = 0.36; rho = 0.95; tau = 0.025; beta = 0.99; delta = 0.025; psi = 0; theta = 2.95;
+model;
+c*theta*h^(1+psi) = (1-alpha)*y;
+k = beta*(((exp(b)*c)/(exp(b(+1))*c(+1)))*(exp(b(+1))*alpha*y(+1)+(1-delta)*k));
+y = exp(a)*(k(-1)^alpha)*(h^(1-alpha));
+k = exp(b)*(y-c)+(1-delta)*k(-1);
+a = rho*a(-1)+tau*b(-1) + e;
+b = tau*a(-1)+rho*b(-1) + u;
+end;
+initval; y = 1.08068253095672; c = 0.80359242014163; h = 0.29175631001732; k = 11.08360443260358; a = 0; b = 0; end;
+shocks; var e; stderr 0.009; var u; stderr 0.012; corr e, u = 0.4; end;
 """,
     "hours": r"""
 var y c i n k w r a;

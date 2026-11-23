@@ -656,28 +656,17 @@ let dg_sylv2 = fn K, S, C -> (
   real(X)
 )
 
-% dsge.solve2(m, over = {}): the solution to second order.
-% Returns what dsge.solve returns — ss, ybar, P, Q, roots, sd, params, model —
-% and the second-order terms of the decision rule
-%   y = ybar + P y(-1) + Q e + 1/2 [Gxx (x (x) x) + 2 Gxu (x (x) e) + Guu (e (x) e) + s2]
-% where x holds the state variables (those that appear with a lag) as they
-% were last period, in deviation from the steady state, and (x) is the
-% Kronecker product: Gxx (n by nx^2), Gxu (n by nx k), Guu (n by k^2), s2 (n
-% by 1, the correction for risk, which scales with the shocks' variances),
-% states (the names of the state variables, in the order of x) and order =
-% 2. The derivatives are exact (hyper-dual numbers). Use dsge.simulate2,
-% dsge.irf2 and dsge.mean2 on the result; dsge.irf, dsge.moments and the
-% rest read its first-order part.
-% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); [size(s.Gxx), size(s.Gxu), size(s.Guu)] %= [5, 4, 5, 2, 5, 1]
-% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); s.states %= ["k", "a"]
-% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.Guu[2, 1] %= 0.490011
-% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.s2[4] %= 3.85224e-05
-% e.g. let s = dsge.solve2(dsge.model(dsge.nk())); max(abs([s.Gxx[:]; s.Gxu[:]; s.Guu[:]; s.s2])) %= 0
-let dsge_solve2 = fn m, over = {} -> (
-  let s = dsge_solve(m, over);
-  let p = s.params; let n = m.n; let k = m.k;
-  let L = dg_lin_at(m, p, s.ybar);
-  let P = s.P; let Q = s.Q;
+% internal: the second-order terms of the decision rule, at a first-order
+% solution (ybar, P, Q) of m with parameters p, for shocks whose covariance
+% matrix is S (k by k). Returns {st, Gxx, Gxu, Guu, s2}: st the positions of
+% the state variables, the rest as dsge.solve2 describes them. Only s2 depends
+% on S. dsge.solve2 passes a diagonal S, the package's shocks being
+% independent; a caller with correlated shocks passes the whole matrix (the
+% derivatives are with respect to the shocks themselves either way, so a
+% shock with no variance still has its columns in Gxu and Guu).
+let dg_second = fn m, p, ybar, P, Q, S -> (
+  let n = m.n; let k = m.k;
+  let L = dg_lin_at(m, p, ybar);
   let st = find(m.lag > 0); let nx = numel(st);
   let Px = P[:, st]; let Pxx = P[st, st]; let Qx = Q[st, :];
   let M = L.A * P + L.B;
@@ -686,7 +675,7 @@ let dsge_solve2 = fn m, over = {} -> (
   let back = zeros(n, nx + k);
   for a = 1 : nx do back[st[a], a] = 1.0 end;
   let V1 = [Px * G1[st, :]; G1; back; zeros(k, nx), eye(k)];
-  let v = [s.ybar; s.ybar; s.ybar; zeros(k, 1)];
+  let v = [ybar; ybar; ybar; zeros(k, 1)];
   let Rxx = zeros(n, nx * nx); let Rxu = zeros(n, nx * k); let Ruu = zeros(n, k * k);
   for a = 1 : nx + k do for b = a : nx + k do (
     let r = dg_d2(m, p, v, V1[:, a], V1[:, b]);
@@ -706,16 +695,44 @@ let dsge_solve2 = fn m, over = {} -> (
   ) end end;
   let Gxu = 0.0 - (M \ (Rxu + L.A * Gxx * kron(Pxx, Qx)));
   let Guu = 0.0 - (M \ (Ruu + L.A * Gxx * kron(Qx, Qx)));
-  % risk: tomorrow's shocks have variance sd^2, and the equations are curved
+  % risk: tomorrow's shocks have covariance S, and the equations are curved.
+  % Each pair of shocks counts once for (i, j) and once for (j, i).
   let rhs = zeros(n, 1);
-  for j = 1 : k do (
-    let d = [Q[:, j]; zeros(2 * n + k, 1)];
-    rhs = rhs + (s.sd[j]^2) * (L.A * Guu[:, (j - 1) * k + j] + dg_d2(m, p, v, d, d))
-  ) end;
+  for i = 1 : k do for j = i : k do (
+    if S[i, j] != 0 then (
+      let di = [Q[:, i]; zeros(2 * n + k, 1)];
+      let dj = [Q[:, j]; zeros(2 * n + k, 1)];
+      let w = if i == j then S[i, j] else 2.0 * S[i, j] end;
+      rhs = rhs + w * (L.A * Guu[:, (i - 1) * k + j] + dg_d2(m, p, v, di, dj))
+    ) end
+  ) end end;
   let s2 = 0.0 - ((L.A * P + L.A + L.B) \ rhs);
   let clean = fn X -> pick(abs(X) < 1e-13 * max(1e-300, max(abs(X))), 0.0, X);
-  {model = m, params = p, ss = s.ss, ybar = s.ybar, P = P, Q = Q, roots = s.roots, sd = s.sd,
-   order = 2, states = m.vars[st], Gxx = clean(Gxx), Gxu = clean(Gxu), Guu = clean(Guu), s2 = clean(s2)}
+  {st = st, Gxx = clean(Gxx), Gxu = clean(Gxu), Guu = clean(Guu), s2 = clean(s2)}
+)
+
+% dsge.solve2(m, over = {}): the solution to second order.
+% Returns what dsge.solve returns — ss, ybar, P, Q, roots, sd, params, model —
+% and the second-order terms of the decision rule
+%   y = ybar + P y(-1) + Q e + 1/2 [Gxx (x (x) x) + 2 Gxu (x (x) e) + Guu (e (x) e) + s2]
+% where x holds the state variables (those that appear with a lag) as they
+% were last period, in deviation from the steady state, and (x) is the
+% Kronecker product: Gxx (n by nx^2), Gxu (n by nx k), Guu (n by k^2), s2 (n
+% by 1, the correction for risk, which scales with the shocks' variances),
+% states (the names of the state variables, in the order of x) and order =
+% 2. The derivatives are exact (hyper-dual numbers). Use dsge.simulate2,
+% dsge.irf2 and dsge.mean2 on the result; dsge.irf, dsge.moments and the
+% rest read its first-order part.
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); [size(s.Gxx), size(s.Gxu), size(s.Guu)] %= [5, 4, 5, 2, 5, 1]
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); s.states %= ["k", "a"]
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.Guu[2, 1] %= 0.490011
+% e.g. let s = dsge.solve2(dsge.model(dsge.rbc())); format(6); s.s2[4] %= 3.85224e-05
+% e.g. let s = dsge.solve2(dsge.model(dsge.nk())); max(abs([s.Gxx[:]; s.Gxu[:]; s.Guu[:]; s.s2])) %= 0
+let dsge_solve2 = fn m, over = {} -> (
+  let s = dsge_solve(m, over);
+  let g = dg_second(m, s.params, s.ybar, s.P, s.Q, diag(s.sd .^ 2));
+  {model = m, params = s.params, ss = s.ss, ybar = s.ybar, P = s.P, Q = s.Q, roots = s.roots, sd = s.sd,
+   order = 2, states = m.vars[g.st], Gxx = g.Gxx, Gxu = g.Gxu, Guu = g.Guu, s2 = g.s2}
 )
 
 % internal: a second-order solution or an error that says what was given.
@@ -782,6 +799,19 @@ let dsge_irf2 = fn s, shock, T = 40, size = 1 -> (
   dg_table(a.Y1 + a.Y2 - b.Y2, s.model.vars)
 )
 
+% internal: the means to second order as a column, for shocks with covariance
+% matrix S (which must be the S the solution's s2 was computed for). The
+% rule's curvature turns the variance of the states (Sx) and of the shocks
+% into a constant, and that constant accumulates through P.
+let dg_mean2 = fn s, S -> (
+  let n = s.model.n; let k = s.model.k;
+  let st = find(s.model.lag > 0); let nx = numel(st);
+  let Sy = dg_lyap(s.P, s.Q * S * s.Q');
+  let Sx = Sy[st, st];
+  let drift = 0.5 * (s.Gxx * reshape(Sx, nx * nx, 1) + s.Guu * reshape(S, k * k, 1) + s.s2);
+  s.ybar + (eye(n) - s.P) \ drift
+)
+
 % dsge.mean2(s): the unconditional means to second order, by variable name.
 % To first order a variable's mean is its steady state. To second order it
 % is not: risk shifts the decision rule (s2) and the rule's curvature turns
@@ -792,18 +822,9 @@ let dsge_irf2 = fn s, shock, T = 40, size = 1 -> (
 % e.g. let s = dsge.solve2(dsge.model(dsge.nk())); dsge.mean2(s).pi %= 0
 let dsge_mean2 = fn s -> (
   dg_need2(s, "mean2");
-  let n = s.model.n; let k = s.model.k;
-  let st = find(s.model.lag > 0);
-  let QS = s.Q .* (ones(n, 1) * s.sd');
-  let Sy = dg_lyap(s.P, QS * QS');
-  let Sx = Sy[st, st];
-  let vu = zeros(k * k, 1);
-  for j = 1 : k do vu[(j - 1) * k + j] = s.sd[j]^2 end;
-  let nx = numel(st);
-  let drift = 0.5 * (s.Gxx * reshape(Sx, nx * nx, 1) + s.Guu * vu + s.s2);
-  let mu = s.ybar + (eye(n) - s.P) \ drift;
+  let mu = dg_mean2(s, diag(s.sd .^ 2));
   let r = {};
-  for i = 1 : n do r = setfield(r, s.model.vars[i], mu[i]) end;
+  for i = 1 : s.model.n do r = setfield(r, s.model.vars[i], mu[i]) end;
   r
 )
 

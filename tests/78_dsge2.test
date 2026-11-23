@@ -166,3 +166,25 @@ load("dsge"); load("tests/data/nk_baseline.cz"); let s = dsge.solve2(nk_baseline
 => true
 .. let mu = dsge.mean2(s); let mv = zeros(28, 1); for i = 1 : 28 do mv[i] = getfield(mu, nk_baseline.vars[i]) end; max(abs(mv - [1.024757111588; 0.3832372294954; 1.004745338872; 1.003415425036; 1.002982526288; 2.805743448569; 1.014258426380; 1.008251958960; 0.03424611356926; 0.1589450386945; 0.3473376823235; 0.9992594029440; 2.592842196344; 0.2954571655119; 1.110434577132; 1.132826935078; 1.020513226610; 1.017757879094; 7.724910669719; 8.583234077465; 0.4623851912250; 0.8940815768119; 4.883596634210; 1.004656829277; 1.005587818290; 0.2971150905172; 1.032994739261; 0.04669705913315])) < 1e-8
 => true
+
+# --- correlated shocks: the covariance that the internal routines take ---
+# Collard's model again, the shocks now of different sizes and correlated (0.4);
+# Dynare's ghs2 and second-order mean for it (the model 'twocorr' in tests/ref_dsge2.py).
+# dsge.solve2 itself keeps the package's independent shocks: it passes a diagonal covariance.
+load("dsge"); let m = dsge.model({vars = "y c k a h b", shocks = "e u", params = {alpha = 0.36, rho = 0.95, tau = 0.025, beta = 0.99, delta = 0.025, psi = 0.0, theta = 2.95}, sd = {e = 0.009, u = 0.012}, init = {y = 1.08068253095672, c = 0.80359242014163, h = 0.29175631001732, k = 11.08360443260358, a = 0.0, b = 0.0}, model = ["c * theta * h^(1 + psi) = (1 - alpha) * y"; "k = beta * (((exp(b) * c) / (exp(b(+1)) * c(+1))) * (exp(b(+1)) * alpha * y(+1) + (1 - delta) * k))"; "y = exp(a) * (k(-1)^alpha) * (h^(1 - alpha))"; "k = exp(b) * (y - c) + (1 - delta) * k(-1)"; "a = rho * a(-1) + tau * b(-1) + e"; "b = tau * a(-1) + rho * b(-1) + u"]}); let s = dsge.solve(m); let S = [0.009^2, 0.4 * 0.009 * 0.012; 0.4 * 0.009 * 0.012, 0.012^2]; let g = dg_second(m, s.params, s.ybar, s.P, s.Q, S); max(abs(g.s2 - [0.0009445827651934; -0.0003950938271104; 0.001339676592304; 0; 0.0003984576502934; -4.297668509905e-20])) < 1.34e-11
+=> true
+# the curvature terms do not depend on the covariance: they are those of the independent case
+.. let d = dsge.solve2(m); [max(max(abs(g.Gxx - d.Gxx))), max(max(abs(g.Gxu - d.Gxu))), max(max(abs(g.Guu - d.Guu)))]
+=> [0, 0, 0]
+# ... and a diagonal covariance gives what dsge.solve2 gives
+.. let g0 = dg_second(m, s.params, s.ybar, s.P, s.Q, diag(s.sd .^ 2)); max(abs(g0.s2 - d.s2))
+=> 0
+# the correlation matters: the correction for risk is not the independent one
+.. max(abs(g.s2 - d.s2)) > 1e-5
+=> true
+# the mean to second order, with the covariance
+.. let sc = {model = m, ybar = s.ybar, P = s.P, Q = s.Q, Gxx = g.Gxx, Gxu = g.Gxu, Guu = g.Guu, s2 = g.s2}; max(abs(dg_mean2(sc, S) - [1.087196513857; 0.8084234270765; 11.26422244133; 0; 0.2916042591356; 0])) < 1e-10
+=> true
+# a shock with no variance still has its columns in the rule; only the risk correction ignores it
+.. let gz = dg_second(m, s.params, s.ybar, s.P, s.Q, [0.009^2, 0; 0, 0]); [max(max(abs(gz.Guu - d.Guu))) == 0, max(abs(gz.s2)) > 0, max(abs(gz.s2 - d.s2)) > 1e-6]
+=> [true, true, true]

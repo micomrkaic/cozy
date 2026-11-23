@@ -746,3 +746,18 @@ ordinary size; stress/kernels.cz now runs every decomposition from
 real problems in complex arithmetic (a real path would be about four
 times faster); the dsge linearisation and the interpreter's own
 overhead are now most of a solve.
+
+## 24. A covariance under second order — SHIPPED 0.1.36 (for the DSGE
+workbench's second-order solutions; entry 22's residue "correlated
+shocks", in part). DECIDED: the generality goes into the package's
+internals (dg_second, dg_mean2 take a covariance matrix) and not into
+its interface: dsge.model still has independent shocks with an sd each.
+A public `corr` would have to mean something in irf, moments and
+vardecomp too (which innovation is "one standard deviation of e" once e
+and u move together is a convention, Dynare's being Cholesky in the
+order declared), and that is a design question for its own release. The
+workbench already owns that convention for first order and now passes
+the covariance for second. DECIDED: derivatives stay with respect to the
+shocks themselves, not to orthogonalised innovations, so a shock whose
+variance is zero keeps its place in the rule. RESIDUE: correlated shocks
+in the package's interface.

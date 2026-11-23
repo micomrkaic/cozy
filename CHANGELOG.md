@@ -1,5 +1,29 @@
 # Cozy changelog
 
+## 0.1.36 — second order with correlated shocks, inside
+
+### Changed
+- **dsge: the second-order terms are computed by an internal routine that
+  takes the shocks' covariance matrix**, `dg_second(m, p, ybar, P, Q, S)`,
+  and the means by `dg_mean2(s, S)`. `dsge.solve2` and `dsge.mean2` call
+  them with a diagonal covariance and return exactly what they returned
+  before; the package's own shocks remain independent. A caller with
+  correlated shocks — the DSGE workbench, which reads them from a model
+  file's `shocks` block — passes the whole matrix. Only the correction
+  for risk (`s2`) and the means depend on it: each pair of shocks adds
+  its covariance times the curvature of the equations along the two
+  first-order responses. The derivatives are with respect to the shocks
+  themselves, so a shock with no variance still has its columns in `Gxu`
+  and `Guu`.
+
+### Validated
+- **Against Dynare 6.0 with correlated shocks**: Collard's model with
+  shocks of different sizes and a correlation of 0.4 (`twocorr` in
+  tests/ref_dsge2.py). `ghs2` and the second-order mean agree to every
+  digit Dynare prints (1e-12). Six new cases in tests/78_dsge2.test,
+  among them that a diagonal covariance reproduces `dsge.solve2` to the
+  bit.
+
 ## 0.1.35 — the built-in kernels, at every scale and ten times faster
 
 ### Fixed
