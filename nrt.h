@@ -72,6 +72,101 @@ static inline bool binop_numbers(enum TokenKind op, const Value *a, const Value 
     }
     return false;
 }
+/* ---- collecting the results of a map ------------------------------------
+ * map, `~>` and the indexed reductions all produce one value per element
+ * and need them as an array. A Collect is that array being made:
+ *
+ *   - where the elements come from: an array (borrowed for the duration),
+ *     or an Int range r0 : rstep : ... that is counted through and never
+ *     made into an array;
+ *   - the results. While every one is an Int or a Float they are written
+ *     as numbers -- Ints until the first Float arrives, which turns what is
+ *     there into Floats in place (what packing a mixture always did). At
+ *     the first result of any other kind (complex, Bool, a string, a date,
+ *     a dual, null) the numbers so far are boxed after all, and the general
+ *     path -- boxed Values, packed at the end by pack_array -- carries on,
+ *     so every such case is packed by the code that always packed it;
+ *   - for a reduction by the builtin sum or prod over at most COLLECT_SMALL
+ *     elements the numbers are kept in a buffer the owner lends (`small`)
+ *     and the reducer reads them there, so nothing is allocated. Only those
+ *     two, because they are known to keep nothing of their argument.
+ *
+ * map's own runs (eval.c) hold one on the C stack, and lend no buffer: two
+ * kilobytes in every nested call was what made deep recursion through a
+ * reduction overflow the C stack sooner in 0.1.43. Since 0.1.44 the VM
+ * holds them too, with a buffer each, for reductions whose body it runs
+ * inline (OP_RED_*). */
+enum { COLLECT_SMALL = 256 };
+typedef struct Collect {
+    const ArrObj *arr;             /* the source array, or null: the Int range below */
+    int64_t r0, rstep;
+    size_t  nn, at;                /* elements; the next one to hand out */
+    uint32_t rows, cols;           /* the shape the array of results has */
+    BuiltinFn small_fn;            /* sum or prod, when the numbers are kept in `small` */
+    bool    typed, floats;         /* results are all numbers so far; and are doubles */
+    Value   out;                   /* the array they are written into (unless small_fn) */
+    Value  *tmp;                   /* else: the boxed results */
+    size_t  done;                  /* how many results there are */
+    bool    saw_str, saw_bool, saw_other;
+    int64_t *small;                /* room for COLLECT_SMALL numbers, or null */
+} Collect;
+
+/* the k-th element of the Int range s : st : ... (make_range fills its array with these) */
+static inline int64_t int_range_at(int64_t s, int64_t st, uint64_t k)
+{ return (int64_t)((uint64_t)s + k * (uint64_t)st); }
+
+/* Begin. `red` is the reducer the results are meant for (null for a plain
+ * map); `small` a buffer of COLLECT_SMALL numbers to use if the reduction is
+ * short, or null. Both raise before anything is allocated: a bad range, a
+ * source that is not an array. */
+void collect_begin_range(Interp *I, Collect *c, Value red, int64_t *small,
+                         int64_t start, int64_t step, int64_t stop);
+void collect_begin_array(Interp *I, Collect *c, Value red, int64_t *small, Value src);
+/* a result that is not a plain number, or arrives after one that was not */
+void collect_take_slow(Interp *I, Collect *c, Value v);
+/* End. True: *result is the reduction itself (a short sum or prod). False:
+ * *result is the array of results (+1), for the caller to return or to hand
+ * to the reducer. Either way the Collect holds nothing afterwards. */
+bool collect_finish(Interp *I, Collect *c, Value red, Value *result);
+/* give up: release whatever is held (the error path) */
+void collect_abort(Collect *c);
+
+/* the next element (lent), or false when there are no more */
+static inline bool collect_next(Collect *c, Value *v)
+{
+    if (c->at == c->nn) return false;
+    *v = c->arr ? arr_get(c->arr, c->at) : val_int(int_range_at(c->r0, c->rstep, c->at));
+    c->at++;
+    return true;
+}
+/* take one result (owned; *v is not used afterwards). May raise, with the
+ * value already where collect_abort will find it. It is read through the
+ * pointer, a field at a time: the value was just built by an operator as a
+ * kind and a number, and copying all forty bytes of it first makes the
+ * processor wait for those two small writes to land. */
+static inline void collect_take(Interp *I, Collect *c, const Value *v)
+{
+    if (c->typed) {
+        void *num = c->small_fn ? (void *)c->small : as_arr(c->out)->data;
+        if (v->kind == VAL_INT) {
+            if (c->floats) ((double *)num)[c->done] = (double)v->as.i;
+            else           ((int64_t *)num)[c->done] = v->as.i;
+            c->done++;
+            return;
+        }
+        if (v->kind == VAL_FLOAT) {
+            if (!c->floats) {                          /* the Ints so far become Floats */
+                for (size_t k = 0; k < c->done; k++) ((double *)num)[k] = (double)((const int64_t *)num)[k];
+                c->floats = true;
+            }
+            ((double *)num)[c->done] = v->as.f;
+            c->done++;
+            return;
+        }
+    }
+    collect_take_slow(I, c, *v);
+}
+
 /* Calling one function many times (0.1.42). map, and through it `~>` and
  * the indexed reductions, called the function through call_value once per
  * element, and every such call was a run of the VM of its own: a jmp_buf

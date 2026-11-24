@@ -1619,9 +1619,9 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
     return result;
 }
 
-/* An Int range s : st : e -- how many elements, and the k-th. make_range
- * fills an array with them; the fused reductions (bi_map_reduce) hand them
- * out one at a time without making the array. One definition for both. */
+/* An Int range s : st : e -- how many elements (the k-th is int_range_at,
+ * nrt.h). make_range fills an array with them; a Collect over a range hands
+ * them out one at a time without making the array. One definition for both. */
 static uint64_t int_range_count(Interp *I, int64_t s, int64_t st, int64_t e)
 {
     const int64_t RANGE_MAX = 100000000;               /* 1e8 elements, ~800 MB */
@@ -1635,9 +1635,6 @@ static uint64_t int_range_count(Interp *I, int64_t s, int64_t st, int64_t e)
                       (unsigned long long)count, (long long)RANGE_MAX);
     return count;
 }
-static inline int64_t int_range_at(int64_t s, int64_t st, uint64_t k)
-{ return (int64_t)((uint64_t)s + k * (uint64_t)st); }
-
 Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; result is +1 */
 {
     /* Date ranges (entry 16's design, honored): date : step-days : date
@@ -2251,89 +2248,55 @@ static Value sc_hdual12(Interp *I, Value v)
 static Value bi_hdualval(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdualval); }
 static Value bi_hdual12(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdual12); }
 
-/* map: f over the elements, all the calls in one run of the VM
- * (vm_call_each, nrt.h).
- *
- * The results used to be collected as boxed Values -- forty bytes each,
- * forty megabytes for a million elements, touched once and thrown away --
- * and packed into the array at the end. While every result is an Int or a
- * Float they now go straight into a buffer of numbers (for map, the array
- * that will be returned): Ints until the first Float arrives, which turns
- * what is there into Floats in place (what packing did with a mixture). At
- * the first result of any other kind -- complex, Bool, a string, a date, a
- * dual, null -- the numbers so far are boxed after all and the general path
- * carries on from there, so every such case is packed by the code that
- * always packed it.
- *
- * The same run serves the indexed reductions (bi_map_reduce, below), which
- * add two things: the arguments may come from an Int range that is never
- * made into an array, and the numbers may go to a buffer on the caller's
- * stack instead of an array. */
-typedef struct {
-    /* the arguments: the elements of arr, or the Int range r0 : rstep : ... */
-    const ArrObj *arr;
-    int64_t r0, rstep;
-    size_t nn, at;                 /* elements; the next one to hand to f */
-    /* the results, while they are all Int or all Float */
-    void  *num;                    /* nn numbers: int64_t, or double once `floats` */
-    bool   typed, floats;
-    Value  out;                    /* the array num belongs to, if it is an array's */
-    /* else: boxed */
-    Value *tmp;
-    volatile size_t done;          /* how many results there are: what an error must release */
-    bool saw_str, saw_bool, saw_other;
-} MapRun;
+/* ---- Collect (nrt.h): the results of a map, being made ------------------ */
+static Value bi_sum(Interp *I, Value *args, uint32_t n);
+static Value bi_prod(Interp *I, Value *args, uint32_t n);
 
-static bool map_next(Interp *I, VMEach *e, Value *args)
+static void collect_begin(Collect *c, Value red, int64_t *small)
 {
-    (void)I;
-    MapRun *m = e->ctx;
-    if (m->at == m->nn) return false;
-    if (m->arr) args[0] = arr_get(m->arr, m->at);       /* borrowed from arr (see arr_get) */
-    else        args[0] = val_int(int_range_at(m->r0, m->rstep, m->at));
-    m->at++;
-    return true;
+    c->small = small;
+    c->at = 0; c->done = 0;
+    c->typed = true; c->floats = false;
+    c->tmp = nullptr;
+    c->saw_str = c->saw_bool = c->saw_other = false;
+    BuiltinFn rfn = red.kind == VAL_BUILTIN ? as_blt(red)->fn : nullptr;
+    c->small_fn = (small && (rfn == bi_sum || rfn == bi_prod) && c->nn <= COLLECT_SMALL) ? rfn : nullptr;
+    c->out = c->small_fn ? val_null() : val_array(ELT_INT, c->rows, c->cols);
+}
+void collect_begin_range(Interp *I, Collect *c, Value red, int64_t *small,
+                         int64_t start, int64_t step, int64_t stop)
+{
+    c->nn = (size_t)int_range_count(I, start, step, stop);
+    c->arr = nullptr; c->r0 = start; c->rstep = step;
+    c->rows = 1; c->cols = (uint32_t)c->nn;
+    collect_begin(c, red, small);
+}
+void collect_begin_array(Interp *I, Collect *c, Value red, int64_t *small, Value src)
+{
+    if (!is_array(src)) runtime_error(I, "map: second argument must be an Array");
+    c->arr = as_arr(src); c->r0 = c->rstep = 0;
+    c->rows = c->arr->rows; c->cols = c->arr->cols;
+    c->nn = (size_t)c->rows * c->cols;
+    collect_begin(c, red, small);
 }
 
-/* leave the typed path: box what is there, as the kind it was stored as */
-static void map_untype(MapRun *m)
+void collect_take_slow(Interp *I, Collect *c, Value mapped)
 {
-    Value *tmp = m->nn ? malloc(m->nn * sizeof *tmp) : nullptr;
-    if (m->nn && !tmp) abort();
-    for (size_t k = 0; k < m->done; k++)
-        tmp[k] = m->floats ? val_float(((const double *)m->num)[k]) : val_int(((const int64_t *)m->num)[k]);
-    m->tmp = tmp;
-    m->typed = false;
-    if (m->done) m->saw_other = true;
-    m->num = nullptr;
-    value_release(m->out);
-    m->out = val_null();
-}
-
-static void map_take(Interp *I, VMEach *e, Value mapped)
-{
-    MapRun *m = e->ctx;
-    if (m->typed) {
-        if (mapped.kind == VAL_INT) {
-            if (m->floats) ((double *)m->num)[m->done] = (double)mapped.as.i;
-            else           ((int64_t *)m->num)[m->done] = mapped.as.i;
-            m->done = m->done + 1;
-            return;
-        }
-        if (mapped.kind == VAL_FLOAT) {
-            if (!m->floats) {                          /* the Ints so far become Floats */
-                for (size_t k = 0; k < m->done; k++)
-                    ((double *)m->num)[k] = (double)((const int64_t *)m->num)[k];
-                m->floats = true;
-            }
-            ((double *)m->num)[m->done] = mapped.as.f;
-            m->done = m->done + 1;
-            return;
-        }
-        map_untype(m);
+    if (c->typed) {                    /* leave the numbers: box what is there, as the kind it was stored as */
+        const void *num = c->small_fn ? (const void *)c->small : as_arr(c->out)->data;
+        Value *tmp = c->nn ? malloc(c->nn * sizeof *tmp) : nullptr;
+        if (c->nn && !tmp) abort();
+        for (size_t k = 0; k < c->done; k++)
+            tmp[k] = c->floats ? val_float(((const double *)num)[k]) : val_int(((const int64_t *)num)[k]);
+        c->tmp = tmp;
+        c->typed = false;
+        c->small_fn = nullptr;
+        if (c->done) c->saw_other = true;
+        value_release(c->out);
+        c->out = val_null();
     }
-    m->tmp[m->done] = mapped;
-    m->done = m->done + 1;
+    c->tmp[c->done] = mapped;
+    c->done++;
     /* The result is an array of what f returned, so each must be
      * something an array can hold. An Array, Record or function used
      * to be packed as if it were a number -- its pointer read as a
@@ -2341,54 +2304,96 @@ static void map_take(Interp *I, VMEach *e, Value mapped)
      * that tests scoping; `sum[k = 1:3] [k, 2]` reaches here too).
      * A null is still let through and packed as zero, as it always
      * was: `map(fn k -> print(k), x);` is somebody's for-each. */
-    if (mapped.kind == VAL_STRING) m->saw_str = true;
-    else if (mapped.kind == VAL_BOOL) m->saw_bool = true;
-    else if (is_num(mapped) || mapped.kind == VAL_DATE || mapped.kind == VAL_NULL) m->saw_other = true;
+    if (mapped.kind == VAL_STRING) c->saw_str = true;
+    else if (mapped.kind == VAL_BOOL) c->saw_bool = true;
+    else if (is_num(mapped) || mapped.kind == VAL_DATE || mapped.kind == VAL_NULL) c->saw_other = true;
     else
         runtime_error(I, "map: the function must return a number or a string for each element, got %s",
                       type_name(mapped.kind));
-    if (m->saw_str && m->saw_other)
+    if (c->saw_str && c->saw_other)
         runtime_error(I, "map: the function returned strings for some elements and numbers for others");
     /* Bool with anything else: an array is logical or it is not, as in a
      * matrix literal. (Until 0.1.42 the Bools were stored as if they were
      * numbers -- true read as a Float is 4.94e-324, as an Int 0.) */
-    if (m->saw_bool && (m->saw_other || m->saw_str))
+    if (c->saw_bool && (c->saw_other || c->saw_str))
         runtime_error(I, "map: the function returned Bool for some elements and %s for others",
-                      m->saw_str ? "strings" : "numbers");
+                      c->saw_str ? "strings" : "numbers");
 }
 
-static Value bi_map(Interp *I, Value *args, uint32_t n)
+bool collect_finish(Interp *I, Collect *c, Value red, Value *result)
 {
-    (void)n;
-    Value f = args[0], a = args[1];
-    if (!is_array(a)) runtime_error(I, "map: second argument must be an Array");
-    ArrObj *arr = as_arr(a);
-    size_t nn = (size_t)arr->rows * arr->cols;
-    MapRun m = { .arr = arr, .nn = nn, .out = val_array(ELT_INT, arr->rows, arr->cols), .typed = true };
-    m.num = as_arr(m.out)->data;
-    VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = &m };
+    (void)red;
+    if (!c->typed) {                                   /* some result was not a plain number */
+        Value *tmp = c->tmp;
+        c->tmp = nullptr; c->done = 0;
+        *result = pack_array(tmp, c->nn, c->rows, c->cols);
+        free(tmp);
+        return false;
+    }
+    EltType elt = c->floats ? ELT_FLOAT : ELT_INT;     /* the numbers were written as doubles */
+    if (c->small_fn) {
+        /* sum or prod reads the numbers where they are, through an array
+         * header that lives as long as this call does */
+        ArrObj view = { .obj = { .kind = VAL_ARRAY, .rc = 1 }, .elt = elt, .rows = c->rows, .cols = c->cols,
+                        .data = c->nn ? c->small : nullptr };
+        Value v = { .kind = VAL_ARRAY, .as.obj = &view.obj };
+        *result = c->small_fn(I, &v, 1);
+        return true;
+    }
+    as_arr(c->out)->elt = elt;
+    *result = c->out;
+    c->out = val_null();
+    return false;
+}
 
-    /* If an element call raises, free the partial result and re-raise. */
+void collect_abort(Collect *c)
+{
+    if (!c->typed) {
+        for (size_t k = 0; k < c->done; k++) value_release(c->tmp[k]);
+        free(c->tmp);
+        c->tmp = nullptr; c->done = 0;
+    }
+    value_release(c->out);
+    c->out = val_null();
+}
+
+/* ---- map: f over the elements, all the calls in one run of the VM
+ * (vm_call_each, nrt.h), the results in a Collect ---- */
+static bool map_next(Interp *I, VMEach *e, Value *args) { (void)I; return collect_next(e->ctx, &args[0]); }
+static void map_take(Interp *I, VMEach *e, Value mapped) { collect_take(I, e->ctx, &mapped); }
+
+/* The calls, guarded: on an error what the run holds is released and the
+ * error goes on. Kept apart from its callers so that the function which
+ * calls setjmp has no locals of its own to carry across the jump -- all it
+ * needs is behind the pointers (GCC reports locals of a setjmp function as
+ * "might be clobbered", and with -Werror that is a failed build). */
+static void map_calls(Interp *I, Value f, Collect *c, const Value *held)
+{
+    VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = c };
     jmp_buf saved;
     memcpy(saved, I->jmp, sizeof(jmp_buf));
     if (setjmp(I->jmp)) {
-        if (!m.typed) array_build_abort(I, m.tmp, m.done, saved);
-        value_release(m.out);
+        if (held) value_release(*held);
+        collect_abort(c);
         memcpy(I->jmp, saved, sizeof(jmp_buf));
         longjmp(I->jmp, 1);
     }
     vm_call_each(I, f, &each);
     memcpy(I->jmp, saved, sizeof(jmp_buf));
-    if (m.typed) {
-        if (m.floats) as_arr(m.out)->elt = ELT_FLOAT;   /* the numbers were written as doubles */
-        return m.out;
-    }
-    Value r = pack_array(m.tmp, nn, arr->rows, arr->cols);
-    free(m.tmp);
-    return r;
 }
 
-/* Call fn(I, &arg, 1); release `arg` whichever way that ends. */
+static Value bi_map(Interp *I, Value *args, uint32_t n)
+{
+    (void)n;
+    Collect c;
+    Value arr;
+    collect_begin_array(I, &c, val_null(), nullptr, args[1]);
+    map_calls(I, args[0], &c, nullptr);
+    collect_finish(I, &c, val_null(), &arr);
+    return arr;
+}
+
+/* Call fn(I, &arg, 1), or callee(arg); release `arg` whichever way that ends. */
 static Value call_and_release(Interp *I, BuiltinFn fn, Value callee, Value arg)
 {
     jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
@@ -2403,102 +2408,43 @@ static Value call_and_release(Interp *I, BuiltinFn fn, Value callee, Value arg)
     return r;
 }
 
-static Value bi_sum(Interp *I, Value *args, uint32_t n);
-static Value bi_prod(Interp *I, Value *args, uint32_t n);
-
-/* The calls of a map, guarded: on an error what the run holds is released
- * and the error goes on. Kept apart from bi_map_reduce so that the function
- * which calls setjmp has no locals of its own to carry across the jump --
- * all it needs is behind the two pointers (GCC reports locals of a setjmp
- * function as "might be clobbered", and with -Werror that is a failed
- * build). */
-static void map_calls(Interp *I, Value f, MapRun *m, const Value *held)
-{
-    VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = m };
-    jmp_buf saved;
-    memcpy(saved, I->jmp, sizeof(jmp_buf));
-    if (setjmp(I->jmp)) {
-        value_release(*held);
-        if (!m->typed) array_build_abort(I, m->tmp, m->done, saved);
-        value_release(m->out);
-        memcpy(I->jmp, saved, sizeof(jmp_buf));
-        longjmp(I->jmp, 1);
-    }
-    vm_call_each(I, f, &each);
-    memcpy(I->jmp, saved, sizeof(jmp_buf));
-}
-
-/* (x ~> f) |> r without the arrays it does not need: what `r[k = a:b] body`
- * compiles to (0.1.43).
+/* (x ~> f) |> r as one call: what the compiler emits for that shape when it
+ * cannot run f's body inline (0.1.43; see compile.c for when it can, 0.1.44).
  *   args: r, f, x                   the source is an array
  *         r, f, start, step, stop   the source was written as a range
- * The definition is r(map(f, x)), and that is still what is computed: the
- * results are collected by map's own run, and r is called on them. What is
- * left out is what nothing reads:
- *
- *   - an Int range is not made into an array. Its elements are handed to f
- *     from a counter (int_range_count / int_range_at, which make_range uses
- *     too).
- *   - when r is the builtin sum or prod and there are at most
- *     REDUCE_ON_STACK elements, the numbers go to a buffer on this stack and
- *     r reads them there, through an array header that is also on this
- *     stack. A reduction over a few elements, inside a loop, then allocates
- *     nothing. Only those two reducers, because they are known to read
- *     their argument and keep nothing of it.
+ * The definition is r(map(f, x)), and that is what is computed: the results
+ * are collected by map's own run, and r is called on them. What is left out
+ * is what nothing reads: an Int range is counted through and not made into
+ * an array. (The numbers of a short sum or prod are kept off the heap only
+ * when the body runs inline, where the VM has a buffer to lend.)
  *
  * A pass that reduced as it went, with no record of the results, was built
- * and measured first. It was slower for Int results (54 against 47 ms per
- * million): folding element by element costs more than a tight reduction
- * afterwards, and the numbers had to be kept anyway, because a result of
- * another kind arriving late must be able to hand the whole array to the
- * general path. So nothing about the arithmetic is new here: sum and prod
+ * and measured first (0.1.43). It was slower for Int results (54 against 47
+ * ms per million): folding element by element costs more than a tight
+ * reduction afterwards, and the numbers had to be kept anyway, because a
+ * result of another kind arriving late must be able to hand the whole array
+ * to the general path. So nothing about the arithmetic is new: sum and prod
  * add and multiply exactly the numbers map would have put in its array.
  *
  * Errors come in the order they did: the range's, then the function's as
  * the elements are reached, then the reducer's. */
-enum { REDUCE_ON_STACK = 256 };
 static Value bi_map_reduce(Interp *I, Value *args, uint32_t n)
 {
     Value red = args[0], f = args[1];
-    BuiltinFn rfn = red.kind == VAL_BUILTIN ? as_blt(red)->fn : nullptr;
-    if (rfn != bi_sum && rfn != bi_prod) rfn = nullptr;    /* any other reducer is called as a value */
-
-    MapRun m = { .typed = true };
+    Collect c;
     Value held = val_null();                           /* a source array made here */
-    uint32_t rows = 1, cols;
-    if (n == 5 && args[2].kind == VAL_INT && args[3].kind == VAL_INT && args[4].kind == VAL_INT) {
-        m.r0 = args[2].as.i; m.rstep = args[3].as.i;
-        m.nn = (size_t)int_range_count(I, m.r0, m.rstep, args[4].as.i);
-        cols = (uint32_t)m.nn;
-    } else {
-        Value src = n == 5 ? (held = make_range(I, args[2], args[4], args[3])) : args[2];
-        if (!is_array(src)) runtime_error(I, "map: second argument must be an Array");
-        m.arr = as_arr(src);
-        rows = m.arr->rows; cols = m.arr->cols;
-        m.nn = (size_t)rows * cols;
-    }
-    int64_t on_stack[REDUCE_ON_STACK];
-    bool small = rfn && m.nn <= REDUCE_ON_STACK;
-    if (small) m.num = on_stack;
-    else { m.out = val_array(ELT_INT, rows, cols); m.num = as_arr(m.out)->data; }
-
-    map_calls(I, f, &m, &held);
+    if (n == 5 && args[2].kind == VAL_INT && args[3].kind == VAL_INT && args[4].kind == VAL_INT)
+        collect_begin_range(I, &c, red, nullptr, args[2].as.i, args[3].as.i, args[4].as.i);
+    else if (n == 5) {
+        held = make_range(I, args[2], args[4], args[3]);
+        collect_begin_array(I, &c, red, nullptr, held);    /* (a range is an array: cannot raise) */
+    } else
+        collect_begin_array(I, &c, red, nullptr, args[2]);
+    map_calls(I, f, &c, &held);
     value_release(held);
-
-    if (!m.typed) {                                    /* some result was not a plain number */
-        Value packed = pack_array(m.tmp, m.nn, rows, cols);
-        free(m.tmp);
-        return call_and_release(I, rfn, red, packed);
-    }
-    EltType elt = m.floats ? ELT_FLOAT : ELT_INT;      /* the numbers were written as doubles */
-    if (small) {
-        ArrObj view = { .obj = { .kind = VAL_ARRAY, .rc = 1 }, .elt = elt, .rows = rows, .cols = cols,
-                        .data = m.nn ? on_stack : nullptr };
-        Value v = { .kind = VAL_ARRAY, .as.obj = &view.obj };
-        return rfn(I, &v, 1);
-    }
-    as_arr(m.out)->elt = elt;
-    return call_and_release(I, rfn, red, m.out);
+    Value r;
+    if (collect_finish(I, &c, red, &r)) return r;
+    return call_and_release(I, nullptr, red, r);
 }
 
 static Value abs_scalar(Interp *I, Value v)

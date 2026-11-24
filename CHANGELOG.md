@@ -1,5 +1,96 @@
 # Cozy changelog
 
+## 0.1.44 — the body of a reduction, inline
+
+The item 0.1.43 left: `r[k = a:b] body` made a function of the body each
+time the line ran, and called it for every element. Where the body cannot
+tell the difference, there is now no function at all.
+
+Milliseconds, best of seven over several runs, built-in backend:
+
+| | 0.1.43 | 0.1.44 |
+|---|---|---|
+| `sum[k = 1:3] k * r`, 100,000 times in a loop | 34.4 | 23.6 |
+| `prod[k = 1:5] (1 + r / k)`, 100,000 times | 63.9 | 52.1 |
+| `sum[k = 1:100] k * r`, 10,000 times | 40.7 | 38.6 |
+| `sum[k = 1:1000000] k * k` | 41.0 | 41.1 |
+| `sum[k = 1:1000000] 1 / k ^ 2` | 65.1 | 65.6 |
+
+A third off a short reduction in a loop, which is where the function
+was most of the cost. Nothing for a long one: per element the loop costs
+what the call did (the instruction count halved; the time is in getting
+forty-byte values in and out of memory, as before).
+
+### Changed
+- **The body runs as a loop in the frame that wrote it.** For
+  `r[k = src] body` -- and `(src ~> fn k -> body) |> r` written out --
+  the compiler emits `RED_BEGIN`, the body, `RED_STEP` (take the value,
+  fetch the next `k`, jump back) and `RED_END`. `k` is a local of the
+  enclosing frame, and what the body reads from outside it reads
+  directly. No closure is made, nothing is captured, no frame is pushed
+  per element. The results go to the same collector `map` uses, so the
+  kind of the answer, the errors for results that will not go in an
+  array, and the reducer's call are what they were.
+- **A function is still made whenever being one could be told apart.**
+  As a function the body returns from itself, has no `@` of an outer
+  pipe, and sees the enclosing function's locals as they were when the
+  reduction began, assigning only to its own copies. So a body that
+  contains `return`, a free `@`, or an assignment to a local or captured
+  variable of an enclosing function is compiled exactly as before; so is
+  a reduction whose reducer or range expression assigns or declares
+  something. Assigning a global, or a variable the body declares itself,
+  is no obstacle. `break` and `continue` in a body still may not reach a
+  loop outside it, and `end` still does not mean an index outside it.
+
+### What shows
+- **A backtrace no longer lists the body as a function.** An error in
+  the body of `sum[k = 1:n] ...` inside `f` used to print
+  `in <fn> (line 1)` above `in f (line 1)`; the anonymous line is gone,
+  since there is no such function. (Where the body is still compiled as
+  one, it is still listed.)
+- **Recursion through a reduction is as deep as plain recursion.**
+  `let f = fn n -> if n == 0 then 0 else sum[k = 1:1] f(n - 1) end`
+  used to take a run of the VM, on the C stack, for every level. It now
+  takes a frame, like any call.
+
+### Fixed
+- **Deep recursion through `map` or a reduction was a segmentation
+  fault.** The limit on nested runs of the VM was a count, 1800, chosen
+  to stay inside the C stack; at some five kilobytes a level it did not.
+  0.1.41 and 0.1.42 crashed from about 1,790 levels, 0.1.43 from about
+  1,500 (it kept 2 KB of numbers in each level; that is undone). In the
+  browser the JavaScript engine's stack gave out between 300 and 400
+  levels and ended the session with a RangeError. Both are now the error
+  "maximum call depth exceeded": natively the C stack is measured and
+  the limit is three quarters of what the process was given (about
+  1,100 levels with the usual eight megabytes; `COZY_STACK_BUDGET` sets
+  it for an embedding on a small thread stack); in WebAssembly the count
+  is 200. Found while checking what inlining did to recursion depth.
+
+### Verified
+- tests/85_inline.test: 57 cases. 51 were generated from the 0.1.43
+  binary: bodies that read, assign and shadow what is around them, at
+  top level and inside functions; every reason a body stays a function,
+  each with an answer that would be different inline; `break`,
+  `continue`, `end` and `@` in a body; errors in the range, the body and
+  the reducer; five reductions nested. Six are the recursion depths
+  above.
+- 6,000 random programs written at that boundary (about three
+  reductions in five compile inline, two as functions), and the 8,000
+  random reductions and maps of the last two releases, printed at 17
+  digits by 0.1.43 and 0.1.44: identical once the anonymous backtrace
+  line is set aside. 7,500 of them under the sanitizers: clean.
+- The golden suite (2049 inputs) under both backends, the sanitizers
+  and WebAssembly, built with GCC 13, GCC 14 and clang; the stress
+  workout.
+
+### Not done
+- A long reduction is no faster. What it costs now is the VM itself:
+  four instructions per element for `k * k`, and a forty-byte value
+  copied at each.
+- `x ~> f` on its own (a map with no reduction) still calls a function
+  per element even when `f` is written in place.
+
 ## 0.1.43 — reductions without the arrays nothing reads
 
 The item 0.1.42 left: `r[k = a:b] body` built the range, mapped it into

@@ -70,6 +70,18 @@ typedef enum : uint8_t {
     OP_END_POP,        /*         : pop the dim-size frame                       */
     OP_INDEX_SET,      /* u8 argc, u8 colonmask : a[idx] = value (copy-on-write) */
     OP_RECORD,         /* u16 n, then n u16 key-name indices: top n vals -> rec */
+    /* --- an indexed reduction whose body runs inline (0.1.44; compile.c) ---
+     * r[k = src] body, as a loop in the frame that wrote it: no closure, no
+     * call per element. The results go to a Collect (nrt.h) the VM holds. */
+    OP_RED_BEGIN,      /* u8 mode : mode 1: [r, start, step, stop] -> [r, src];   */
+                       /*           mode 0: [r, src]. Start collecting.           */
+    OP_RED_NEXT,       /* u8 slot, u16 end : slot = the first element; if there   */
+                       /*           is none, empty the slot and jump to end       */
+    OP_RED_STEP,       /* u8 slot, u16 back : pop the body's value into the       */
+                       /*           Collect; slot = the next element and jump     */
+                       /*           back to the body, or empty the slot and go on */
+                       /*           (one instruction per element, not three)      */
+    OP_RED_END,        /*           : [r, src] -> r(the results)                  */
 } OpCode;
 
 typedef struct Chunk {

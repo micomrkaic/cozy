@@ -942,3 +942,51 @@ about 10% on a million terms. RESIDUE: the result array of a long
 reduction; the closure made per evaluation of the line (two mallocs);
 resumable reducers, if a streaming reduction is ever wanted again.
 
+## 30. The body of a reduction, inline — SHIPPED 0.1.44 (entry 29's
+residue "the closure made per evaluation of the line"; owner-triggered:
+"now avoid creating the closure each time the line runs"). CONSIDERED: a
+pool of closure objects (saves two mallocs of the seven hundred
+instructions a three-term sum spent on being a function; the calls and
+the nested run stay); a closure cached in the frame and re-filled (the
+same, with a new kind of slot); a constant closure when nothing is
+captured (helps only at top level, where variables are globals).
+DECIDED: do not make the function. The compiler recognises
+(src ~> fn k -> body) |> r, the desugared index notation, and when
+inline_ok says so emits RED_BEGIN / RED_NEXT / body / RED_STEP / RED_END:
+k is a local of the enclosing frame, the body's scope is emptied per
+element as a loop body's is, and the results go to a Collect in a stack
+of them the VM keeps beside the marks (reductions nest; none is left
+except by its END or by an error, which the handler sweeps). DECIDED:
+the collector is map's, moved to nrt.h as Collect, so the kind of the
+result and its errors are one piece of code for map, the function path
+and the inline path. DECIDED: what may be inlined is what cannot tell.
+As a function the body (a) returns from itself, (b) cannot see an outer
+pipe's @, (c) reads enclosing locals as snapshots taken when the closure
+was made -- after the reducer expression, before the range -- and
+assigns to its own copies. So: no `return`, no free `@`, no assignment
+to a name that is a local of any enclosing compiler, and neither the
+reducer nor the range may assign or declare. Then no enclosing local
+changes between the snapshot and the last element (callees cannot write
+a caller's locals), and reading the live slot is reading the snapshot.
+inline_ok answers no for any node kind it does not list. loop_floor
+keeps break/continue inside the body; index_dim is reset so `end` does
+not reach out. VISIBLE: the anonymous frame leaves backtraces; recursion
+through a reduction is frames, not nested runs. MEASURED: one
+instruction per element for take+next+loop (RED_STEP) instead of three,
+or the long case was 20% slower than the call it replaced; reading the
+body's value by field, not by copy. Short reductions -31%; long ones
+equal, at half the instructions (latency, entry 26). FOUND ON THE WAY
+(the reason to look at depth at all): VM_MAX_DEPTH never protected the C
+stack -- about 5 KB per nested run, 1800 allowed, 8 MB available -- and
+0.1.43's two-kilobyte buffer per level made it worse. DECIDED: measure
+the stack (address distance from the outermost run; budget three
+quarters of RLIMIT_STACK), keep the count as a second guard, and in
+WebAssembly, where the engine's stack is what runs out and cannot be
+measured, lower the count to 200. The Collect's small buffer is lent by
+the VM's slot; map's runs on the C stack lend none. PROOF:
+tests/85_inline.test from the 0.1.43 binary; 14,000 generated programs.
+RESIDUE: x ~> f alone is still a call per element; the long reduction's
+result array; dispatch and 40-byte values. TRIGGER: a map written in
+place in an inner loop; anything that makes the value representation
+worth revisiting.
+

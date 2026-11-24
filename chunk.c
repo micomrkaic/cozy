@@ -173,6 +173,12 @@ void chunk_disassemble(FILE *out, const Chunk *c, const char *title)
                               fprintf(out, "CLOSURE        fn#%u, nup=%u", p, nu); break; }
         case OP_GET_LOCAL:  { uint8_t s = U8(); fprintf(out, "GET_LOCAL      slot %u", s); break; }
         case OP_SET_LOCAL:  { uint8_t s = U8(); fprintf(out, "SET_LOCAL      slot %u", s); break; }
+        case OP_RED_BEGIN:  { uint8_t m = U8(); fprintf(out, "RED_BEGIN      %s", m ? "range" : "array"); break; }
+        case OP_RED_NEXT:   { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "RED_NEXT       slot %u, end -> %04u", s, i + o); break; }
+        case OP_RED_STEP:   { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "RED_STEP       slot %u, body -> %04u", s, i - o); break; }
+        case OP_RED_END:      fputs("RED_END", out); break;
         case OP_GET_LOCAL_OR: { uint8_t s = U8(); uint16_t o = U16();
                               fprintf(out, "GET_LOCAL_OR   slot %u, set -> %04u", s, i + o); break; }
         case OP_SET_LOCAL_OR: { uint8_t s = U8(); uint16_t o = U16();

@@ -184,4 +184,9 @@ belongs in this language. `sum[k = 1:n]` and `map` cost about as much
 per element as a pass of a loop since 0.1.42 (they used to start a run
 of the VM for each element); `fzero`, `integral` and the optimisers
 still start one for each evaluation of your function, about 100 ns.
+Such runs nest on the C stack when your function calls one of them in
+turn: about 1,100 deep with an eight-megabyte stack (200 in the
+browser), then "maximum call depth exceeded". A reduction written with
+its index does not nest this way since 0.1.44, unless its body returns
+or assigns a local of the function around it.
 Status: DOCUMENTED COST.

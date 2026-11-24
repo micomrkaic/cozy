@@ -47,18 +47,70 @@ typedef struct {
     CloObj  *closure;    /* the executing closure (for upvalues); null at top level  */
 } CallFrame;
 
+/* an inline reduction under way: its Collect, and the room it lends it for
+ * the numbers of a short one */
+struct RedSlot { Collect c; int64_t small[COLLECT_SMALL]; };
+
 typedef struct {
     Value     *stack;  uint32_t sp, cap;
     CallFrame *frames; uint32_t nframe, fcap;
     EnvObj    *globals;  /* the session's names: every variable that is not a slot */
     int64_t   *end_dims; uint32_t end_sp, end_cap;  /* 'end' context: 2 dims per frame */
     uint32_t  *marks;  uint32_t nmark, mcap;        /* loop-body sp bases (break/continue reset) */
+    struct RedSlot *reds; uint32_t nred, cred;      /* inline reductions under way (OP_RED_*)    */
     void      *prev;   /* enclosing VM (nested vm_run), for backtraces */
 } VM;
 
 #define VM_MAX_FRAMES 200000   /* direct recursion: frame-stack depth   */
+#ifdef __EMSCRIPTEN__
+/* In WebAssembly a nested run is paid for on the JavaScript engine's own
+ * call stack, which no address in here measures. V8 (node, Chrome) gives up
+ * between 300 and 400 levels with a RangeError that ends the session; the
+ * limit is set well inside that. */
+#define VM_MAX_DEPTH  200      /* builtin->closure nesting: the engine's stack */
+#else
 #define VM_MAX_DEPTH  1800     /* builtin->closure nesting: C-stack depth */
+#endif
 static int vm_depth = 0;
+
+/* The count above was meant to keep nested runs off the end of the C stack,
+ * and did not: a function that recurses through map or a reduction puts
+ * some five kilobytes on it per level (two jump buffers, the frames of the
+ * builtin and of vm_run), and 1790 levels of that is more than the eight
+ * megabytes a process usually has. It was a segmentation fault, not an
+ * error (every version to 0.1.43; in the browser, with five megabytes,
+ * sooner). So the stack itself is measured: how far below the outermost
+ * run this one is. Past the budget it is the error the count gives. The
+ * budget is three quarters of the stack the process was given, where that
+ * can be asked (the rest is for whatever the deepest run goes on to call);
+ * define COZY_STACK_BUDGET, in bytes, to say otherwise -- an embedding
+ * that runs the interpreter on a thread with a small stack should. */
+#if !defined(COZY_STACK_BUDGET) && !defined(__EMSCRIPTEN__) && (defined(__unix__) || defined(__APPLE__))
+#  include <sys/resource.h>
+#  define COZY_ASK_STACK 1
+#endif
+static uintptr_t vm_stack_top;                          /* where the outermost run's frame is */
+static size_t vm_stack_budget(void)
+{
+    static size_t budget = 0;
+    if (budget) return budget;
+#if defined(COZY_STACK_BUDGET)
+    budget = (size_t)(COZY_STACK_BUDGET);
+#elif defined(__EMSCRIPTEN__)
+    budget = (size_t)3 << 20;                           /* of emscripten's 5 MB */
+#elif defined(COZY_ASK_STACK)
+    struct rlimit rl;
+    budget = (size_t)6 << 20;                           /* of the usual 8 MB, if it cannot be asked */
+    if (getrlimit(RLIMIT_STACK, &rl) == 0) {
+        if (rl.rlim_cur == RLIM_INFINITY) budget = (size_t)48 << 20;
+        else budget = (size_t)(rl.rlim_cur - rl.rlim_cur / 4);
+    }
+    if (budget < ((size_t)256 << 10)) budget = (size_t)256 << 10;
+#else
+    budget = (size_t)512 << 10;                         /* of a 1 MB stack */
+#endif
+    return budget;
+}
 
 /* Chunks that define closures are retained for the session (an escaping
  * closure's proto lives inside its statement chunk). Freed by vm_session_end. */
@@ -191,19 +243,19 @@ static VM *vm_take(void)
         if (!st) abort();
         *st = (VM){ 0 };
     }
-    st->sp = 0; st->nframe = 0; st->end_sp = 0; st->nmark = 0;
+    st->sp = 0; st->nframe = 0; st->end_sp = 0; st->nmark = 0; st->nred = 0;
     return st;
 }
 static void vm_give(VM *st)
 {
     if (vm_pool_n < VM_POOL_MAX && st->cap <= 4096) { vm_pool[vm_pool_n++] = st; return; }
-    free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+    free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st->reds); free(st);
 }
 void vm_pool_drain(void)
 {
     while (vm_pool_n > 0) {
         VM *st = vm_pool[--vm_pool_n];
-        free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+        free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st->reds); free(st);
     }
 }
 
@@ -229,6 +281,13 @@ static CallFrame *enter_closure(VM *st, Chunk *ch, Value closure, CloObj *clo, c
 static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, VMEach *each, bool *ok)
 {
     if (vm_depth >= VM_MAX_DEPTH) runtime_error(I, "maximum call depth exceeded");
+    {
+        char here;
+        uintptr_t at = (uintptr_t)&here;
+        if (vm_depth == 0) vm_stack_top = at;
+        else if ((at < vm_stack_top ? vm_stack_top - at : at - vm_stack_top) > vm_stack_budget())
+            runtime_error(I, "maximum call depth exceeded");
+    }
     vm_depth++;
     jmp_buf saved;
     memcpy(saved, I->jmp, sizeof(jmp_buf));
@@ -244,6 +303,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 
     if (setjmp(I->jmp)) {                                /* runtime_error landed here */
         for (uint32_t k = 0; k < st->sp; k++) value_release(st->stack[k]);
+        for (uint32_t k = 0; k < st->nred; k++) collect_abort(&st->reds[k].c);   /* reductions cut short */
         I->vm_cur = st->prev;
         vm_give(st);
         memcpy(I->jmp, saved, sizeof(jmp_buf));
@@ -267,6 +327,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
     uint32_t ip, sp, base;
     const uint8_t *code;
     Value *stack;
+    uint8_t call_argc = 0;                              /* OP_CALL's operand; OP_RED_END calls too */
 #define FRAME_IN() do { ip = fr->ip; code = fr->chunk->code; base = fr->slot_base; \
                         sp = st->sp; stack = st->stack; } while (0)
     FRAME_IN();
@@ -420,8 +481,10 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             break;
         }
 
-        case OP_CALL: {
-            uint8_t argc = RD_U8();
+        case OP_CALL:
+            call_argc = RD_U8();
+        do_call: {
+            uint8_t argc = call_argc;
             Value  callee = PEEK(argc);
             if (callee.kind == VAL_CLOSURE) {            /* direct call: push a frame */
                 CloObj *cl = as_clo(callee);
@@ -602,6 +665,88 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         case OP_FOR_END:
             value_release(PEEK(1)); DROP(2);
             break;
+
+        /* An indexed reduction run inline. The Collect lives in st->reds, a
+         * stack of its own beside the marks: reductions nest (a double sum),
+         * and the body may call anything, but none is left except by its
+         * END or by an error, which the handler above cleans up after. The
+         * operand stack holds [r, src] below the body's temporaries, src
+         * being the array the elements come from, or null for an Int range. */
+        case OP_RED_BEGIN: {
+            uint8_t ranged = RD_U8();
+            if (st->nred == st->cred) {
+                st->cred = st->cred ? st->cred * 2 : 2;
+                st->reds = realloc(st->reds, st->cred * sizeof *st->reds);
+                if (!st->reds) abort();
+                for (uint32_t k = 0; k < st->nred; k++)   /* they moved: so did the room they were lent */
+                    if (st->reds[k].c.small) st->reds[k].c.small = st->reds[k].small;
+            }
+            Collect *c = &st->reds[st->nred].c;
+            int64_t *room = st->reds[st->nred].small;
+            if (ranged) {
+                Value s0 = PEEK(2), stp = PEEK(1), e0 = PEEK(0);
+                if (s0.kind == VAL_INT && stp.kind == VAL_INT && e0.kind == VAL_INT) {
+                    collect_begin_range(I, c, PEEK(3), room, s0.as.i, stp.as.i, e0.as.i);
+                    DROP(3);
+                    PUSH(val_null());
+                } else {                                 /* a Float or date range: made as it always was */
+                    Value arr = make_range(I, s0, e0, stp);
+                    vm_release(PEEK(0)); vm_release(PEEK(1)); vm_release(PEEK(2)); DROP(3);
+                    PUSH(arr);
+                    collect_begin_array(I, c, PEEK(1), room, PEEK(0));
+                }
+            } else
+                collect_begin_array(I, c, PEEK(1), room, PEEK(0));
+            st->nred++;
+            break;
+        }
+        case OP_RED_NEXT: {
+            uint8_t  slot = RD_U8();
+            uint16_t endoff = RD_U16();
+            Value *var = &stack[base + slot];
+            Value old = *var, elem;
+            if (!collect_next(&st->reds[st->nred - 1].c, &elem)) { /* done: the variable's scope ends */
+                *var = slot_empty();
+                vm_release(old);
+                JUMP_BY(endoff);
+                break;
+            }
+            slot_put(var, &elem);
+            vm_release(old);
+            break;
+        }
+        case OP_RED_STEP: {                              /* the bottom of the body */
+            uint8_t  slot = RD_U8();
+            uint16_t back = RD_U16();
+            Collect *c = &st->reds[st->nred - 1].c;
+            DROP(1);                                     /* the Collect owns it from here */
+            collect_take(I, c, &stack[sp]);
+            Value *var = &stack[base + slot];
+            Value old = *var, elem;
+            if (collect_next(c, &elem)) {
+                slot_put(var, &elem);
+                vm_release(old);
+                JUMP_BACK(back);
+            } else {                                     /* done: the variable's scope ends */
+                *var = slot_empty();
+                vm_release(old);
+            }
+            break;
+        }
+        case OP_RED_END: {
+            Value r;
+            bool reduced = collect_finish(I, &st->reds[st->nred - 1].c, PEEK(1), &r);
+            st->nred--;
+            vm_release(PEEK(0)); DROP(1);                /* the source */
+            if (reduced) {                               /* a short sum or prod: r is the answer */
+                value_release(PEEK(0));
+                PEEK(0) = r;
+                break;
+            }
+            PUSH(r);                                     /* [r, results]: call r on them */
+            call_argc = 1;
+            goto do_call;
+        }
 
         case OP_MARK_PUSH:
             if (st->nmark == st->mcap) {

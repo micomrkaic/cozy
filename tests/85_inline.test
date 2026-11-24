@@ -1,0 +1,144 @@
+# The body of an indexed reduction runs inline (0.1.44).
+#
+# r[k = src] body is r(map(fn k -> body, src)). Where the body cannot tell
+# the difference, the compiler no longer makes that function: the body runs
+# as a loop in the frame that wrote it, k is a local of that frame, and what
+# the body reads from outside it reads directly. Where it could tell -- a
+# `return`, an `@` of an outer pipe, an assignment to a local of an
+# enclosing function -- it is the function it always was. Every answer in
+# the first four sections is what 0.1.43 gave (the file was generated from
+# that binary), and 6,000 random programs written at that boundary were run
+# through both.
+
+
+# --- inline: the body reads what is around it ---
+let f = fn n, a -> sum[k = 1:n] a * k; f(3, 2)
+=> 12
+let f = fn n -> (let a = [10, 20, 30]; sum[k = 1:n] a[k] * k); f(3)
+=> 140
+let f = fn n -> (let t = 0; for r = 1:n do t = t + sum[k = 1:3] k * r end; t); f(4)
+=> 60
+let g = 0; let f = fn n -> sum[k = 1:n] (g = g + k; g); [f(3), g]
+=> [10, 6]
+let t = 0; let s = sum[k = 1:3] (t = t + k; t); [s, t]
+=> [10, 6]
+let f = fn n -> sum[k = 1:n] (let q = k; q = q * 2; q); f(3)
+=> 12
+sum[k = 1:3] (k = k * 2; k)
+=> 12
+let k = 77; let f = fn k -> (sum[k = 1:3] k) + k; [f(100), k]
+=> [106, 77]
+sum[i = 1:3] sum[i = 1:i] i
+=> 10
+sum[k = 1:3] (fn u -> u + k)(10)
+=> 36
+let fs = sum[k = 1:3] (let h = fn u -> u * k; h(2) + h(3)); fs
+=> 30
+let f = fn n -> if n <= 1 then 1 else sum[k = 1:n] f(n - 1) end; f(5)
+=> 120
+let sq = fn x -> sum[j = 1:x] j; sum[k = 1:4] sq(k) * k
+=> 65
+sum[a = 1:2] sum[b = 1:2] sum[c = 1:2] sum[d = 1:2] sum[e = 1:2] a * b * c * d * e
+=> 243
+let f = fn n -> prod[a = 1:n] sum[b = 1:a] max[c = 1:b] (a + b + c); f(3)
+=> 630
+sum[k = 1:3] (let s = 0; for i = 1:5 do (if i > k then break end; s = s + i) end; s)
+=> 10
+sum[k = 1:4] (let s = 0; for i = 1:k do (if mod(i, 2) == 0 then continue end; s = s + i) end; s)
+=> 10
+let v = [1, 2, 3]; sum[k = 1:2] v[end - k]
+=> 3
+sum[k = 1:3] (k |> @ + 1)
+=> 9
+5 |> sum[k = 1:@] k
+=> 15
+let q = 50; let f = fn n -> sum[k = 1:n] (if k == 2 then (let q = 0) end; q); f(3)
+=> 100
+sum[k = 1:3] (if k == 2 then (let w = 100) end; if k == 3 then 0 else k end)
+=> 3
+max[k = 1:4] (k - 2) ^ 2
+=> 4
+let second = fn a -> a[2]; second[k = 1:3] k * 10
+=> 20
+let keep_it = fn a -> a; let r = keep_it[k = 1:3] k + 0.5; [r, r]
+=> [1.5, 2.5, 3.5, 1.5, 2.5, 3.5]
+(1:3 ~> fn k -> k * 2) |> sum
+=> 12
+(1:4 ~> (_ * _)) |> sum
+=> !function expects 2 argument(s), got 1
+let v = [3, 1, 2]; (v ~> fn x -> x * x) |> prod
+=> 36
+
+# --- still a function: the body could tell the difference ---
+let f = fn n -> sum[k = 1:n] (if k == 2 then (return 100) end; k); f(3)
+=> 104
+let f = fn n -> (let t = 0; let s = sum[k = 1:n] (t = t + k; t); [s, t]); f(3)
+=> [10, 0]
+let f = fn n -> (let v = [1, 2, 3]; let s = sum[k = 1:n] (v[k] = 0; sum(v)); [s, sum(v)]); f(3)
+=> [8, 6]
+let f = fn n -> (let a = 1; let s = sum[k = (a = a + 1; 1:n)] a * k; [s, a]); f(2)
+=> [3, 2]
+let f = fn n -> (let a = 1; let s = (a = a + 5; sum)[k = 1:n] a * k; [s, a]); f(2)
+=> [18, 6]
+let mk = fn c -> fn n -> sum[k = 1:n] (c = c + 1; c); let h = mk(10); [h(2), h(2)]
+=> [23, 23]
+let f = fn n -> (let t = 5; sum[i = 1:n] sum[j = 1:i] (t = t + 1; t)); f(2)
+=> 19
+5 |> sum[k = 1:3] (k * @)
+=> !'@' is only meaningful on the right-hand side of '|>'
+let f = fn n -> sum[k = 1:n] (if k > n then (return 0) end; k * 2); f(4)
+=> 20
+let f = fn x, y = 2 -> x * y; (1:3 ~> f) |> sum
+=> 12
+(1:3 ~> (fn a, b = 10 -> a + b)) |> sum
+=> 36
+
+# --- what the body may not do, inline or not ---
+for i = 1:2 do sum[k = 1:3] (if k == 2 then break end; k) end
+=> !'break' is only valid inside a loop
+let n = 0; while n < 2 do (n = n + 1; sum[k = 1:3] (if k == 2 then continue end; k)) end
+=> !'continue' is only valid inside a loop
+let v = [1, 2, 3]; v[sum[k = 1:1] end]
+=> !'end' is only valid inside an index
+sum[k = 1:3] (@ + k)
+=> !'@' is only meaningful on the right-hand side of '|>'
+
+# --- errors: in the range, in the body, in the reducer ---
+sum[k = 1:0:3] k
+=> !range step cannot be zero
+let g = 0; let s = sum[k = 1:3] (g = g + 1; if k == 2 then nope else k end); s
+=> !undefined name 'nope'
+sum[i = 1:3] sum[j = 1:3] (if i == 2 && j == 2 then error("mid") else i * j end)
+=> !mid
+let f = fn n -> sum[k = 1:n] (k + "s"); f(2)
+=> !arithmetic on non-numbers (Int, String)
+sum[k = 1:3] (if k == 3 then "s" else k end)
+=> !map: the function returned strings for some elements and numbers for o
+let five = 5; five[k = 1:3] k
+=> !value of type Int is not callable
+let bad = fn a -> a[9]; bad[k = 1:3] k
+=> ! index 9 out of bounds (1..3)
+let g = 0; let t = sum[k = 1:0] (g = g + 1; k); [t, g]
+=> [0, 0]
+
+# --- deep recursion through a reduction (0.1.44) ---
+# Inline, a reduction is no deeper than the function it is in: this was a
+# segmentation fault from about 1,500 levels (the C stack ran out before
+# the interpreter's own limit was reached).
+let f = fn n -> if n == 0 then 0 else sum[k = 1:1] f(n - 1) end; f(3000)
+=> 0
+let f = fn n -> if n == 0 then 1 else prod[k = 1:2] f(n - 1) end; f(12)
+=> 1
+
+# Where the body is still a function, or map is called by name, each level
+# is a run of the VM on the C stack (in the browser: on the JavaScript
+# engine's). That is now measured (there: counted, to 200), and past the
+# budget it is the error it was meant to be.
+let f = fn n -> if n == 0 then 0 else sum[k = 1:1] (if n < 0 then (return 0) end; f(n - 1)) end; f(150)
+=> 0
+let f = fn n -> if n == 0 then 0 else sum[k = 1:1] (if n < 0 then (return 0) end; f(n - 1)) end; f(5000)
+=> !maximum call depth exceeded
+let f = fn n -> if n == 0 then 0 else sum(map(fn k -> f(n - 1), [1])) end; f(5000)
+=> !maximum call depth exceeded
+let f = fn n -> if n == 0 then 0 else sum(map(fn k -> f(n - 1), [1])) end; f(150)
+=> 0

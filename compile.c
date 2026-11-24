@@ -83,6 +83,8 @@ typedef struct Compiler {
     bool    in_function;         /* compiling a lambda body? (enables 'return')         */
     AstNode *direct_let;         /* the `let` statement now being compiled as an item
                                     of a block or loop body (it cannot be skipped)      */
+    int     loop_floor;          /* loops[] below this index belong to code an inline
+                                    reduction body must not break out of or continue    */
     struct { int break_base;     /* `break` empties the slots from here up              */
              int cont_base;      /* `continue` from here up (a for keeps its variable)  */
              uint32_t cont_target; bool is_for;
@@ -284,6 +286,102 @@ static void emit_name_op_g(Chunk *c, uint8_t op, const char *s, uint32_t len, ui
     chunk_emit_u16(c, (uint16_t)idx, line);
 }
 
+/* ---- running a reduction's body inline --------------------------------------
+ * r[k = src] body is r(map(fn k -> body, src)): a function made, and called
+ * once per element. When the body is an ordinary expression that is all
+ * overhead, and the compiler runs it as a loop in the frame that wrote it
+ * (OP_RED_*): k is a local of that frame, and what the body reads from
+ * outside it reads directly.
+ *
+ * A function is still made whenever being one could be told apart. As a
+ * function, the body
+ *   - `return`s from itself, not from the function around the reduction;
+ *   - has no `@` of an outer pipe (that is an error, and stays one);
+ *   - sees the outer LOCALS as they were when the reduction began, and
+ *     assigns to its own copies of them: `sum[k = 1:n] (t = t + k; t)`
+ *     inside a function leaves that function's t alone.
+ * So a body with a `return`, a free `@`, or an assignment to a name that is
+ * a local or a captured variable of an enclosing function is compiled as
+ * the function it is, as before. Assigning a global or a variable the body
+ * declares is no obstacle. The reducer and the source are evaluated before
+ * the body ever runs and the function used to be made between them; if
+ * either assigns or declares anything, the same caution applies.
+ *
+ * Nothing else changes hands: `break` and `continue` in the body may not
+ * reach a loop outside it (loop_floor keeps that the compile error it
+ * was), `end` in the body does not mean an index outside it, and the lets
+ * of one element are gone before the next, as a fresh call's were. */
+
+static bool name_in_enclosing_function(const Compiler *cc, const char *name, uint32_t len)
+{
+    for (const Compiler *c = cc; c; c = c->enclosing)
+        for (int i = c->nlocals - 1; i >= 0; i--)
+            if (c->locals[i].len == len && memcmp(c->locals[i].name, name, len) == 0) return true;
+    return false;
+}
+
+/* May this expression run inline? `at_ok`: an '@' here belongs to a pipe
+ * inside the expression (or, for the reducer and the source, to the pipe
+ * around the whole reduction, where it always belonged). `pure`: the reducer
+ * or the source, which may not assign or declare. Anything this function
+ * does not know is answered no. */
+static bool inline_ok(const Compiler *cc, const AstNode *n, bool at_ok, bool pure)
+{
+    if (!n) return true;
+    switch (n->kind) {
+    case AST_INT: case AST_FLOAT: case AST_IMAG: case AST_STRING: case AST_BOOL: case AST_NULL:
+    case AST_IDENT: case AST_COLON: case AST_END: case AST_BREAK: case AST_CONTINUE:
+        return true;
+    case AST_AT:     return at_ok;
+    case AST_RETURN: return false;
+    case AST_LAMBDA: return true;                      /* its own function: nothing of it runs here */
+    case AST_UNARY: case AST_POSTFIX:
+        return inline_ok(cc, n->as.unary.operand, at_ok, pure);
+    case AST_BINARY:
+        if (n->as.binary.op == TOK_PIPE_GT || n->as.binary.op == TOK_PIPE_GTGT)
+            return inline_ok(cc, n->as.binary.lhs, at_ok, pure) && inline_ok(cc, n->as.binary.rhs, true, pure);
+        return inline_ok(cc, n->as.binary.lhs, at_ok, pure) && inline_ok(cc, n->as.binary.rhs, at_ok, pure);
+    case AST_ASSIGN: {
+        if (pure) return false;
+        const AstNode *tgt = n->as.binary.lhs;
+        const AstNode *name = tgt->kind == AST_INDEX ? tgt->as.call.callee : tgt;
+        if (name->kind != AST_IDENT) return false;
+        if (name_in_enclosing_function(cc, name->as.lit.text, name->as.lit.len)) return false;
+        if (tgt->kind == AST_INDEX)
+            for (uint32_t i = 0; i < tgt->as.call.args.count; i++)
+                if (!inline_ok(cc, tgt->as.call.args.items[i], at_ok, pure)) return false;
+        return inline_ok(cc, n->as.binary.rhs, at_ok, pure);
+    }
+    case AST_RANGE:
+        return inline_ok(cc, n->as.range.start, at_ok, pure) && inline_ok(cc, n->as.range.step, at_ok, pure)
+            && inline_ok(cc, n->as.range.stop, at_ok, pure);
+    case AST_CALL: case AST_INDEX:
+        if (!inline_ok(cc, n->as.call.callee, at_ok, pure)) return false;
+        for (uint32_t i = 0; i < n->as.call.args.count; i++)
+            if (!inline_ok(cc, n->as.call.args.items[i], at_ok, pure)) return false;
+        return true;
+    case AST_FIELD:
+        return inline_ok(cc, n->as.field.target, at_ok, pure);
+    case AST_ROW: case AST_MATRIX: case AST_BLOCK: case AST_BLOCK_EXPR: case AST_RECORD:
+        for (uint32_t i = 0; i < n->as.list.count; i++)
+            if (!inline_ok(cc, n->as.list.items[i], at_ok, pure)) return false;
+        return true;
+    case AST_RECORD_FIELD:
+        return inline_ok(cc, n->as.recfield.value, at_ok, pure);
+    case AST_IF:
+        return inline_ok(cc, n->as.iff.cond, at_ok, pure) && inline_ok(cc, n->as.iff.then_e, at_ok, pure)
+            && inline_ok(cc, n->as.iff.else_e, at_ok, pure);
+    case AST_LET:
+        if (pure) return false;
+        return inline_ok(cc, n->as.let.value, at_ok, pure) && inline_ok(cc, n->as.let.body, at_ok, pure);
+    case AST_FOR:
+        return inline_ok(cc, n->as.forloop.iter, at_ok, pure) && inline_ok(cc, n->as.forloop.body, at_ok, pure);
+    case AST_WHILE:
+        return inline_ok(cc, n->as.whileloop.cond, at_ok, pure) && inline_ok(cc, n->as.whileloop.body, at_ok, pure);
+    }
+    return false;
+}
+
 /* ---- the walk ------------------------------------------------------------ */
 
 /* Does this index argument reference 'end'? Stops at a nested index (whose
@@ -405,6 +503,47 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
                 AstNode *m = n->as.binary.lhs, *src = m->as.binary.lhs;
                 if (m->as.binary.rhs->kind == AST_RECORD)
                     compile_error(I, m->as.binary.rhs, "~> cannot fan out; use |> {...} (fan-out is a whole-value operation)");
+                AstNode *lam = m->as.binary.rhs;
+                if (lam->kind == AST_LAMBDA && lam->as.lambda.params.count == 1
+                    && !(lam->as.lambda.defaults.items && lam->as.lambda.defaults.items[0])
+                    && inline_ok(cc, rhs, true, true) && inline_ok(cc, src, true, true)
+                    && inline_ok(cc, lam->as.lambda.body, false, false)) {
+                    /* the body, inline (see "running a reduction's body inline") */
+                    AstNode *par = lam->as.lambda.params.items[0];
+                    compile_node(I, cc, rhs);                       /* the reducer */
+                    if (src->kind == AST_RANGE) {
+                        compile_node(I, cc, src->as.range.start);
+                        if (src->as.range.step) compile_node(I, cc, src->as.range.step);
+                        else emit_const(c, val_int(1), L);
+                        compile_node(I, cc, src->as.range.stop);
+                        chunk_emit(c, OP_RED_BEGIN, L); chunk_emit(c, 1, L);
+                    } else {
+                        compile_node(I, cc, src);
+                        chunk_emit(c, OP_RED_BEGIN, L); chunk_emit(c, 0, L);
+                    }
+                    int saved_floor = cc->loop_floor, saved_dim = cc->index_dim;
+                    cc->loop_floor = cc->nloops;                    /* no break / continue past the body */
+                    cc->index_dim = -1;                             /* nor an `end` of an index outside it */
+                    begin_scope(cc);                                /* the index variable's scope ... */
+                    int var = declare_local(I, cc, par, par->as.lit.text, par->as.lit.len, LK_SLOT, false);
+                    chunk_emit(c, OP_RED_NEXT, L);                  /* the first element, if any */
+                    chunk_emit(c, cc->locals[var].slot, L);
+                    uint32_t done = c->code_len; chunk_emit_u16(c, 0xffff, L);
+                    uint32_t body_start = c->code_len;
+                    begin_scope(cc);                                /* ... and the body's, one per element */
+                    compile_node(I, cc, lam->as.lambda.body);
+                    end_scope(cc, true, L);                         /* (its value is on the stack, not in a slot) */
+                    chunk_emit(c, OP_RED_STEP, L);                  /* take it; next element and back, or on */
+                    chunk_emit(c, cc->locals[var].slot, L);
+                    uint32_t back = c->code_len + 2 - body_start;
+                    if (back > 0xffff) compile_error(I, n, "loop body too large for the VM");
+                    chunk_emit_u16(c, (uint16_t)back, L);
+                    patch_jump(I, n, c, done);
+                    end_scope(cc, false, L);
+                    cc->loop_floor = saved_floor; cc->index_dim = saved_dim;
+                    chunk_emit(c, OP_RED_END, L);
+                    break;
+                }
                 emit_const(c, eval_map_reduce_builtin(), L);
                 compile_node(I, cc, rhs);
                 compile_node(I, cc, m->as.binary.rhs);
@@ -628,7 +767,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
     }
 
     case AST_BREAK: {
-        if (cc->nloops == 0) compile_error(I, n, "'break' is only valid inside a loop");
+        if (cc->nloops <= cc->loop_floor) compile_error(I, n, "'break' is only valid inside a loop");
         int li = cc->nloops - 1;
         chunk_emit(c, OP_MARK_RESET, L);                /* drop mid-expression temporaries */
         emit_clear_from(cc, cc->loops[li].break_base, L);
@@ -638,7 +777,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
     }
 
     case AST_CONTINUE: {
-        if (cc->nloops == 0) compile_error(I, n, "'continue' is only valid inside a loop");
+        if (cc->nloops <= cc->loop_floor) compile_error(I, n, "'continue' is only valid inside a loop");
         int li = cc->nloops - 1;
         chunk_emit(c, OP_MARK_RESET, L);                /* drop mid-expression temporaries */
         emit_clear_from(cc, cc->loops[li].cont_base, L);
