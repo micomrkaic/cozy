@@ -236,6 +236,12 @@ else
     INST_OPTIM = none
   endif
 endif
+# COMPARE.md sets Cozy beside NumPy and Octave. Its Cozy transcripts are in
+# `make test`; this runs the other two sides (needs NumPy, SciPy and Octave,
+# which is why it is not part of the suite: a missing one is announced).
+compare:
+	@python3 tools/compare_check.py
+
 install:
 	@echo "install: building BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM)"
 	@if [ "$(INST_BACKEND)" = tier0 ]; then echo "install: NOTE no OpenBLAS found (sudo apt install libopenblas-dev for LAPACK speed)"; fi

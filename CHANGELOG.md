@@ -1,5 +1,47 @@
 # Cozy changelog
 
+## 0.1.37 — Cozy beside NumPy and Octave
+
+### Added
+- **COMPARE.md**: seven small tasks, each written in Cozy, in Python with
+  NumPy (and SciPy where NumPy has no counterpart) and in Octave. It is
+  not a claim that Cozy is shorter; for plain array arithmetic it is
+  about as terse as Octave. The examples are the ones where the notation
+  carries its meaning and the others do not:
+  - a chained comparison, `mean(-1.96 < z < 1.96)`, which is an error on
+    a NumPy array and in Octave quietly answers 1;
+  - a column minus a row, which Cozy refuses and the other two stretch
+    into a 3x3 table, reporting a mean squared error of 1.33 for a
+    perfect fit;
+  - a sum with its index (`sum[t = 1:n]`) and its constants (`where`);
+  - a description of a sample by fan-out, and a pipeline that reads in
+    the order things happen;
+  - the Greeks of an option from the price function alone, by `d`;
+  - a logistic regression whose standard errors come from the exact
+    Hessian: 1.761 and 0.629, where SciPy's default gives 1.751 and
+    Octave's `fminunc` 1.75 and 0.62, unless the gradient and Hessian are
+    derived by hand and supplied;
+  - a symbolic derivative from the standard packages.
+  It ends with where Cozy does not win: arrays of more than two
+  dimensions, broadcasting when it is meant, and everything around the
+  language.
+- **`make compare`** (tools/compare_check.py) runs the Python and Octave
+  transcripts of COMPARE.md: the Python ones as doctests in one session,
+  the Octave ones through one Octave process, each compared with the
+  output printed in the document. It is outside `make test` because the
+  suite must not depend on NumPy, SciPy and Octave; a missing one is
+  announced, not passed over. Last run with NumPy 2.5.3, SciPy 1.18.1 and
+  Octave 8.4.0: 37 Python and 30 Octave examples.
+
+### Verified
+- The Cozy transcripts of COMPARE.md (30) are run by `make test` with
+  those of the manual, the packages guide and the book, and its tables
+  are in the documentation lint.
+- Writing it was a small instance of the rule it lives under. Two of the
+  outputs first typed for the other languages were wrong in the last
+  digit (Octave prints the standard deviation as 3.9720, NumPy the mean
+  as 4.6000000000000005); the checker refused both.
+
 ## 0.1.36 — second order with correlated shocks, inside
 
 ### Changed

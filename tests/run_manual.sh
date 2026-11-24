@@ -10,6 +10,8 @@ done
 python3 tests/verify_manual.py MANUAL.md || exit 1
 python3 tests/verify_manual.py PACKAGES.md || exit 1
 python3 tests/verify_manual.py BOOK.md || exit 1
+# COMPARE.md: the Cozy side here; its Python and Octave sides are `make compare`
+python3 tests/verify_manual.py COMPARE.md || exit 1
 python3 tools/gen_book_index.py --check || exit 1
 
 # stray-escape guard: the REPL renderer must consume markdown \| escapes
