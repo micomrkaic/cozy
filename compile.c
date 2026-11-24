@@ -395,6 +395,29 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
                     chunk_emit_u16(c, (uint16_t)ni, L);
                 }
                 end_scope(cc, true, L);
+            } else if (!tee && !contains_at(rhs) && n->as.binary.lhs->kind == AST_BINARY
+                       && n->as.binary.lhs->as.binary.op == TOK_TILDE_GT) {
+                /* (x ~> f) |> r, which is what r[k = a:b] body is: the map
+                 * and the reduction in one pass (eval.c, bi_map_reduce). The
+                 * operands are evaluated in the order they always were --
+                 * r, f, then the range -- and a range written a:b or a:s:b
+                 * is handed over as its three numbers, not as an array. */
+                AstNode *m = n->as.binary.lhs, *src = m->as.binary.lhs;
+                if (m->as.binary.rhs->kind == AST_RECORD)
+                    compile_error(I, m->as.binary.rhs, "~> cannot fan out; use |> {...} (fan-out is a whole-value operation)");
+                emit_const(c, eval_map_reduce_builtin(), L);
+                compile_node(I, cc, rhs);
+                compile_node(I, cc, m->as.binary.rhs);
+                if (src->kind == AST_RANGE) {
+                    compile_node(I, cc, src->as.range.start);
+                    if (src->as.range.step) compile_node(I, cc, src->as.range.step);
+                    else emit_const(c, val_int(1), L);
+                    compile_node(I, cc, src->as.range.stop);
+                    chunk_emit(c, OP_CALL, L); chunk_emit(c, 5, L);
+                } else {
+                    compile_node(I, cc, src);
+                    chunk_emit(c, OP_CALL, L); chunk_emit(c, 3, L);
+                }
             } else if (!contains_at(rhs)) {             /* bare callable: x |> f  ==>  f(x) */
                 compile_node(I, cc, rhs);
                 compile_node(I, cc, n->as.binary.lhs);

@@ -1,0 +1,210 @@
+# The indexed reductions without the arrays they do not need (0.1.43).
+#
+# r[k = a:b] body is r(map(fn k -> body, a:b)). Since 0.1.43 an Int range
+# written there is counted through instead of being made into an array,
+# and for the builtin sum and prod over at most 256 elements the results
+# are kept on the stack, so that a short reduction in a loop allocates
+# nothing. What is computed is the same reduction of the same numbers.
+# Every answer below is what 0.1.42 gave (the file was generated from that
+# binary), and 10,000 random reductions were run through both at 17 digits.
+
+
+# --- the range is counted, not built: every shape of Int range ---
+sum[k = 1:10] k
+=> 55
+sum[k = 10:-1:1] k * k
+=> 385
+sum[k = 1:3:20] k
+=> 70
+sum[k = -3:3] k ^ 2
+=> 28
+sum[k = 5:5] k
+=> 5
+sum[k = 1:0] k
+=> 0
+prod[k = 1:0] k
+=> 1
+sum[k = 3:1] k
+=> 0
+sum[k = 1:-1:3] k
+=> 0
+let o = ""; let t = sum[k = 7:-2:1] (o = o + str(k) + " "; k); [o, str(t)]
+=> ["7 5 3 1 ", "16"]
+let n = 4; sum[k = 1:n] sum[j = k:n] j
+=> 30
+sum[k = 9223372036854775806:9223372036854775807] 1
+=> 2
+sum[k = 1:0:5] k
+=> !range step cannot be zero
+sum[k = 1:2000000000] k
+=> !range too large: 2000000000 elements (limit 100000000)
+sum[k = 1:"a"] k
+=> !range bounds must be numbers
+
+# --- other sources: Float and date ranges, arrays, a matrix, not an array ---
+sum[x = 0.5:0.5:2] x
+=> 5
+sum[x = 1:0.5:3] x * 2
+=> 20
+prod[x = 0.1:0.1:0.3] x
+=> 0.006
+sum[d = date("2024-01-01"):date("2024-01-03")] 1
+=> 3
+let v = [3, 1, 2]; sum[x = v] x * x
+=> 14
+sum[x = [1, 2; 3, 4]] x
+=> 10
+prod[x = [1.5, 2]] x
+=> 3
+sum[x = []] x
+=> 0
+sum[x = zeros(0, 3)] x
+=> 0
+sum[s = ["a", "bc"]] length(s)
+=> 3
+sum[x = 5] x
+=> !map: second argument must be an Array
+sum[x = null] x
+=> !map: second argument must be an Array
+
+# --- the kind of the sum is the kind map would have given the array ---
+format(17); sum[k = 1:4] k / 4
+=> 2.5000000000000000
+format(17); sum[k = 1:4] (if k == 4 then 0.5 else k end)
+=> 6.5000000000000000
+format(17); sum[k = 1:3] (if k == 2 then 0.1 else 9007199254740993 end)
+=> 18014398509481984.
+format(17); sum[k = 1:3] 4611686018427387904
+=> 1.3835058055282164e+19
+format(17); sum[k = 1:4] (if k < 3 then 4611686018427387904 else -1 end)
+=> 9.2233720368547758e+18
+format(17); prod[k = 1:25] k
+=> 1.5511210043330986e+25
+format(17); prod[k = 1:20] k
+=> 2432902008176640000
+format(17); prod[k = 1:5] (if k == 5 then 0.5 else k end)
+=> 12.000000000000000
+format(17); sum[k = 1:10] 0.1
+=> 0.99999999999999989
+format(17); sum[k = 1:3] (if k == 3 then 1i else k + 0.25 end)
+=> 3.5000000000000000+1.0000000000000000i
+sum[k = 1:3] (k + 1i)
+=> 6+3i
+prod[k = 1:3] (k + 1i)
+=> 10i
+sum[k = 1:3] sqrt(k - 2)
+=> 1+1i
+sum[k = 1:4] k > 2
+=> 2
+sum[k = 1:4] (if k > 2 then true else k end)
+=> !map: the function returned Bool for some elements and numbers for othe
+sum[k = 1:3] str(k)
+=> !arithmetic on non-numbers (Int, String)
+sum[k = 1:3] (if k == 3 then "s" else k end)
+=> !map: the function returned strings for some elements and numbers for o
+sum[k = 1:3] null
+=> 0+0i
+sum[k = 1:3] [k, 2]
+=> !map: the function must return a number or a string for each element, g
+sum[k = 1:3] dual(k, 1) ^ 2
+=> 14+12eps
+sum[k = 1:3] (if k == 1 then 1 else dual(k, 1) end)
+=> 6+2eps
+sum[k = 1:3] nan
+=> nan
+prod[k = 1:3] (0.0 * -1)
+=> -0
+
+# --- around the size where the numbers stop fitting on the stack ---
+[sum[k = 1:255] k, sum[k = 1:256] k, sum[k = 1:257] k]
+=> [32640, 32896, 33153]
+format(17); [sum[k = 1:256] (if k == 256 then 0.5 else k end), sum[k = 1:257] (if k == 257 then 0.5 else k end)]
+=> [32640.500000000000, 32896.500000000000]
+[sum[k = 1:256] (if k == 256 then 1i else k end), sum[k = 1:257] (if k == 257 then 1i else k end)]
+=> [32640+1i, 32896+1i]
+[prod[k = 1:256] 1, prod[k = 1:257] 1]
+=> [1, 1]
+sum[k = 1:256] (if k == 200 then error("at 200") else k end)
+=> !at 200
+sum[k = 1:1000] (if k == 900 then error("at 900") else k end)
+=> !at 900
+sum[k = 1:300] (if k == 300 then "s" else k end)
+=> !map: the function returned strings for some elements and numbers for o
+
+# --- the reducer is whatever the name means when the line runs ---
+max[k = 1:5] (k - 3) ^ 2
+=> 4
+min[k = 1:5] (k - 3) ^ 2
+=> 0
+mean[k = 1:4] k / 2
+=> 1.25
+cumsum[k = 1:4] k
+=> [1, 3, 6, 10]
+sort[k = 1:4] (5 - k)
+=> [1, 2, 3, 4]
+length[k = 1:7] k
+=> 7
+let keep_it = fn a -> a; let r = keep_it[k = 1:3] k * k; [r, r]
+=> [1, 4, 9, 1, 4, 9]
+let second = fn a -> a[2]; second[k = 1:3] k * 10
+=> 20
+let sum = fn a -> 42; sum[k = 1:3] k
+=> 42
+.. clear("sum"); sum[k = 1:3] k
+=> 6
+.. let prod = sum; prod[k = 1:4] k
+=> 10
+.. let sum = prod; clear("prod"); [sum[k = 1:4] k, prod[k = 1:4] k]
+=> [10, 24]
+let five = 5; five[k = 1:3] k
+=> !value of type Int is not callable
+nosuchreducer[k = 1:3] k
+=> !undefined name 'nosuchreducer'
+let g = 0; let bad = fn a -> error("reducer after " + str(g)); bad[k = 1:3] (g = g + 1; k)
+=> !reducer after 3
+
+# --- order: the reducer, the function, the range; then the calls; then the reduction ---
+let o = ""; let t = (o = o + "r"; sum)[k = (o = o + "s"; 1:2)] (o = o + str(k); k); [o, str(t)]
+=> ["rs12", "3"]
+let g = 0; let t = sum[k = 1:0] (g = g + 1; k); [t, g]
+=> [0, 0]
+let g = 0; let t = prod[k = 3:-1:1] (g = g * 10 + k; k); [t, g]
+=> [6, 321]
+let g = 0; let f = fn k -> (g = g + 1; if k == 3 then undefined_name else k end); let a = sum[k = 1:2] f(k); [a, g]
+=> [3, 2]
+.. sum[k = 1:5] f(k)
+=> !undefined name 'undefined_name'
+let g = 0; let f = fn k -> (g = g + 1; k); let a = sum[k = 1:2] f(k); a
+=> 3
+.. let r = 5[k = 1:4] f(k); r
+=> !value of type Int is not callable
+
+# --- written out as (x ~> f) |> r it is the same thing ---
+(1:4 ~> fn k -> k * k) |> sum
+=> 30
+1:4 ~> (_ * 2) |> prod
+=> 384
+[1.5, 2.5] ~> sin |> sum
+=> 1.59597
+1:3 ~> str |> length
+=> 3
+1:3 ~> (fn a, b -> a) |> sum
+=> !function expects 2 argument(s), got 1
+1:0 ~> (fn a, b -> a) |> sum
+=> 0
+1:3 ~> 5 |> sum
+=> !value of type Int is not callable
+
+# --- inside loops and functions ---
+let t = 0; for r = 1:2000 do t = t + sum[k = 1:3] k * r end; t
+=> 12006000
+let f = fn n -> prod[k = 1:n] (1 + 1 / k); [f(1), f(3), f(100)]
+=> [2, 4, 101]
+let f = fn n -> if n <= 1 then 1 else sum[k = 1:n] f(n - 1) end; f(5)
+=> 120
+let a = [2, 3; 4, 5]; sum[i = 1:2] sum[j = 1:2] a[i, j] * (if i == j then 1 else 0 end)
+=> 7
+sum[k = 1:1000000] k
+=> 500000500000
+format(17); sum[k = 1:1000000] 1 / k ^ 2
+=> 1.6449330668487701

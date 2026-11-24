@@ -1,5 +1,87 @@
 # Cozy changelog
 
+## 0.1.43 — reductions without the arrays nothing reads
+
+The item 0.1.42 left: `r[k = a:b] body` built the range, mapped it into
+a second array, and reduced that. Asked for as "one pass"; what shipped
+is narrower than that, and the reason is below.
+
+Milliseconds, best of seven, built-in backend:
+
+| | 0.1.42 | 0.1.43 |
+|---|---|---|
+| `sum[k = 1:3] k * r`, 100,000 times in a loop | 43.0 | 34.6 |
+| `prod[k = 1:5] (1 + r / k)`, 100,000 times | 72.7 | 64.3 |
+| `sum[k = 1:100] k * r`, 10,000 times | 44.7 | 42.1 |
+| `sum[i = 1:300] sum[j = 1:300] i * j` | 3.7 | 3.5 |
+| `sum[k = 1:1000000] k * k` | 48.2 | 41.8 |
+| `sum[k = 1:1000000] 1 / k ^ 2` | 71.4 | 64.9 |
+
+A fifth off a short reduction in a loop, a tenth off a long one.
+
+### Changed
+- **An Int range under an index is counted, not built.** `sum[k = 1:n]`
+  hands 1, 2, ... n to the body from a counter; the array `1:n` is never
+  made. (`int_range_count` and `int_range_at` are now the one place that
+  says how many elements such a range has and what the k-th is;
+  `make_range` fills its array from them.) A Float or date range, or any
+  other source, is made as before.
+- **A short `sum` or `prod` allocates nothing.** For the builtin `sum`
+  and `prod` over at most 256 elements the results are kept on the C
+  stack and the reducer reads them there. A three-term sum inside a loop
+  used to make and free two arrays each time round.
+- The compiler recognises `(x ~> f) |> r` -- which is what the index
+  notation is -- and emits one call (`bi_map_reduce`) instead of a map
+  and a call of `r`. `r` is still whatever the name means when the line
+  runs: a `sum` you have redefined, `max`, `cumsum`, a function of your
+  own all get the array they always got.
+
+### What "one pass" turned out to mean
+- A version that reduced as the results arrived, keeping no record of
+  them, was written and measured first. It was **slower** for Int
+  results: 54 ms per million against 47. Folding element by element
+  costs more than a tight reduction afterwards; and the numbers had to
+  be recorded anyway, because a result of another kind arriving late (a
+  complex number at the 300th term, a dual from the second) must be able
+  to hand the whole array to the general path, or the answer changes.
+  So the results are still collected, by the same run `map` uses, and
+  `sum` and `prod` add and multiply exactly the numbers they always did.
+  Nothing about the arithmetic is new in this release, which is why
+  there is no table of cases where the answer could differ.
+
+### Fixed
+- **`cumsum` and `cumprod` leaked their result** when an element was
+  not a number (`cumsum(["a", "b"])` raises, and the array being filled
+  was left behind).
+- **`sort` of an empty array** handed `qsort` a null pointer, which the
+  C standard does not allow even for no elements.
+  Both found by the sanitizers on the generated reductions below, one of
+  whose reducers was `cumsum` and one `sort`.
+
+### Verified
+- tests/84_reduce.test: 92 cases, every one generated from the 0.1.42
+  binary: each shape of range, the other sources, the kind of the result
+  for every late arrival (Float, complex, dual, Bool, string, null),
+  Int sums and products that overflow, 255, 256 and 257 elements,
+  reducers of every sort including a redefined `sum`, the order in which
+  the reducer, the function and the range are evaluated and in which
+  errors come.
+- 10,000 random sessions of reductions printed at 17 digits by 0.1.42
+  and 0.1.43: identical, errors and backtraces included. 5,000 of them
+  under the sanitizers: clean, after the two fixes above.
+- The golden suite (1992 inputs) under both backends, the sanitizers
+  and WebAssembly, built with GCC 13, GCC 14 and clang; the stress
+  workout.
+
+### Not done
+- A long reduction still makes the array of results (eight bytes an
+  element) before reducing it. Doing without would need reducers that
+  can be fed in pieces and resumed, for every kind of element; see
+  above for why a fold on the side is not that.
+- The closure for the body is still made each time the line runs (two
+  allocations), which is most of what a three-term sum now costs beyond
+  its three calls.
+
 ## 0.1.42 — the sum with its index, at speed
 
 `map`, and with it `x ~> f` and the indexed reductions (`sum[k = a:b]`,

@@ -1619,6 +1619,25 @@ Value build_matrix(Interp *I, Value *ev, uint32_t nrows, const int64_t *rowcount
     return result;
 }
 
+/* An Int range s : st : e -- how many elements, and the k-th. make_range
+ * fills an array with them; the fused reductions (bi_map_reduce) hand them
+ * out one at a time without making the array. One definition for both. */
+static uint64_t int_range_count(Interp *I, int64_t s, int64_t st, int64_t e)
+{
+    const int64_t RANGE_MAX = 100000000;               /* 1e8 elements, ~800 MB */
+    if (st == 0) runtime_error(I, "range step cannot be zero");
+    uint64_t count = 0;
+    /* span and count stay in uint64 throughout: extreme bounds overflow int64 */
+    if (st > 0 && e >= s)      count = ((uint64_t)e - (uint64_t)s) / (uint64_t)st + 1;
+    else if (st < 0 && e <= s) count = ((uint64_t)s - (uint64_t)e) / (uint64_t)-st + 1;
+    if (count > (uint64_t)RANGE_MAX)
+        runtime_error(I, "range too large: %llu elements (limit %lld)",
+                      (unsigned long long)count, (long long)RANGE_MAX);
+    return count;
+}
+static inline int64_t int_range_at(int64_t s, int64_t st, uint64_t k)
+{ return (int64_t)((uint64_t)s + k * (uint64_t)st); }
+
 Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; result is +1 */
 {
     /* Date ranges (entry 16's design, honored): date : step-days : date
@@ -1650,18 +1669,10 @@ Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; r
     Value out;
     const int64_t RANGE_MAX = 100000000;               /* 1e8 elements, ~800 MB */
     if (all_int) {
-        int64_t s = sv.as.i, st = stv.as.i, e = ev.as.i;
-        if (st == 0) runtime_error(I, "range step cannot be zero");
-        uint64_t count = 0;
-        /* span and count stay in uint64 throughout: extreme bounds overflow int64 */
-        if (st > 0 && e >= s)      count = ((uint64_t)e - (uint64_t)s) / (uint64_t)st + 1;
-        else if (st < 0 && e <= s) count = ((uint64_t)s - (uint64_t)e) / (uint64_t)-st + 1;
-        if (count > (uint64_t)RANGE_MAX)
-            runtime_error(I, "range too large: %llu elements (limit %lld)",
-                          (unsigned long long)count, (long long)RANGE_MAX);
+        int64_t s = sv.as.i, st = stv.as.i;
+        uint64_t count = int_range_count(I, s, st, ev.as.i);
         out = val_array(ELT_INT, 1, (uint32_t)count);
-        for (uint64_t k = 0; k < count; k++)
-            ((int64_t *)as_arr(out)->data)[k] = (int64_t)((uint64_t)s + k * (uint64_t)st);
+        for (uint64_t k = 0; k < count; k++) ((int64_t *)as_arr(out)->data)[k] = int_range_at(s, st, k);
     } else {
         double s = as_double(sv), st = as_double(stv), e = as_double(ev);
         if (st == 0.0) runtime_error(I, "range step cannot be zero");
@@ -2246,18 +2257,29 @@ static Value bi_hdual12(Interp *I, Value *args, uint32_t n) { (void)n; return ma
  * The results used to be collected as boxed Values -- forty bytes each,
  * forty megabytes for a million elements, touched once and thrown away --
  * and packed into the array at the end. While every result is an Int or a
- * Float they now go straight into the array that will be returned: an Int
- * array until the first Float arrives, which turns what is there into
- * Floats in place (what packing did with a mixture). At the first result of
- * any other kind -- complex, Bool, a string, a date, a dual, null -- the
- * numbers so far are boxed after all and the general path carries on from
- * there, so every such case is packed by the code that always packed it. */
+ * Float they now go straight into a buffer of numbers (for map, the array
+ * that will be returned): Ints until the first Float arrives, which turns
+ * what is there into Floats in place (what packing did with a mixture). At
+ * the first result of any other kind -- complex, Bool, a string, a date, a
+ * dual, null -- the numbers so far are boxed after all and the general path
+ * carries on from there, so every such case is packed by the code that
+ * always packed it.
+ *
+ * The same run serves the indexed reductions (bi_map_reduce, below), which
+ * add two things: the arguments may come from an Int range that is never
+ * made into an array, and the numbers may go to a buffer on the caller's
+ * stack instead of an array. */
 typedef struct {
+    /* the arguments: the elements of arr, or the Int range r0 : rstep : ... */
     const ArrObj *arr;
+    int64_t r0, rstep;
     size_t nn, at;                 /* elements; the next one to hand to f */
-    Value  out;                    /* the result, while it is all Int or all Float */
-    bool   typed, floats;          /* out is in use; and holds doubles */
-    Value *tmp;                    /* else: the boxed results ... */
+    /* the results, while they are all Int or all Float */
+    void  *num;                    /* nn numbers: int64_t, or double once `floats` */
+    bool   typed, floats;
+    Value  out;                    /* the array num belongs to, if it is an array's */
+    /* else: boxed */
+    Value *tmp;
     volatile size_t done;          /* how many results there are: what an error must release */
     bool saw_str, saw_bool, saw_other;
 } MapRun;
@@ -2267,21 +2289,23 @@ static bool map_next(Interp *I, VMEach *e, Value *args)
     (void)I;
     MapRun *m = e->ctx;
     if (m->at == m->nn) return false;
-    args[0] = arr_get(m->arr, m->at++);       /* borrowed from arr (see arr_get) */
+    if (m->arr) args[0] = arr_get(m->arr, m->at);       /* borrowed from arr (see arr_get) */
+    else        args[0] = val_int(int_range_at(m->r0, m->rstep, m->at));
+    m->at++;
     return true;
 }
 
 /* leave the typed path: box what is there, as the kind it was stored as */
 static void map_untype(MapRun *m)
 {
-    ArrObj *o = as_arr(m->out);
     Value *tmp = m->nn ? malloc(m->nn * sizeof *tmp) : nullptr;
     if (m->nn && !tmp) abort();
     for (size_t k = 0; k < m->done; k++)
-        tmp[k] = m->floats ? val_float(((const double *)o->data)[k]) : val_int(((const int64_t *)o->data)[k]);
+        tmp[k] = m->floats ? val_float(((const double *)m->num)[k]) : val_int(((const int64_t *)m->num)[k]);
     m->tmp = tmp;
     m->typed = false;
     if (m->done) m->saw_other = true;
+    m->num = nullptr;
     value_release(m->out);
     m->out = val_null();
 }
@@ -2290,21 +2314,19 @@ static void map_take(Interp *I, VMEach *e, Value mapped)
 {
     MapRun *m = e->ctx;
     if (m->typed) {
-        ArrObj *o = as_arr(m->out);
         if (mapped.kind == VAL_INT) {
-            if (m->floats) ((double *)o->data)[m->done] = (double)mapped.as.i;
-            else           ((int64_t *)o->data)[m->done] = mapped.as.i;
+            if (m->floats) ((double *)m->num)[m->done] = (double)mapped.as.i;
+            else           ((int64_t *)m->num)[m->done] = mapped.as.i;
             m->done = m->done + 1;
             return;
         }
         if (mapped.kind == VAL_FLOAT) {
             if (!m->floats) {                          /* the Ints so far become Floats */
                 for (size_t k = 0; k < m->done; k++)
-                    ((double *)o->data)[k] = (double)((const int64_t *)o->data)[k];
-                o->elt = ELT_FLOAT;
+                    ((double *)m->num)[k] = (double)((const int64_t *)m->num)[k];
                 m->floats = true;
             }
-            ((double *)o->data)[m->done] = mapped.as.f;
+            ((double *)m->num)[m->done] = mapped.as.f;
             m->done = m->done + 1;
             return;
         }
@@ -2343,6 +2365,7 @@ static Value bi_map(Interp *I, Value *args, uint32_t n)
     ArrObj *arr = as_arr(a);
     size_t nn = (size_t)arr->rows * arr->cols;
     MapRun m = { .arr = arr, .nn = nn, .out = val_array(ELT_INT, arr->rows, arr->cols), .typed = true };
+    m.num = as_arr(m.out)->data;
     VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = &m };
 
     /* If an element call raises, free the partial result and re-raise. */
@@ -2356,10 +2379,126 @@ static Value bi_map(Interp *I, Value *args, uint32_t n)
     }
     vm_call_each(I, f, &each);
     memcpy(I->jmp, saved, sizeof(jmp_buf));
-    if (m.typed) return m.out;
+    if (m.typed) {
+        if (m.floats) as_arr(m.out)->elt = ELT_FLOAT;   /* the numbers were written as doubles */
+        return m.out;
+    }
     Value r = pack_array(m.tmp, nn, arr->rows, arr->cols);
     free(m.tmp);
     return r;
+}
+
+/* Call fn(I, &arg, 1); release `arg` whichever way that ends. */
+static Value call_and_release(Interp *I, BuiltinFn fn, Value callee, Value arg)
+{
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        value_release(arg);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        longjmp(I->jmp, 1);
+    }
+    Value r = fn ? fn(I, &arg, 1) : call_value(I, callee, &arg, 1);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+    value_release(arg);
+    return r;
+}
+
+static Value bi_sum(Interp *I, Value *args, uint32_t n);
+static Value bi_prod(Interp *I, Value *args, uint32_t n);
+
+/* The calls of a map, guarded: on an error what the run holds is released
+ * and the error goes on. Kept apart from bi_map_reduce so that the function
+ * which calls setjmp has no locals of its own to carry across the jump --
+ * all it needs is behind the two pointers (GCC reports locals of a setjmp
+ * function as "might be clobbered", and with -Werror that is a failed
+ * build). */
+static void map_calls(Interp *I, Value f, MapRun *m, const Value *held)
+{
+    VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = m };
+    jmp_buf saved;
+    memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        value_release(*held);
+        if (!m->typed) array_build_abort(I, m->tmp, m->done, saved);
+        value_release(m->out);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        longjmp(I->jmp, 1);
+    }
+    vm_call_each(I, f, &each);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+}
+
+/* (x ~> f) |> r without the arrays it does not need: what `r[k = a:b] body`
+ * compiles to (0.1.43).
+ *   args: r, f, x                   the source is an array
+ *         r, f, start, step, stop   the source was written as a range
+ * The definition is r(map(f, x)), and that is still what is computed: the
+ * results are collected by map's own run, and r is called on them. What is
+ * left out is what nothing reads:
+ *
+ *   - an Int range is not made into an array. Its elements are handed to f
+ *     from a counter (int_range_count / int_range_at, which make_range uses
+ *     too).
+ *   - when r is the builtin sum or prod and there are at most
+ *     REDUCE_ON_STACK elements, the numbers go to a buffer on this stack and
+ *     r reads them there, through an array header that is also on this
+ *     stack. A reduction over a few elements, inside a loop, then allocates
+ *     nothing. Only those two reducers, because they are known to read
+ *     their argument and keep nothing of it.
+ *
+ * A pass that reduced as it went, with no record of the results, was built
+ * and measured first. It was slower for Int results (54 against 47 ms per
+ * million): folding element by element costs more than a tight reduction
+ * afterwards, and the numbers had to be kept anyway, because a result of
+ * another kind arriving late must be able to hand the whole array to the
+ * general path. So nothing about the arithmetic is new here: sum and prod
+ * add and multiply exactly the numbers map would have put in its array.
+ *
+ * Errors come in the order they did: the range's, then the function's as
+ * the elements are reached, then the reducer's. */
+enum { REDUCE_ON_STACK = 256 };
+static Value bi_map_reduce(Interp *I, Value *args, uint32_t n)
+{
+    Value red = args[0], f = args[1];
+    BuiltinFn rfn = red.kind == VAL_BUILTIN ? as_blt(red)->fn : nullptr;
+    if (rfn != bi_sum && rfn != bi_prod) rfn = nullptr;    /* any other reducer is called as a value */
+
+    MapRun m = { .typed = true };
+    Value held = val_null();                           /* a source array made here */
+    uint32_t rows = 1, cols;
+    if (n == 5 && args[2].kind == VAL_INT && args[3].kind == VAL_INT && args[4].kind == VAL_INT) {
+        m.r0 = args[2].as.i; m.rstep = args[3].as.i;
+        m.nn = (size_t)int_range_count(I, m.r0, m.rstep, args[4].as.i);
+        cols = (uint32_t)m.nn;
+    } else {
+        Value src = n == 5 ? (held = make_range(I, args[2], args[4], args[3])) : args[2];
+        if (!is_array(src)) runtime_error(I, "map: second argument must be an Array");
+        m.arr = as_arr(src);
+        rows = m.arr->rows; cols = m.arr->cols;
+        m.nn = (size_t)rows * cols;
+    }
+    int64_t on_stack[REDUCE_ON_STACK];
+    bool small = rfn && m.nn <= REDUCE_ON_STACK;
+    if (small) m.num = on_stack;
+    else { m.out = val_array(ELT_INT, rows, cols); m.num = as_arr(m.out)->data; }
+
+    map_calls(I, f, &m, &held);
+    value_release(held);
+
+    if (!m.typed) {                                    /* some result was not a plain number */
+        Value packed = pack_array(m.tmp, m.nn, rows, cols);
+        free(m.tmp);
+        return call_and_release(I, rfn, red, packed);
+    }
+    EltType elt = m.floats ? ELT_FLOAT : ELT_INT;      /* the numbers were written as doubles */
+    if (small) {
+        ArrObj view = { .obj = { .kind = VAL_ARRAY, .rc = 1 }, .elt = elt, .rows = rows, .cols = cols,
+                        .data = m.nn ? on_stack : nullptr };
+        Value v = { .kind = VAL_ARRAY, .as.obj = &view.obj };
+        return rfn(I, &v, 1);
+    }
+    as_arr(m.out)->elt = elt;
+    return call_and_release(I, rfn, red, m.out);
 }
 
 static Value abs_scalar(Interp *I, Value v)
@@ -7439,7 +7578,7 @@ static Value bi_unique(Interp *I, Value *args, uint32_t n)
         Value *buf = malloc(nn * sizeof *buf);
         if (!buf) abort();
         for (size_t i = 0; i < nn; i++) buf[i] = arr_get(a, i);
-        qsort(buf, nn, sizeof *buf, cmp_val_asc);
+        if (nn > 1) qsort(buf, nn, sizeof *buf, cmp_val_asc);
         size_t k = 0;
         for (size_t i = 0; i < nn; i++)
             if (i == 0 || str_val_cmp(buf[i], buf[k-1]) != 0) buf[k++] = buf[i];
@@ -7452,7 +7591,7 @@ static Value bi_unique(Interp *I, Value *args, uint32_t n)
         int64_t *buf = malloc(nn * sizeof *buf);
         if (!buf) abort();
         memcpy(buf, a->data, nn * sizeof *buf);
-        qsort(buf, nn, sizeof *buf, i64_cmp);
+        if (nn > 1) qsort(buf, nn, sizeof *buf, i64_cmp);
         size_t k = 0;
         for (size_t i = 0; i < nn; i++)
             if (i == 0 || buf[i] != buf[k-1]) buf[k++] = buf[i];
@@ -7980,14 +8119,14 @@ static Value bi_sort(Interp *I, Value *args, uint32_t n)
         size_t nn = (size_t)R * C;
         Value *buf = nn ? malloc(nn * sizeof *buf) : nullptr;
         for (size_t k = 0; k < nn; k++) buf[k] = arr_get(a, k);
-        qsort(buf, nn, sizeof *buf, cmp_val_asc);
+        if (nn > 1) qsort(buf, nn, sizeof *buf, cmp_val_asc);
         for (size_t k = 0; k < nn; k++) arr_set(o, k, buf[k]);
         free(buf);
     } else {                                           /* matrix: sort each column */
         Value *col = malloc(R * sizeof *col);
         for (uint32_t c = 0; c < C; c++) {
             for (uint32_t r = 0; r < R; r++) col[r] = arr_get(a, (size_t)r * C + c);
-            qsort(col, R, sizeof *col, cmp_val_asc);
+            if (R > 1) qsort(col, R, sizeof *col, cmp_val_asc);
             for (uint32_t r = 0; r < R; r++) arr_set(o, (size_t)r * C + c, col[r]);
         }
         free(col);
@@ -7997,14 +8136,10 @@ static Value bi_sort(Interp *I, Value *args, uint32_t n)
 
 static Value numify(Value e) { return e.kind == VAL_BOOL ? val_int(e.as.b ? 1 : 0) : e; }
 
-static Value cumulate(Interp *I, Value v, Arith op, const char *name)
+/* the running sums (products) of a into o */
+static void cumulate_fill(Interp *I, ArrObj *a, ArrObj *o, Arith op)
 {
-    if (is_num(v)) return value_retain(v);
-    if (!is_array(v)) runtime_error(I, "%s: expected an array or number", name);
-    ArrObj *a = as_arr(v);
     uint32_t R = a->rows, C = a->cols;
-    Value out = val_array(a->elt == ELT_BOOL ? ELT_INT : a->elt, R, C);
-    ArrObj *o = as_arr(out);
     Value id = (op == AR_MUL) ? val_int(1) : val_int(0);
     if (R == 1 || C == 1) {
         size_t nn = (size_t)R * C; Value acc = id;
@@ -8018,6 +8153,29 @@ static Value cumulate(Interp *I, Value v, Arith op, const char *name)
             }
         }
     }
+}
+/* ... guarded: an element that is not a number raises in the middle, and
+ * the array being filled used to be left behind (a leak the sanitizer
+ * found in 0.1.43, when `cumsum[k = 1:3] str(k)` was one of ten thousand
+ * generated reductions). */
+static void cumulate_guarded(Interp *I, ArrObj *a, const Value *out, Arith op)
+{
+    jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
+    if (setjmp(I->jmp)) {
+        value_release(*out);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        longjmp(I->jmp, 1);
+    }
+    cumulate_fill(I, a, as_arr(*out), op);
+    memcpy(I->jmp, saved, sizeof(jmp_buf));
+}
+static Value cumulate(Interp *I, Value v, Arith op, const char *name)
+{
+    if (is_num(v)) return value_retain(v);
+    if (!is_array(v)) runtime_error(I, "%s: expected an array or number", name);
+    ArrObj *a = as_arr(v);
+    Value out = val_array(a->elt == ELT_BOOL ? ELT_INT : a->elt, a->rows, a->cols);
+    cumulate_guarded(I, a, &out, op);
     return out;
 }
 static Value bi_cumsum(Interp *I, Value *args, uint32_t n)  { (void)n; return cumulate(I, args[0], AR_ADD, "cumsum"); }
@@ -8638,4 +8796,9 @@ EnvObj *globals_new(void)
 Value eval_map_builtin(void)
 {
     return val_builtin("map", bi_map, 2, 2);
+}
+
+Value eval_map_reduce_builtin(void)
+{
+    return val_builtin("map", bi_map_reduce, 3, 5);
 }

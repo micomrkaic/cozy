@@ -909,3 +909,36 @@ dispatch and 40-byte values as before. TRIGGER: reductions over short
 ranges in inner loops (fusion); root-finding or quadrature dominated by
 call overhead.
 
+## 29. Reductions without the arrays nothing reads — SHIPPED 0.1.43
+(entry 28's rejected item, owner-triggered: "now fuse the range, map and
+reduction into one pass"). BUILT AND MEASURED FIRST: a streaming fold
+(an Int fold by the scalar operator, a shadow sum in doubles for the
+case that a Float arrives later, a log of the numbers for the case that
+anything else does). It reproduced 0.1.42 and was slower on Int results
+(54 vs 47 ms per million): three updates per element against one store
+and a tight loop afterwards. And the log could not be dropped: when the
+300th result is complex the general path needs the first 299 as they
+were, and nothing short of keeping them gives that for every kind and
+every reducer. REJECTED on both counts; with it went the duplicated
+statement of how sum and prod promote. DECIDED: keep what paid.
+(1) An Int range under `~>` in a pipe is compiled as its three numbers
+and counted through; int_range_count / int_range_at are the single
+definition, used by make_range too. (2) For the builtin sum and prod and
+at most 256 elements the numbers go to a stack buffer and the reducer
+reads them through a stack ArrObj header; restricted to those two
+because they are known to keep nothing of their argument (a reducer
+that returned its argument retained would keep a pointer into a dead
+frame). (3) Otherwise map's own run fills a real array and the reducer
+is called on it as a value, so a redefined `sum`, any other builtin and
+user functions are untouched in meaning. DECIDED: the function that
+calls setjmp (map_calls) is separate and holds only pointers; the first
+draft had locals across the jump and GCC refused it, the same failure
+the owner hit in 0.1.38-0.1.40. That is now the rule for new code: a
+setjmp function has no locals of its own. FOUND ON THE WAY: cumsum's
+leak on a non-number, sort's qsort(NULL, 0) (fixed). PROOF:
+tests/84_reduce.test from the 0.1.42 binary; 10,000 generated sessions
+identical at 17 digits. MEASURED: 20% on a three-term sum in a loop,
+about 10% on a million terms. RESIDUE: the result array of a long
+reduction; the closure made per evaluation of the line (two mallocs);
+resumable reducers, if a streaming reduction is ever wanted again.
+

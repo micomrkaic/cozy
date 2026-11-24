@@ -35,5 +35,6 @@ FILE   *fopen_asset(const char *path);     /* read-only open: cwd, exe dir, inst
 EnvObj *globals_new(void);                 /* env preloaded with builtins (+1 ref) */
 
 Value eval_map_builtin(void);
+Value eval_map_reduce_builtin(void);   /* (x ~> f) |> r in one pass; never bound to a name */
 
 #endif
