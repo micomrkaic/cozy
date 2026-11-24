@@ -1,5 +1,19 @@
 # Cozy changelog
 
+## 0.1.48 — the nowcasting page meets a browser cache
+
+### Fixed
+- **"Cannot read properties of undefined (reading 'apply')" on Estimate.**
+  A browser (or the CDN in front of GitHub Pages) that still held the
+  0.1.46 cozy.js paired it with the 0.1.47 page: the old engine starts and
+  loads the nowcast package, but lacks cozy_set_matrix, and the first call
+  to it failed. The page's worker now loads `cozy.js?v=<hash of the
+  bundle>`, a URL no cache has seen; tools/gen_dsge_page.py stamps the hash
+  whenever the bundle is rebuilt and `make test` refuses a stale stamp. An
+  engine that is still too old is named as such, with the reload to fix
+  it, instead of failing on first use. Reproduced and checked in Chromium
+  with the 0.1.46 bundle served under the 0.1.47 page.
+
 ## 0.1.47 — the nowcasting page
 
 Phase 3: `docs/nowcast.html`, a nowcasting app for economists on the

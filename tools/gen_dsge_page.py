@@ -14,6 +14,8 @@ Each standalone page is a function of two files and nothing else; `make wasm`
 regenerates it after rebuilding the bundle, and --check (wired into
 `make test`) refuses a tree where either source changed without it. The
 verdict is the exit code."""
+import hashlib
+import re
 import sys
 
 BUNDLE = "docs/cozy.js"
@@ -35,8 +37,29 @@ def build(SRC, opener):
     return page.replace(TAG, opener + "\n" + js + "\n</script>")
 
 
+STAMP = re.compile(r'var COZY_BUNDLE = "cozy\.js\?v=[0-9a-f]+";')
+
+
+def stamp(check):
+    """nowcast.html loads cozy.js?v=<hash of cozy.js> in its worker, so a
+    cached older engine is never used with a newer page."""
+    h = hashlib.sha256(open(BUNDLE, "rb").read()).hexdigest()[:12]
+    page = open("docs/nowcast.html", encoding="utf-8").read()
+    if len(STAMP.findall(page)) != 1:
+        raise SystemExit("gen_dsge_page: expected one COZY_BUNDLE line in docs/nowcast.html")
+    want = STAMP.sub(f'var COZY_BUNDLE = "cozy.js?v={h}";', page)
+    if want == page:
+        return 0
+    if check:
+        print("nowcast page: the cozy.js stamp is stale — run python3 tools/gen_dsge_page.py")
+        return 1
+    open("docs/nowcast.html", "w", encoding="utf-8").write(want)
+    print(f"nowcast page: stamped cozy.js?v={h}")
+    return 0
+
+
 def main():
-    bad = 0
+    bad = stamp("--check" in sys.argv)
     for name, SRC, OUT, opener in PAGES:
         want = build(SRC, opener)
         if "--check" in sys.argv:
