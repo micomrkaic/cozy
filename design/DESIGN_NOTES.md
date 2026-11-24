@@ -1036,3 +1036,33 @@ the HP filter's companion form — has no Q^{-1}; a constraint form would
 admit it); F, Q, H, R constant in time; doubles only, so no dual-number
 gradient through ksmooth (EM, not BFGS, is the estimator for phase 2).
 TRIGGER: the nowcast package (phase 2) needing any of these.
+
+## 32. Nowcasting — SHIPPED 0.1.46 (owner's request: phase 2 of the app;
+entry 31's trigger). CONSIDERED: the M-step in Cozy from P and the cross
+blocks (per series, per period, small matrices in the interpreter: a
+second per EM step at 200 series); AR(1) idiosyncratic states, Banbura and
+Modugno's full model (n grows by the number of series, and the cost is
+n^3 per period); the news by forming Banbura and Modugno's weights (the
+joint covariance of all releases). DECIDED: the kernel returns the
+sums an EM step needs (stats = true) and the fitted signal (fit = true),
+both from the band of Sigma it already has; the package is Cozy over
+those. DECIDED: iid idiosyncratic errors and a VAR(1) factor, the model
+the EM is exact for; the prior on f_0 is the stationary distribution of
+the STARTING parameters, held fixed — re-deriving it each step (Banbura
+and Modugno) breaks the monotonicity the tests rely on. DECIDED: news by
+linearity. For fixed parameters the smoothed signal is linear in the data,
+so a series' contribution is the change from one extra run with only its
+releases at their values and the rest at their expectations — the
+decomposition itself, not an approximation, and no covariance of the
+releases. Revisions first, judged on the old releases; news against the
+revised data: their convention. DECIDED: series by name, options by
+field (the language has no type predicates); standardize by default and
+report in the data's units. PROOF: tests/ref_nowcast.py — the source
+application's nowcasts to 1e-7, a dense EM to 1e-15, the literal news
+formula to 1e-15; tests/87_nowcast.test, ASan clean. MEASURED: 200 series
+x 360 months, r = 3, ten quarterly (Mariano-Murasawa): E-step 14 ms,
+M-step 2 ms native (4 in WebAssembly). RESIDUE: AR(1) idiosyncratic
+errors; VAR(p) factors (a positive-definite Q cannot hold the companion
+block; transition lags in the kernel would); block-restricted loadings
+(global / real / nominal factors); news per release date rather than
+per series. TRIGGER: the app's users.

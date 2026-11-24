@@ -1,0 +1,354 @@
+% nowcast.cz — nowcasting with a mixed-frequency dynamic factor model,
+% on the ksmooth builtin (the simultaneous Kalman smoother, design entry 31).
+%
+%   let d = nowcast.panel(readtable("data.csv"))   % date column + one per series
+%   let f = nowcast.fit(d, {r = 2})                 % PCA start, then EM
+%   nowcast.nowcast(f, "gdp")                       % {value, sd, period, ...}
+%   let f2 = nowcast.update(f, d2.Y)                % new data, same parameters
+%   nowcast.news(f, d2.Y, "gdp")                    % what moved the nowcast, by series
+%
+% The model, on standardized data (each series minus its mean, over its sd):
+%
+%     f_t = A f_{t-1} + e_t,                 e_t ~ N(0, Q)       (r factors, monthly)
+%     y_it = lambda_i' f_t + u_it                                (a monthly series)
+%     y_it = lambda_i' (w_0 f_t + w_1 f_{t-1} + ... ) + u_it      (a quarterly series)
+%     u_it ~ N(0, R_i), independent across series
+%
+% A quarterly series sits in its quarter's third month, NaN in the other
+% two, and loads on its months through fixed weights w: "mm" (Mariano and
+% Murasawa, 1 2 3 2 1 over 3 — quarterly growth of a monthly growth factor;
+% the default) or "mean" (1 1 1 over 3 — a quarterly average). The weights
+% are measurement lags of the smoother, so the state is just the r factors.
+% Missing values are NaN anywhere: ragged edges, gaps, short histories.
+%
+% Estimation is the Gaussian EM of Banbura and Modugno (2014) for this
+% model (iid idiosyncratic errors): the E-step is one ksmooth with stats =
+% true, the M-step closed form, and the log-likelihood never falls. The
+% prior on f_0 is the stationary distribution of the starting parameters,
+% held fixed so that the EM is exact. The news decomposition is exact: for
+% fixed parameters the nowcast is linear in the data, so each series'
+% contribution is one more smoothing run (Banbura and Modugno's weights,
+% without forming them). Cross-checked against a dense numpy reference
+% and the simksmoother package; see tests/87_nowcast.test.
+%
+% Helpers are prefixed nc_; keep() must spare them.
+
+% internal: the value of field k of record r, or dflt when absent
+let nc_opt = fn r, k, dflt -> if any(fields(r) == k) then getfield(r, k) else dflt end
+
+% internal: aggregation weights for a quarterly series, as a row
+let nc_weights = fn agg -> (
+  if agg == "mm" then [1, 2, 3, 2, 1] / 3
+  elseif agg == "mean" then [1, 1, 1] / 3
+  else error("nowcast: agg must be \"mm\" or \"mean\", got \"{}\"", agg) end
+)
+
+% internal: the position of series name in a fit or panel
+let nc_index = fn d, name -> (
+  let k = find(d.names == name);
+  if numel(k) == 0 then error("nowcast: no series named \"{}\" (series: {})", name, strjoin(d.names, ", ")) end;
+  k[1]
+)
+
+% internal: mean and sd of each row, omitting NaN
+let nc_scale = fn Y -> (
+  let m = size(Y)[1];
+  let mu = zeros(m, 1); let sd = ones(m, 1);
+  for i = 1 : m do (
+    let y = Y[i, :];
+    let ok = find(!isnan(y));
+    if numel(ok) == 0 then error("nowcast: series {} has no observations", i) end;
+    mu[i] = mean(y[ok]);
+    if numel(ok) > 1 then (let s = std(y[ok]); if s > 0 then (sd[i] = s) end) end
+  ) end;
+  {mu = mu, sd = sd}
+)
+
+% panel(t, opts): a nowcasting panel from a table — a readtable record with
+% a date column (opts.date, default "date") and one numeric column per
+% series, monthly rows. A series observed only in March, June, September
+% and December is taken as quarterly. Returns {Y, names, dates, quarterly}
+% with Y series x months; nowcast.data builds the same from a matrix.
+% e.g. let p = nowcast.panel({date = [date(2024, 1, 31); date(2024, 2, 29); date(2024, 3, 31)], ip = [1.0; 2; 3], gdp = [0/0; 0/0; 5]}); p.quarterly' %= [0, 1]
+let nowcast_panel = fn t, opts = {} -> (
+  let dc = nc_opt(opts, "date", "date");
+  let cols = fields(t);
+  if !any(cols == dc) then error("nowcast.panel: no date column \"{}\" (columns: {})", dc, strjoin(cols, ", ")) end;
+  let dates = getfield(t, dc);
+  let keep = find(cols != dc);
+  let names = cols[keep];
+  let m = numel(keep); let T = numel(dates);
+  let Y = zeros(m, T); let q = zeros(m, 1);
+  let mo = month(dates);
+  for i = 1 : m do (
+    let col = getfield(t, names[i]);
+    Y[i, :] = col';
+    let ok = find(!isnan(col));
+    if numel(ok) > 0 then
+      if all(mod(mo[ok], 3) == 0) && numel(ok) < T then (q[i] = 1) end
+    end
+  ) end;
+  {Y = Y, names = names, dates = dates, quarterly = q}
+)
+
+% data(Y, opts): a nowcasting panel from a series x months matrix. opts:
+% names (a string column; default y1, y2, ...), quarterly (one 0/1 per
+% series; default all monthly), dates (optional, one per month).
+% e.g. nowcast.data([1, 2, 3; 0/0, 0/0, 4], {quarterly = [0; 1]}).names' %= ["y1", "y2"]
+let nowcast_data = fn Y, opts = {} -> (
+  let m = size(Y)[1];
+  let names = nc_opt(opts, "names", (1 : m) ~> (fn k -> "y" + str(k)));
+  let names = reshape(names, numel(names), 1);
+  if numel(names) != m then error("nowcast.data: {} names for {} series", numel(names), m) end;
+  let q = nc_opt(opts, "quarterly", zeros(m, 1));
+  let q = reshape(q, numel(q), 1);
+  if numel(q) != m then error("nowcast.data: quarterly needs one 0/1 per series ({})", m) end;
+  {Y = Y, names = names, dates = nc_opt(opts, "dates", zeros(0, 1)), quarterly = q}
+)
+
+% internal: the m x L weight matrix (monthly rows [1, 0, ...])
+let nc_wmat = fn q, agg -> (
+  let w = nc_weights(agg);
+  let L = numel(w);
+  let W = zeros(numel(q), L);
+  for i = 1 : numel(q) do (if q[i] > 0 then (W[i, :] = w) else (W[i, 1] = 1) end) end;
+  W
+)
+
+% internal: x as an r x c matrix (a scalar is 1 x 1)
+let nc_mat = fn x, r, c -> if r * c == 1 then x * ones(1, 1) else reshape(x, r, c) end
+
+% internal: given parameters as matrices of the right shapes (scalars allowed for r = 1)
+let nc_params = fn p, m -> (
+  let need = ["A"; "Q"; "Lam"; "R"];
+  for k = 1 : 4 do (if !any(fields(p) == need[k]) then error("nowcast: params needs {} (A, Q, Lam, R)", need[k]) end) end;
+  let r = 1;
+  while r * r < numel(p.A) do r = r + 1 end;
+  if (numel(p.Lam) != m * r) || (numel(p.Q) != r * r) || (numel(p.R) != m) then
+    error("nowcast: params for {} series and {} factor(s): A and Q {}x{}, Lam {}x{}, R {} variances", m, r, r, r, m, r, m)
+  end;
+  {A = nc_mat(p.A, r, r), Q = nc_mat(p.Q, r, r), Lam = nc_mat(p.Lam, m, r), R = nc_mat(p.R, m, 1)}
+)
+
+% internal: the state-space model for ksmooth from the parameters
+let nc_ssm = fn sp, p -> (
+  let m = size(sp.W)[1]; let L = size(sp.W)[2]; let r = size(p.A)[1];
+  let H = zeros(m, r * L);
+  for k = 1 : L do H[:, (k - 1) * r + 1 : k * r] = (sp.W[:, k] * ones(1, r)) .* p.Lam end;
+  {F = p.A, Q = p.Q, H = H, R = p.R, P0 = sp.P0}
+)
+
+% internal: the stationary covariance of f_t = A f_{t-1} + e, or 10 I
+let nc_stat = fn A, Q -> (
+  let r = size(A)[1];
+  if max(abs(eig(A).values)) >= 0.999 then 10 * eye(r)
+  else (
+    let v = (eye(r * r) - kron(A, A)) \ reshape(Q, r * r, 1);
+    let P = reshape(v, r, r);
+    (P + P') / 2
+  ) end
+)
+
+% internal: principal-components start — factors from the monthly series
+% (NaN as zero), loadings and variances by regression, a VAR(1) by OLS
+let nc_init = fn Z, W, q, r -> (
+  let m = size(Z)[1]; let T = size(Z)[2]; let L = size(W)[2];
+  let mon = find(q == 0);
+  if numel(mon) < r then error("nowcast: {} factors need at least {} monthly series (have {})", r, r, numel(mon)) end;
+  let Zm = Z[mon, :];
+  Zm[isnan(Zm)] = 0;
+  let e = eig(Zm * Zm' / T);
+  let nm = numel(mon);
+  let V = e.vectors[:, nm - r + 1 : nm];
+  let f = V' * Zm;
+  let Lam = zeros(m, r); let R = ones(m, 1);
+  for i = 1 : m do (
+    % the regressor: the factor through the series' weights (lags before t = 1 skipped)
+    let g = zeros(r, T);
+    for k = 1 : L do (
+      if W[i, k] != 0 then (g[:, k : T] = g[:, k : T] + W[i, k] * f[:, 1 : T - k + 1]) end
+    ) end;
+    let ok = find(!isnan(Z[i, :]));
+    let ok = ok[find(ok >= L * q[i] + 1)];
+    if numel(ok) > r then (
+      let G = g[:, ok]; let y = Z[i, ok];
+      let lam = (G * G') \ (G * y');
+      Lam[i, :] = lam';
+      let u = y - lam' * G;
+      R[i] = max(mean(u .* u), 0.05)
+    ) end
+  ) end;
+  let A = (f[:, 2 : T] * f[:, 1 : T - 1]') / (f[:, 1 : T - 1] * f[:, 1 : T - 1]');
+  let E = f[:, 2 : T] - A * f[:, 1 : T - 1];
+  let Q = E * E' / (T - 1);
+  {A = A, Q = (Q + Q') / 2 + 1e-6 * eye(r), Lam = Lam, R = R}
+)
+
+% internal: one EM M-step from the sufficient statistics of ksmooth
+let nc_mstep = fn sp, p, st, T -> (
+  let m = size(sp.W)[1]; let L = size(sp.W)[2]; let r = size(p.A)[1]; let np = r * L;
+  let A = st.S10 / st.S00;
+  let Q = (st.S11 - A * st.S10') / T;
+  let Lam = p.Lam; let R = p.R;
+  for i = 1 : m do (
+    if st.nT[i] > 0 then (
+      let Wk = kron(sp.W[i, :]', eye(r));
+      let Ss = Wk' * st.Sss[:, (i - 1) * np + 1 : i * np] * Wk;
+      let b = Wk' * st.Sys[i, :]';
+      let lam = Ss \ b;
+      Lam[i, :] = lam';
+      R[i] = max((st.Syy[i] - b' * lam) / st.nT[i], sp.Rmin)
+    ) end
+  ) end;
+  {A = A, Q = (Q + Q') / 2, Lam = Lam, R = R}
+)
+
+% internal: smooth with the parameters and keep what the nowcasts read
+let nc_smooth = fn sp, p -> (
+  let s = ksmooth(sp.Z, nc_ssm(sp, p), {fit = true});
+  {f = s.x, fsd = s.sd, yhat = s.yhat, ysd = s.ysd, loglik = s.loglik}
+)
+
+% internal: a fit record from a panel, standardization and parameters
+let nc_make = fn d, opts, params -> (
+  let agg = nc_opt(opts, "agg", "mm");
+  let W = nc_wmat(d.quarterly, agg);
+  let stdz = nc_opt(opts, "standardize", true);
+  let sc = if stdz then nc_scale(d.Y) else {mu = zeros(size(d.Y)[1], 1), sd = ones(size(d.Y)[1], 1)} end;
+  let m = size(d.Y)[1]; let T = size(d.Y)[2];
+  let Z = (d.Y - sc.mu * ones(1, T)) ./ (sc.sd * ones(1, T));
+  {names = d.names, dates = d.dates, quarterly = d.quarterly, agg = agg, W = W,
+   Y = d.Y, Z = Z, mu = sc.mu, sd = sc.sd, Rmin = nc_opt(opts, "Rmin", 1e-4)}
+)
+
+% model(d, opts): the factor model with given or starting parameters, no
+% estimation — for known parameters (opts.params = {A, Q, Lam, R}, in the
+% units of the data when opts.standardize = false) or to look at the start.
+% opts: r (factors, 1), agg ("mm" or "mean"), standardize (true), params.
+% e.g. let d = nowcast.data([1, 2, 3, 2; 0/0, 0/0, 6, 0/0], {quarterly = [0; 1]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.5, Q = 1, Lam = [1; 1], R = [0.1; 0.1]}}); size(f.state.f) %= [1, 5]
+let nowcast_model = fn d, opts = {} -> (
+  let sp = nc_make(d, opts, {});
+  let r = nc_opt(opts, "r", 1);
+  let p = nc_opt(opts, "params", {});
+  let p = if numel(fields(p)) == 0 then nc_init(sp.Z, sp.W, sp.quarterly, r) else nc_params(p, size(d.Y)[1]) end;
+  let sp = setfield(sp, "P0", nc_opt(opts, "P0", nc_stat(p.A, p.Q)));
+  let sp = setfield(sp, "params", p);
+  let sp = setfield(sp, "iterations", 0);
+  setfield(sp, "state", nc_smooth(sp, p))
+)
+
+% fit(d, opts): estimate the factor model by EM from a principal-components
+% start (or opts.params). opts: r (1), agg ("mm"), maxit (500), tol (1e-5,
+% the relative change of the log-likelihood), standardize (true). The
+% result carries params {A, Q, Lam, R}, the log-likelihood path loglik,
+% iterations, converged, and state {f, fsd, yhat, ysd, loglik}.
+% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); f.loglik[f.iterations] >= f.loglik[1] %= true
+let nowcast_fit = fn d, opts = {} -> (
+  let sp = nowcast_model(d, opts);
+  let maxit = nc_opt(opts, "maxit", 500);
+  let tol = nc_opt(opts, "tol", 1e-5);
+  let T = size(sp.Z)[2];
+  let hist = zeros(maxit, 1);
+  let p = sp.params; let it = 0; let conv = false;
+  while (it < maxit) && !conv do (
+    it = it + 1;
+    let s = ksmooth(sp.Z, nc_ssm(sp, p), {cov = false, stats = true});
+    hist[it] = s.loglik;
+    if it > 1 then (
+      let a = hist[it]; let b = hist[it - 1];
+      if abs(a - b) / ((abs(a) + abs(b)) / 2) < tol then (conv = true) end
+    ) end;
+    if !conv then (p = nc_mstep(sp, p, s.stats, T)) end
+  ) end;
+  let sp = setfield(sp, "params", p);
+  let sp = setfield(sp, "loglik", hist[1 : it]);
+  let sp = setfield(sp, "iterations", it);
+  let sp = setfield(sp, "converged", conv);
+  setfield(sp, "state", nc_smooth(sp, p))
+)
+
+% update(f, Ynew): the same model and parameters on new data (more months,
+% new releases, revisions) — standardized with the fit's own means and sds.
+% e.g. let d = nowcast.data([1, 2, 3; 2, 4, 5]); let f = nowcast.model(d, {params = {A = 0.5, Q = 1, Lam = [1; 1], R = [0.1; 0.1]}}); size(nowcast.update(f, [1, 2, 3, 4; 2, 4, 5, 0/0]).state.yhat) %= [2, 4]
+let nowcast_update = fn f, Ynew -> (
+  if size(Ynew)[1] != size(f.Y)[1] then error("nowcast.update: {} series, the fit has {}", size(Ynew)[1], size(f.Y)[1]) end;
+  let T = size(Ynew)[2];
+  let g = setfield(f, "Y", Ynew);
+  let g = setfield(g, "Z", (Ynew - f.mu * ones(1, T)) ./ (f.sd * ones(1, T)));
+  setfield(g, "state", nc_smooth(g, f.params))
+)
+
+% extend(Y, h): Y with h months of NaN appended — the months to nowcast
+% or forecast into (a quarter's nowcast needs its third month).
+% e.g. size(nowcast.extend([1, 2; 3, 4], 2)) %= [2, 4]
+let nowcast_extend = fn Y, h -> [Y, (0 / 0) * ones(size(Y)[1], h)]
+
+% nowcast(f, name, t): the model's estimate of series name in month t
+% (default the last month), in the data's units: {value, sd, t, actual}.
+% sd is the uncertainty of the common component, the signal without the
+% series' own noise; actual is the data's value there (NaN if not out).
+% e.g. let d = nowcast.data([1, 2, 3; 0/0, 0/0, 0/0], {names = ["ip"; "gdp"]}); let f = nowcast.model(d, {standardize = false, params = {A = 1, Q = 1, Lam = [1; 2], R = [1e-6; 1]}}); format(4); nowcast.nowcast(f, "gdp").value %= 6.000
+let nowcast_nowcast = fn f, name, t = 0 -> (
+  let i = nc_index(f, name);
+  let T = size(f.Y)[2];
+  let t = if t == 0 then T else t end;
+  {value = f.mu[i] + f.sd[i] * f.state.yhat[i, t], sd = f.sd[i] * f.state.ysd[i, t],
+   t = t, actual = f.Y[i, t]}
+)
+
+% internal: the target in standardized units, with the parameters fixed
+let nc_target = fn f, Z, i, t -> ksmooth(Z, nc_ssm(f, f.params), {cov = false, fit = true}).yhat[i, t]
+
+% news(f, Ynew, name, t): why the nowcast of series name in month t moved
+% from the data the fit was smoothed on (f.Y) to Ynew, parameters fixed —
+% Banbura and Modugno's decomposition. Revisions come first: revisions[j]
+% is what series j's changed values did to the nowcast on the old
+% releases; then news[j] is what series j's new releases did, each judged
+% against what the revised data expected of it (surprise[j], the mean of
+% release minus expectation, in data units). Exact and additive: old +
+% sum(revisions) + sum(news) = new. Ynew may have more months than f.Y.
+% e.g. let d = nowcast.data([1, 2, 0/0; 0/0, 0/0, 0/0], {names = ["ip"; "gdp"]}); let f = nowcast.model(d, {standardize = false, params = {A = 0.9, Q = 1, Lam = [1; 1], R = [0.5; 0.5]}}); let n = nowcast.news(f, [1, 2, 4; 0/0, 0/0, 0/0], "gdp"); abs(n.old + sum(n.news) + sum(n.revisions) - n.new) < 1e-12 %= true
+let nowcast_news = fn f, Ynew, name, t = 0 -> (
+  let i = nc_index(f, name);
+  let m = size(f.Y)[1]; let To = size(f.Y)[2]; let T = size(Ynew)[2];
+  if size(Ynew)[1] != m then error("nowcast.news: {} series, the fit has {}", size(Ynew)[1], m) end;
+  if T < To then error("nowcast.news: Ynew has {} months, the fit {}", T, To) end;
+  let t = if t == 0 then T else t end;
+  let sc = fn Y -> (Y - f.mu * ones(1, size(Y)[2])) ./ (f.sd * ones(1, size(Y)[2]));
+  let Zo = sc(nowcast_extend(f.Y, T - To));
+  let Zn = sc(Ynew);
+  let gone = !isnan(Zo) & isnan(Zn);
+  if any(any(gone)) then error("nowcast.news: Ynew drops {} value(s) the old data had", sum(sum(gone))) end;
+  let isnew = isnan(Zo) & !isnan(Zn);
+  let isrev = !isnan(Zo) & !isnan(Zn) & (abs(Zo - Zn) > 0);
+  let old = nc_target(f, Zo, i, t);
+  % the old releases, revised: the revisions' effect is from Zo to Zr
+  let Zr = Zo; Zr[isrev] = Zn[isrev];
+  let yr = ksmooth(Zr, nc_ssm(f, f.params), {cov = false, fit = true}).yhat;
+  % the new releases at what the revised data expected: the base for news
+  let B = Zn; B[isnew] = yr[isnew];
+  let base = nc_target(f, B, i, t);
+  let new = nc_target(f, Zn, i, t);
+  let news = zeros(m, 1); let revs = zeros(m, 1); let surprise = (0 / 0) * ones(m, 1);
+  let one = ones(1, T);
+  for j = 1 : m do (
+    let ej = zeros(m, 1); ej[j] = 1;
+    let row = (ej * one) > 0;
+    let mn = isnew & row; let mr = isrev & row;
+    if any(any(mr)) then (
+      let Zj = Zo; Zj[mr] = Zn[mr];
+      revs[j] = f.sd[i] * (nc_target(f, Zj, i, t) - old)
+    ) end;
+    if any(any(mn)) then (
+      let Bn = B; Bn[mn] = Zn[mn];
+      news[j] = f.sd[i] * (nc_target(f, Bn, i, t) - base);
+      surprise[j] = f.sd[j] * mean(Zn[mn] - yr[mn])
+    ) end
+  ) end;
+  {old = f.mu[i] + f.sd[i] * old, new = f.mu[i] + f.sd[i] * new,
+   revisions = revs, news = news, surprise = surprise, names = f.names, t = t}
+)
+
+let nowcast = {panel = nowcast_panel, data = nowcast_data, model = nowcast_model, fit = nowcast_fit,
+               update = nowcast_update, extend = nowcast_extend, nowcast = nowcast_nowcast,
+               news = nowcast_news}

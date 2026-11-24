@@ -175,6 +175,9 @@ static void ks_release(Ks *k)
 void ks_free(KsResult *out)
 {
     free(out->x); free(out->P);
+    free(out->S00); free(out->S10); free(out->S11); free(out->Syy); free(out->Sys);
+    free(out->Sss); free(out->nT); free(out->yhat); free(out->ysd);
+    out->S00 = out->S10 = out->S11 = out->Syy = out->Sys = out->Sss = out->nT = out->yhat = out->ysd = nullptr;
     for (int i = 0; i < KS_MAXLAG; i++) free(out->C[i]);
     out->x = out->P = nullptr;
     for (int i = 0; i < KS_MAXLAG; i++) out->C[i] = nullptr;
@@ -276,6 +279,103 @@ static void add_G(Ks *k, uint32_t t, const double *G, double alpha)
                 for (uint32_t j = 0; j < n; j++)
                     B[(size_t)i * n + j] += alpha * G[(size_t)(a * n + i) * np + c * n + j];
         }
+}
+
+/* E[s_t] and Cov(s_t) for s_t = (x_t, ..., x_{t-p}) — zeros for blocks before x_0 */
+static void s_moments(const Ks *k, const KsResult *out, uint32_t t, double *Es, double *Cs)
+{
+    uint32_t n = k->n, np = k->np, T = k->T;
+    for (uint32_t a = 0; a <= k->p; a++)
+        for (uint32_t i = 0; i < n; i++)
+            Es[a * n + i] = a <= t ? out->x[(size_t)i * (T + 1) + (t - a)] : 0.0;
+    if (!Cs) return;
+    memset(Cs, 0, (size_t)np * np * sizeof *Cs);
+    for (uint32_t a = 0; a <= k->p && a <= t; a++)
+        for (uint32_t c = 0; c <= k->p && c <= t; c++) {
+            const double *B = a <= c ? blk(k, k->S, t - a, c - a) : blk(k, k->S, t - c, a - c);
+            for (uint32_t i = 0; i < n; i++)
+                for (uint32_t j = 0; j < n; j++)
+                    Cs[(size_t)(a * n + i) * np + c * n + j] =
+                        a <= c ? B[(size_t)i * n + j] : B[(size_t)j * n + i];
+        }
+}
+
+/* the EM sufficient statistics and the fitted signal (kalman.h) */
+static int ks_extras(Ks *k, const uint32_t *rowlag, KsResult *out)
+{
+    const KsModel *M = k->M;
+    uint32_t n = k->n, m = k->m, T = k->T, np = k->np;
+    size_t nn = (size_t)n * n, npp = (size_t)np * np;
+    bool cs = k->S != nullptr;
+    double *Es = malloc(np * sizeof *Es), *Cs = cs ? malloc(npp * sizeof *Cs) : nullptr;
+    if (!Es || (cs && !Cs)) { free(Es); free(Cs); return fail(out, "out of memory"); }
+    if (M->want_stats) {
+        out->S00 = calloc(nn, sizeof(double)); out->S10 = calloc(nn, sizeof(double)); out->S11 = calloc(nn, sizeof(double));
+        out->Syy = calloc(m, sizeof(double));  out->nT = calloc(m, sizeof(double));
+        out->Sys = calloc((size_t)m * np, sizeof(double));
+        out->Sss = calloc(npp * m, sizeof(double));
+        if (!out->S00 || !out->S10 || !out->S11 || !out->Syy || !out->nT || !out->Sys || !out->Sss)
+            { free(Es); free(Cs); return fail(out, "out of memory (stats for m = %u series)", m); }
+        const double *X = out->x;
+        for (uint32_t t = 1; t <= T; t++) {
+            const double *P1 = blk(k, k->S, t, 1), *Pt = blk(k, k->S, t, 0), *Pp = blk(k, k->S, t - 1, 0);
+            for (uint32_t i = 0; i < n; i++)
+                for (uint32_t j = 0; j < n; j++) {
+                    double xi = X[(size_t)i * (T + 1) + t], xj = X[(size_t)j * (T + 1) + t];
+                    double pi = X[(size_t)i * (T + 1) + t - 1], pj = X[(size_t)j * (T + 1) + t - 1];
+                    out->S11[(size_t)i * n + j] += xi * xj + Pt[(size_t)i * n + j];
+                    out->S00[(size_t)i * n + j] += pi * pj + Pp[(size_t)i * n + j];
+                    out->S10[(size_t)i * n + j] += xi * pj + P1[(size_t)i * n + j];
+                }
+        }
+    }
+    if (M->want_fit) {
+        out->yhat = malloc((size_t)m * T * sizeof(double));
+        if (M->want_cov) out->ysd = malloc((size_t)m * T * sizeof(double));
+        if (!out->yhat || (M->want_cov && !out->ysd)) { free(Es); free(Cs); return fail(out, "out of memory"); }
+    }
+    double *Ess = cs ? Cs : nullptr;           /* E[s s'] = Cov + Es Es', built in place after ysd */
+    for (uint32_t t = 1; t <= T; t++) {
+        s_moments(k, out, t, Es, Cs);
+        if (M->want_fit)
+            for (uint32_t i = 0; i < m; i++) {
+                const double *h = M->H + (size_t)i * np;
+                double dv = M->d ? M->d[(size_t)i * M->d_cols + (M->d_cols == 1 ? 0 : t - 1)] : 0.0;
+                size_t o = (size_t)i * T + (t - 1);
+                if (rowlag[i] > t) { out->yhat[o] = NAN; if (out->ysd) out->ysd[o] = NAN; continue; }
+                double v = dv;
+                for (uint32_t c = 0; c < np; c++) v += h[c] * Es[c];
+                out->yhat[o] = v;
+                if (out->ysd) {
+                    double q = 0.0;
+                    for (uint32_t a = 0; a < np; a++) {
+                        if (h[a] == 0.0) continue;
+                        double r2 = 0.0;
+                        for (uint32_t c = 0; c < np; c++) r2 += Cs[(size_t)a * np + c] * h[c];
+                        q += h[a] * r2;
+                    }
+                    out->ysd[o] = q > 0.0 ? sqrt(q) : 0.0;
+                }
+            }
+        if (!M->want_stats) continue;
+        for (uint32_t a = 0; a < np; a++)
+            for (uint32_t c = 0; c < np; c++) Ess[(size_t)a * np + c] += Es[a] * Es[c];
+        for (uint32_t i = 0; i < m; i++) {
+            double y = M->Y[(size_t)i * T + (t - 1)];
+            if (isnan(y) || rowlag[i] > t) continue;
+            y -= M->d ? M->d[(size_t)i * M->d_cols + (M->d_cols == 1 ? 0 : t - 1)] : 0.0;
+            out->Syy[i] += y * y; out->nT[i] += 1.0;
+            double *sy = out->Sys + (size_t)i * np;
+            for (uint32_t c = 0; c < np; c++) sy[c] += y * Es[c];
+            for (uint32_t a = 0; a < np; a++) {
+                double *dst = out->Sss + (size_t)a * np * m + (size_t)i * np;
+                const double *src = Ess + (size_t)a * np;
+                for (uint32_t c = 0; c < np; c++) dst[c] += src[c];
+            }
+        }
+    }
+    free(Es); free(Cs);
+    return 0;
 }
 
 int ks_smooth(const KsModel *M, KsResult *out)
@@ -484,7 +584,8 @@ int ks_smooth(const KsModel *M, KsResult *out)
     out->n = n; out->T = T; out->b = b;
 
     /* ---- selected inversion: Sigma(i, j) = (delta_ij L_jj^{-T} - sum_k Sigma(i,k) L(k,j)) L_jj^{-1} ---- */
-    if (M->want_cov) {
+    bool need_S = M->want_cov || M->want_stats;
+    if (need_S) {
         K.S = calloc(nblk * nn, sizeof *K.S);
         if (!K.S) BAIL("out of memory");
         double *A = K.work, *Bm = K.work + nn, *Tmp = K.work + 2 * nn;
@@ -513,6 +614,8 @@ int ks_smooth(const KsModel *M, KsResult *out)
             for (uint32_t i = 0; i < n; i++) for (uint32_t j = 0; j < n; j++)
                 Sjj[(size_t)i * n + j] = 0.5 * (Tmp[(size_t)i * n + j] + Tmp[(size_t)j * n + i]);
         }
+    }
+    if (M->want_cov) {
         size_t W = (size_t)n * (T + 1);       /* row length of the wide outputs */
         out->P = malloc((size_t)n * W * sizeof *out->P);
         if (!out->P) BAIL("out of memory");
@@ -529,6 +632,7 @@ int ks_smooth(const KsModel *M, KsResult *out)
                         dst[(size_t)i * W + (size_t)t * n + j] = src ? src[(size_t)i * n + j] : NAN;
             }
     }
+    if ((M->want_stats || M->want_fit) && ks_extras(&K, rowlag, out) != 0) goto done;
     rc = 0;
 done:
 #undef BAIL

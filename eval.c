@@ -6430,7 +6430,7 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
     if (args[1].kind != VAL_RECORD)
         runtime_error(I, "ksmooth: the model must be a record {F, Q, H, R[, a0, P0, c, d]}, got %s", type_name(args[1].kind));
     if (nargs >= 3 && args[2].kind != VAL_RECORD && args[2].kind != VAL_NULL)
-        runtime_error(I, "ksmooth: options must be a record {cov, wy, wx}, got %s", type_name(args[2].kind));
+        runtime_error(I, "ksmooth: options must be a record {cov, wy, wx, stats, fit}, got %s", type_name(args[2].kind));
     RecObj *md = as_rec(args[1]);
     RecObj *op = (nargs >= 3 && args[2].kind == VAL_RECORD) ? as_rec(args[2]) : nullptr;
     static const char *known_m[] = { "F", "Q", "H", "R", "a0", "P0", "c", "d" };
@@ -6441,12 +6441,12 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
         if (!ok) runtime_error(I, "ksmooth: unknown model field '%.*s' (fields: F, Q, H, R, a0, P0, c, d)", (int)md->keylens[i], md->keys[i]);
     }
     if (op) {
-        static const char *known_o[] = { "cov", "wy", "wx" };
+        static const char *known_o[] = { "cov", "wy", "wx", "stats", "fit" };
         for (uint32_t i = 0; i < op->count; i++) {
             bool ok = false;
-            for (size_t k = 0; k < 3; k++)
+            for (size_t k = 0; k < 5; k++)
                 if (op->keylens[i] == strlen(known_o[k]) && memcmp(op->keys[i], known_o[k], op->keylens[i]) == 0) ok = true;
-            if (!ok) runtime_error(I, "ksmooth: unknown option '%.*s' (options: cov, wy, wx)", (int)op->keylens[i], op->keys[i]);
+            if (!ok) runtime_error(I, "ksmooth: unknown option '%.*s' (options: cov, wy, wx, stats, fit)", (int)op->keylens[i], op->keys[i]);
         }
     }
     for (int k = 0; k < 4; k++)
@@ -6505,6 +6505,15 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
             if (cov.kind != VAL_BOOL) ks_raise(I, &bag, "option cov must be true or false");
             M.want_cov = cov.as.b;
         }
+        Value st = rec_field(op, "stats"), ft = rec_field(op, "fit");
+        if (st.kind != VAL_NULL) {
+            if (st.kind != VAL_BOOL) ks_raise(I, &bag, "option stats must be true or false");
+            M.want_stats = st.as.b;
+        }
+        if (ft.kind != VAL_NULL) {
+            if (ft.kind != VAL_BOOL) ks_raise(I, &bag, "option fit must be true or false");
+            M.want_fit = ft.as.b;
+        }
         if (!ks_absent(wy)) {
             M.wy = ks_take(I, &bag, wy, "wy", &r, &c);
             if (r == m && c == T && m > 1) M.wy_full = true;
@@ -6523,7 +6532,8 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
 
     static const char *lagkey[KS_MAXLAG] = { "P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12",
         "P13","P14","P15","P16","P17","P18","P19","P20","P21","P22","P23","P24" };
-    uint32_t nf = M.want_cov ? 7 + res.b : 4;
+    uint32_t nf = (M.want_cov ? 7 + res.b : 4) + (M.want_stats ? 1 : 0) + (M.want_fit ? (M.want_cov ? 2 : 1) : 0);
+    uint32_t np = n * (M.p + 1);
     Value out = val_record(nf); RecObj *o = as_rec(out);
     uint32_t f = 0;
 #define KS_PUT(k, v) do { o->keys[f] = (k); o->keylens[f] = (uint32_t)strlen(k); o->vals[f] = (v); f++; } while (0)
@@ -6545,6 +6555,19 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
     KS_PUT("logdetJ", val_float(res.logdetJ));
     KS_PUT("nobs", val_int((int64_t)res.nobs));
     if (M.want_cov) KS_PUT("lags", val_int(res.b));
+    if (M.want_fit) {
+        KS_PUT("yhat", ks_wide(res.yhat, m, T));
+        if (M.want_cov) KS_PUT("ysd", ks_wide(res.ysd, m, T));
+    }
+    if (M.want_stats) {
+        Value st = val_record(7); RecObj *so = as_rec(st);
+        static const char *sk[7] = { "S00", "S10", "S11", "Syy", "Sys", "Sss", "nT" };
+        Value sv[7] = { ks_wide(res.S00, n, n), ks_wide(res.S10, n, n), ks_wide(res.S11, n, n),
+                        ks_wide(res.Syy, m, 1), ks_wide(res.Sys, m, np), ks_wide(res.Sss, np, (size_t)np * m),
+                        ks_wide(res.nT, m, 1) };
+        for (int q = 0; q < 7; q++) { so->keys[q] = sk[q]; so->keylens[q] = (uint32_t)strlen(sk[q]); so->vals[q] = sv[q]; }
+        KS_PUT("stats", st);
+    }
 #undef KS_PUT
     ks_free(&res);
     return out;

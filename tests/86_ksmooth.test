@@ -95,6 +95,6 @@ ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1}, {wy = [1, -1]})
 ksmooth([1, 1/0], {F = 1, Q = 1, H = 1, R = 1})
 => !Y has an infinite entry (use NaN for missing)
 ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1}, {smooth = true})
-=> !unknown option 'smooth' (options: cov, wy, wx)
+=> !unknown option 'smooth' (options: cov, wy, wx, stats, fit)
 ksmooth([1, 2], {F = 1i, Q = 1, H = 1, R = 1})
 => !F must be a real matrix, got Complex

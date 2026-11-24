@@ -88,7 +88,36 @@ def dense_reference(Y, F, Q, H, R, a0, P0, c=None, d=None, wy=None, wx=None):
         # diffuse: the improper prior's n/2 log 2pi dropped, as in simksmoother
         Kq = bbig @ Om @ bbig - h @ x
         ll = -0.5 * (Kq + nobs * LOG2PI + sum(ldets) + ldJ)
-    return x.reshape(T + 1, n).T, Sig, ll, ldJ, nobs
+    X = x.reshape(T + 1, n).T
+    # the extras: s_t = (x_t, ..., x_{t-p}), zero before x_0
+    npp = n * (p + 1)
+    def Es(t):
+        return np.concatenate([X[:, t - a] if t - a >= 0 else np.zeros(n) for a in range(p + 1)])
+    def Cs(t):
+        C = np.zeros((npp, npp))
+        for a in range(p + 1):
+            for b in range(p + 1):
+                if t - a >= 0 and t - b >= 0:
+                    C[a*n:(a+1)*n, b*n:(b+1)*n] = Sig[(t-a)*n:(t-a+1)*n, (t-b)*n:(t-b+1)*n]
+        return C
+    blkS = lambda a, b: Sig[a*n:(a+1)*n, b*n:(b+1)*n]
+    ex = dict(S00=sum(np.outer(X[:, t-1], X[:, t-1]) + blkS(t-1, t-1) for t in range(1, T+1)),
+              S10=sum(np.outer(X[:, t], X[:, t-1]) + blkS(t, t-1) for t in range(1, T+1)),
+              S11=sum(np.outer(X[:, t], X[:, t]) + blkS(t, t) for t in range(1, T+1)),
+              Syy=np.zeros(m), Sys=np.zeros((m, npp)), Sss=np.zeros((npp, npp*m)), nT=np.zeros(m),
+              yhat=np.full((m, T), np.nan), ysd=np.full((m, T), np.nan))
+    for t in range(1, T + 1):
+        e, C = Es(t), Cs(t)
+        for i in range(m):
+            if rowlag[i] <= t:
+                ex["yhat"][i, t-1] = H[i] @ e + dd(t)[i]
+                ex["ysd"][i, t-1] = np.sqrt(max(H[i] @ C @ H[i], 0))
+                if not np.isnan(Y[i, t-1]):
+                    yv = Y[i, t-1] - dd(t)[i]
+                    ex["Syy"][i] += yv * yv; ex["nT"][i] += 1; ex["Sys"][i] += yv * e
+                    ex["Sss"][:, i*npp:(i+1)*npp] += C + np.outer(e, e)
+    dense_reference.extra = ex
+    return X, Sig, ll, ldJ, nobs
 
 
 # ---- driving cozy ---------------------------------------------------------
@@ -108,9 +137,11 @@ def run_cozy(Y, F, Q, H, R, a0, P0, c, d, wy, wx, workdir):
     if wy is not None: opts.append(f"wy = {lit(wy if wy.ndim == 2 else wy[None, :])}")
     if wx is not None: opts.append(f"wx = {lit(wx[None, :])}")
     out = os.path.join(workdir, "o")
-    src = (f"let s = ksmooth({lit(Y)}, {{{', '.join(fields)}}}, {{{', '.join(opts) or 'cov = true'}}});\n"
+    src = (f"let s = ksmooth({lit(Y)}, {{{', '.join(fields)}}}, {{{', '.join(opts + ['stats = true', 'fit = true'])}}});\n"
            f"writecsv(\"{out}_x.csv\", s.x); writecsv(\"{out}_P.csv\", s.P);\n"
            + "".join(f"writecsv(\"{out}_C{k}.csv\", s.P{k});\n" for k in range(1, max(1, H.shape[1] // F.shape[0] - 1) + 1))
+           + "".join(f"writecsv(\"{out}_{f}.csv\", s.stats.{f});\n" for f in ("S00", "S10", "S11", "Syy", "Sys", "Sss", "nT"))
+           + f"writecsv(\"{out}_yhat.csv\", s.yhat); writecsv(\"{out}_ysd.csv\", s.ysd);\n"
            +            f"writecsv(\"{out}_s.csv\", [s.loglik, s.logdetJ, s.nobs, s.lags]);\n")
     path = os.path.join(workdir, "case.cz")
     open(path, "w").write(src)
@@ -120,6 +151,7 @@ def run_cozy(Y, F, Q, H, R, a0, P0, c, d, wy, wx, workdir):
     rd = lambda f: np.atleast_2d(np.loadtxt(f, delimiter=","))
     s = rd(out + "_s.csv").ravel()
     C = [rd(f"{out}_C{k}.csv") for k in range(1, int(s[3]) + 1)]
+    run_cozy.extra = {f: rd(f"{out}_{f}.csv") for f in ("S00", "S10", "S11", "Syy", "Sys", "Sss", "nT", "yhat", "ysd")}
     return rd(out + "_x.csv"), rd(out + "_P.csv"), C, s
 
 
@@ -178,6 +210,18 @@ def main():
                     eC = np.inf
                 eC = max(eC, np.max(np.abs(Ck[ok] - Cr[ok])) / (1 + np.max(np.abs(Pr))))
             ell = abs(s[0] - llr) / (1 + abs(llr)); eld = abs(s[1] - ldr) / (1 + abs(ldr))
+            est = 0.0
+            for f, want in dense_reference.extra.items():
+                got = np.ravel(run_cozy.extra[f]); want = np.ravel(want)
+                if got.size != want.size or np.any(np.isnan(got) != np.isnan(want)):
+                    est = np.inf; continue
+                ok = ~np.isnan(want)
+                if ok.any():
+                    est = max(est, np.max(np.abs(got[ok] - want[ok])) / (1 + np.max(np.abs(want[ok]))))
+            worst["stats/fit"] = max(worst.get("stats/fit", 0.0), est)
+            if est > 1e-9:
+                fails += 1
+                print(f"case {case}: stats/fit err {est:.2e}")
             for k, v in zip(worst, (ex, eP, eC, ell, eld)):
                 worst[k] = max(worst[k], v)
             if max(ex, eP, eC, ell, eld) > 1e-9 or int(s[2]) != nob:

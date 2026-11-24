@@ -1,5 +1,39 @@
 # Cozy changelog
 
+## 0.1.46 — nowcasting
+
+Phase 2 of the nowcasting app: the `nowcast` package, a mixed-frequency
+dynamic factor model on the `ksmooth` kernel, with the two kernel outputs
+it needed (design entry 32).
+
+### Added
+- **packages/nowcast.cz** — `nowcast.panel` (a monthly table with a date
+  column; quarterly series detected), `nowcast.data` (the same from a
+  matrix), `nowcast.fit` (principal-components start, then EM: Banbura and
+  Modugno's, for iid idiosyncratic errors; the log-likelihood never
+  falls), `nowcast.model` (no estimation: known parameters, or the start),
+  `nowcast.nowcast` (value and standard error of any series in any month),
+  `nowcast.update` (new data, same parameters), `nowcast.extend` (months to
+  forecast into) and `nowcast.news` (Banbura and Modugno's decomposition,
+  exact: revisions first, then each series' new releases against what the
+  revised data expected, adding up to the change). Quarterly series load
+  on the monthly factors through Mariano-Murasawa (`agg = "mm"`, the
+  default) or averaging (`"mean"`) weights — measurement lags of the
+  smoother, so the state is the factors alone.
+- **`ksmooth` options `stats` and `fit`.** `stats = true` returns the EM
+  sufficient statistics (`S00`, `S10`, `S11`; per series `Syy`, `Sys`,
+  `Sss`, `nT` over the periods it entered); `fit = true` the fitted signal
+  `yhat` for every series and period, and `ysd` with the covariances. Both
+  computed in C, so an EM step over 200 series is one smoothing run plus a
+  millisecond-scale M-step: 23 ms per iteration native and 33 ms in
+  WebAssembly, for 200 series x 360 months, 3 factors, ten of the series
+  quarterly.
+- **tests/ref_nowcast.py**: the source application's data and nowcasts
+  (reproduced to 1e-7), an independent dense EM (agrees to 1e-15) and
+  Banbura and Modugno's news formula from the joint Gaussian (1e-15);
+  tests/87_nowcast.test; tests/data/app2_nowcast.csv.
+- PACKAGES.md section 15.
+
 ## 0.1.45 — the Kalman smoother, as one banded system
 
 `ksmooth(Y, model[, opts])` smooths a linear Gaussian state-space model by

@@ -44,6 +44,8 @@ typedef struct {
     const double *wy; bool wy_full;     /* NULL, T values, or m x T (R_diag only) */
     const double *wx;                   /* NULL, or T values                */
     bool want_cov;            /* compute P and cross blocks (selected inverse) */
+    bool want_stats;          /* EM sufficient statistics (implies the selected inverse) */
+    bool want_fit;            /* fitted signal yhat (and ysd when want_cov) */
 } KsModel;
 
 typedef struct {
@@ -55,6 +57,17 @@ typedef struct {
     double loglik;            /* marginal log p(Y) (diffuse: the prior term dropped) */
     double logdetJ;
     uint64_t nobs;            /* observations that entered                  */
+    /* want_stats — with s_t = (x_t, x_{t-1}, ..., x_{t-p}), np = n(p+1), and
+       y~ = y - d; blocks of s_t that would reach before x_0 count as zero */
+    double *S00, *S10, *S11;  /* n x n: sums over t = 1..T of E[x_{t-1}x_{t-1}'],
+                                 E[x_t x_{t-1}'], E[x_t x_t']                */
+    double *Syy;              /* m: sum over the periods series i entered of y~^2 */
+    double *Sys;              /* m x np: row i, sum of y~_it E[s_t]'        */
+    double *Sss;              /* np x (np m): block i, sum of E[s_t s_t']   */
+    double *nT;               /* m: periods series i entered                */
+    /* want_fit */
+    double *yhat;             /* m x T: E[H s_t + d | Y] (NaN where a row reaches before x_0) */
+    double *ysd;              /* m x T: sd of H s_t | Y, without the measurement noise (want_cov) */
     char msg[256];
 } KsResult;
 
