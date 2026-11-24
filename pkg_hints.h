@@ -195,6 +195,7 @@ static const struct { const char *name, *pkg; } pkg_hints[] = {
     { "nowcast_model", "packages/nowcast.cz" },
     { "nowcast_fit", "packages/nowcast.cz" },
     { "nowcast_update", "packages/nowcast.cz" },
+    { "nowcast_transform", "packages/nowcast.cz" },
     { "nowcast_extend", "packages/nowcast.cz" },
     { "nowcast_nowcast", "packages/nowcast.cz" },
     { "nc_target", "packages/nowcast.cz" },

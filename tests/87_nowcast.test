@@ -78,3 +78,26 @@ load("nowcast"); nowcast.panel({ip = [1.0]})
 => !no date column "date" (columns: ip)
 load("nowcast"); nowcast.data([1, 2; 0/0, 0/0], {quarterly = [0; 1]}) |> nowcast.model
 => !series 2 has no observations
+
+# --- transformations (the page and its exported script share these) ---
+load("nowcast"); nowcast.transform([100, 102, 104.04], ["pct"], [0])
+=> [nan, 2, 2]
+load("nowcast"); nowcast.transform([1, 0/0, 3, 4; 0/0, 0/0, 5, 0/0], ["diff"; "level"], [0; 1])
+=> [nan, nan, nan, 1; nan, nan, 5, nan]
+# a quarterly series' previous period is its previous quarter, three months back
+load("nowcast"); nowcast.transform([0/0, 0/0, 100, 0/0, 0/0, 110], ["pct"], [1])
+=> [nan, nan, nan, nan, nan, 10]
+load("nowcast"); abs(nowcast.transform([1, 2], ["logdiff"], [0])[2] - 100 * log(2)) < 1e-12
+=> true
+load("nowcast"); nowcast.transform(1:13, ["yoy"], [0])[13]
+=> 1200
+load("nowcast"); nowcast.transform([1, -2], ["logdiff"], [0])
+=> !series 1 has values <= 0; logdiff needs positive data
+load("nowcast"); nowcast.transform([1, 2], ["log"], [0])
+=> !unknown code "log" (level, diff, pct, logdiff, yoy)
+load("nowcast"); nowcast.transform([1, 2], ["pct"; "pct"], [0])
+=> !1 series need 1 codes and 1 quarterly flags (got 2 and 1)
+
+# --- EM in pieces (the page's progress bar) ends exactly where one run does ---
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1]}); let one = nowcast.fit(d, {r = 2, tol = 1e-6}); let a = nowcast.fit(d, {r = 2, tol = 1e-6, maxit = 4}); let b = nowcast.fit(d, {r = 2, tol = 1e-6, params = a.params, P0 = a.P0, last = a.loglik[4]}); [a.iterations + b.iterations == one.iterations, norm(b.params.Lam - one.params.Lam) < 1e-12, abs(b.loglik[b.iterations] - one.loglik[one.iterations]) < 1e-9]
+=> [true, true, true]

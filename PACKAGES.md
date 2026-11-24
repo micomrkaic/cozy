@@ -960,6 +960,11 @@ formula taken literally — both to 1e-15 (`tests/ref_nowcast.py`,
 time and across series, and the factors follow a VAR(1); both are the
 first generalizations a production desk would ask for.
 
+The same package drives a page: [nowcast.html](https://micomrkaic.github.io/cozy/nowcast.html)
+takes a spreadsheet (CSV or Excel, monthly and quarterly series together,
+most date styles), runs everything above in the browser, and hands back
+the script — `nowcast.transform` included — that reproduces its numbers.
+
 In the table, `d` is the full panel (all 120 months, the same names) and `f` its fit.
 
 | Function | Worked example | Result |
