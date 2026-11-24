@@ -18,6 +18,7 @@
 #include "chunk.h"
 #include "linalg.h"
 #include "sparse.h"
+#include "kalman.h"
 #include <unistd.h>                 /* readlink, access — load_resolve */
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>             /* EM_ASM — save's browser download */
@@ -6379,6 +6380,199 @@ static Value bi_lu(Interp *I, Value *args, uint32_t n)
     return record3("L", L, "U", U, "p", P);     /* P*A = L*U; p is the 1-based row permutation */
 }
 
+/* ---- ksmooth: the simultaneous Kalman smoother (design entry 31) ---- */
+/* Inputs are copied into owned double buffers kept in a bag, so a teaching
+ * error raised mid-way (runtime_error longjmps) frees what was taken. */
+typedef struct { double *buf[16]; int cnt; } KsBag;
+static void ksbag_free(KsBag *b) { for (int i = 0; i < b->cnt; i++) free(b->buf[i]); b->cnt = 0; }
+[[noreturn]] static void ks_raise(Interp *I, KsBag *b, const char *fmt, ...)
+{
+    char msg[320];
+    va_list ap; va_start(ap, fmt); vsnprintf(msg, sizeof msg, fmt, ap); va_end(ap);
+    ksbag_free(b);
+    runtime_error(I, "ksmooth: %s", msg);
+}
+/* a real matrix (or scalar, 1 x 1) as row-major doubles; NaN passes through */
+static double *ks_take(Interp *I, KsBag *b, Value v, const char *what, uint32_t *rows, uint32_t *cols)
+{
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_BOOL) {
+        double *d = malloc(sizeof *d);
+        if (!d) ks_raise(I, b, "out of memory");
+        *d = v.kind == VAL_BOOL ? (v.as.b ? 1.0 : 0.0) : as_double(v);
+        b->buf[b->cnt++] = d; *rows = *cols = 1;
+        return d;
+    }
+    if (is_sparse(v)) ks_raise(I, b, "%s is sparse — the smoother takes dense model matrices (dense(S))", what);
+    if (!is_array(v)) ks_raise(I, b, "%s must be a real matrix, got %s", what, type_name(v.kind));
+    ArrObj *a = as_arr(v);
+    if (a->elt != ELT_FLOAT && a->elt != ELT_INT && a->elt != ELT_BOOL)
+        ks_raise(I, b, "%s must be real numbers (got a %s array)", what,
+                 a->elt == ELT_COMPLEX ? "complex" : a->elt == ELT_DUAL || a->elt == ELT_HDUAL ? "dual" : "non-numeric");
+    size_t cnt = (size_t)a->rows * a->cols;
+    double *d = malloc((cnt ? cnt : 1) * sizeof *d);
+    if (!d) ks_raise(I, b, "out of memory");
+    if (a->elt == ELT_FLOAT) memcpy(d, a->data, cnt * sizeof *d);
+    else for (size_t k = 0; k < cnt; k++) { Value e = arr_get(a, k); d[k] = e.kind == VAL_BOOL ? (e.as.b ? 1.0 : 0.0) : as_double(e); }
+    b->buf[b->cnt++] = d; *rows = a->rows; *cols = a->cols;
+    return d;
+}
+static bool ks_absent(Value v) { return v.kind == VAL_NULL || (is_array(v) && as_arr(v)->rows * as_arr(v)->cols == 0); }
+static Value ks_wide(const double *src, uint32_t rows, size_t cols)
+{
+    Value o = val_array(ELT_FLOAT, rows, (uint32_t)cols);
+    memcpy(as_arr(o)->data, src, (size_t)rows * cols * sizeof(double));
+    return o;
+}
+
+static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
+{
+    KsBag bag = { .cnt = 0 };
+    if (args[1].kind != VAL_RECORD)
+        runtime_error(I, "ksmooth: the model must be a record {F, Q, H, R[, a0, P0, c, d]}, got %s", type_name(args[1].kind));
+    if (nargs >= 3 && args[2].kind != VAL_RECORD && args[2].kind != VAL_NULL)
+        runtime_error(I, "ksmooth: options must be a record {cov, wy, wx, stats, fit}, got %s", type_name(args[2].kind));
+    RecObj *md = as_rec(args[1]);
+    RecObj *op = (nargs >= 3 && args[2].kind == VAL_RECORD) ? as_rec(args[2]) : nullptr;
+    static const char *known_m[] = { "F", "Q", "H", "R", "a0", "P0", "c", "d" };
+    for (uint32_t i = 0; i < md->count; i++) {
+        bool ok = false;
+        for (size_t k = 0; k < sizeof known_m / sizeof *known_m; k++)
+            if (md->keylens[i] == strlen(known_m[k]) && memcmp(md->keys[i], known_m[k], md->keylens[i]) == 0) ok = true;
+        if (!ok) runtime_error(I, "ksmooth: unknown model field '%.*s' (fields: F, Q, H, R, a0, P0, c, d)", (int)md->keylens[i], md->keys[i]);
+    }
+    if (op) {
+        static const char *known_o[] = { "cov", "wy", "wx", "stats", "fit" };
+        for (uint32_t i = 0; i < op->count; i++) {
+            bool ok = false;
+            for (size_t k = 0; k < 5; k++)
+                if (op->keylens[i] == strlen(known_o[k]) && memcmp(op->keys[i], known_o[k], op->keylens[i]) == 0) ok = true;
+            if (!ok) runtime_error(I, "ksmooth: unknown option '%.*s' (options: cov, wy, wx, stats, fit)", (int)op->keylens[i], op->keys[i]);
+        }
+    }
+    for (int k = 0; k < 4; k++)
+        if (rec_field(md, known_m[k]).kind == VAL_NULL)
+            runtime_error(I, "ksmooth: the model needs %s (fields: F, Q, H, R; optional a0, P0, c, d)", known_m[k]);
+
+    KsModel M = { 0 };
+    uint32_t r, c, m, T, n;
+    M.Y = ks_take(I, &bag, args[0], "Y", &m, &T);
+    M.F = ks_take(I, &bag, rec_field(md, "F"), "F", &n, &c);
+    if (c != n) ks_raise(I, &bag, "F must be square (got %ux%u)", n, c);
+    M.Q = ks_take(I, &bag, rec_field(md, "Q"), "Q", &r, &c);
+    if (r != n || c != n) ks_raise(I, &bag, "Q must be %ux%u like F (got %ux%u)", n, n, r, c);
+    M.H = ks_take(I, &bag, rec_field(md, "H"), "H", &r, &c);
+    if (r != m) ks_raise(I, &bag, "H has %u rows but Y has %u series (Y is series x periods)", r, m);
+    if (c == 0 || c % n != 0) ks_raise(I, &bag, "H must be %u x %u(p+1) — [H0, H1, ..., Hp] for measurement lags (got %u columns)", m, n, c);
+    M.p = c / n - 1;
+    if (M.p > KS_MAXLAG) ks_raise(I, &bag, "at most %d measurement lags (H has %u)", KS_MAXLAG, M.p);
+    double *R = ks_take(I, &bag, rec_field(md, "R"), "R", &r, &c);
+    if (r == m && c == m) {
+        bool diag = true;
+        for (uint32_t i = 0; i < m && diag; i++) for (uint32_t j = 0; j < m; j++) if (i != j && R[(size_t)i * m + j] != 0.0) { diag = false; break; }
+        if (diag) for (uint32_t i = 0; i < m; i++) R[i] = R[(size_t)i * m + i];      /* in place: i <= i*m+i */
+        M.R_diag = diag;
+    } else if ((size_t)r * c == m && (r == 1 || c == 1)) M.R_diag = true;
+    else ks_raise(I, &bag, "R must be %ux%u, or %u variances for a diagonal R (got %ux%u)", m, m, m, r, c);
+    M.R = R;
+    Value a0 = rec_field(md, "a0"), P0 = rec_field(md, "P0");
+    double *a0d;
+    if (a0.kind == VAL_NULL) {
+        a0d = calloc(n, sizeof *a0d);
+        if (!a0d) ks_raise(I, &bag, "out of memory");
+        bag.buf[bag.cnt++] = a0d;
+    } else {
+        a0d = ks_take(I, &bag, a0, "a0", &r, &c);
+        if ((size_t)r * c != n || (r != 1 && c != 1)) ks_raise(I, &bag, "a0 must be a vector of %u (got %ux%u)", n, r, c);
+    }
+    M.a0 = a0d;
+    if (!ks_absent(P0)) {
+        M.P0 = ks_take(I, &bag, P0, "P0", &r, &c);
+        if (r != n || c != n) ks_raise(I, &bag, "P0 must be %ux%u (got %ux%u); omit it for a diffuse prior", n, n, r, c);
+    }
+    Value cv = rec_field(md, "c"), dv = rec_field(md, "d");
+    if (!ks_absent(cv)) {
+        M.c = ks_take(I, &bag, cv, "c", &r, &M.c_cols);
+        if (r != n || (M.c_cols != 1 && M.c_cols != T)) ks_raise(I, &bag, "c must be %u x 1 or %u x %u (got %ux%u)", n, n, T, r, M.c_cols);
+    }
+    if (!ks_absent(dv)) {
+        M.d = ks_take(I, &bag, dv, "d", &r, &M.d_cols);
+        if (r != m || (M.d_cols != 1 && M.d_cols != T)) ks_raise(I, &bag, "d must be %u x 1 or %u x %u (got %ux%u)", m, m, T, r, M.d_cols);
+    }
+    M.want_cov = true;
+    if (op) {
+        Value cov = rec_field(op, "cov"), wy = rec_field(op, "wy"), wx = rec_field(op, "wx");
+        if (cov.kind != VAL_NULL) {
+            if (cov.kind != VAL_BOOL) ks_raise(I, &bag, "option cov must be true or false");
+            M.want_cov = cov.as.b;
+        }
+        Value st = rec_field(op, "stats"), ft = rec_field(op, "fit");
+        if (st.kind != VAL_NULL) {
+            if (st.kind != VAL_BOOL) ks_raise(I, &bag, "option stats must be true or false");
+            M.want_stats = st.as.b;
+        }
+        if (ft.kind != VAL_NULL) {
+            if (ft.kind != VAL_BOOL) ks_raise(I, &bag, "option fit must be true or false");
+            M.want_fit = ft.as.b;
+        }
+        if (!ks_absent(wy)) {
+            M.wy = ks_take(I, &bag, wy, "wy", &r, &c);
+            if (r == m && c == T && m > 1) M.wy_full = true;
+            else if ((size_t)r * c != T || (r != 1 && c != 1)) ks_raise(I, &bag, "wy must be T = %u weights, or %u x %u (got %ux%u)", T, m, T, r, c);
+        }
+        if (!ks_absent(wx)) {
+            M.wx = ks_take(I, &bag, wx, "wx", &r, &c);
+            if ((size_t)r * c != T || (r != 1 && c != 1)) ks_raise(I, &bag, "wx must be T = %u weights (got %ux%u)", T, r, c);
+        }
+    }
+    M.n = n; M.m = m; M.T = T;
+
+    KsResult res;
+    if (ks_smooth(&M, &res) != 0) ks_raise(I, &bag, "%s", res.msg);
+    ksbag_free(&bag);
+
+    static const char *lagkey[KS_MAXLAG] = { "P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12",
+        "P13","P14","P15","P16","P17","P18","P19","P20","P21","P22","P23","P24" };
+    uint32_t nf = (M.want_cov ? 7 + res.b : 4) + (M.want_stats ? 1 : 0) + (M.want_fit ? (M.want_cov ? 2 : 1) : 0);
+    uint32_t np = n * (M.p + 1);
+    Value out = val_record(nf); RecObj *o = as_rec(out);
+    uint32_t f = 0;
+#define KS_PUT(k, v) do { o->keys[f] = (k); o->keylens[f] = (uint32_t)strlen(k); o->vals[f] = (v); f++; } while (0)
+    KS_PUT("x", ks_wide(res.x, n, (size_t)T + 1));
+    if (M.want_cov) {
+        size_t W = (size_t)n * (T + 1);
+        Value sd = val_array(ELT_FLOAT, n, T + 1);
+        double *sdd = (double *)as_arr(sd)->data;
+        for (uint32_t t = 0; t <= T; t++)
+            for (uint32_t i = 0; i < n; i++) {
+                double v = res.P[(size_t)i * W + (size_t)t * n + i];
+                sdd[(size_t)i * (T + 1) + t] = v > 0 ? sqrt(v) : 0.0;
+            }
+        KS_PUT("sd", sd);
+        KS_PUT("P", ks_wide(res.P, n, W));
+        for (uint32_t k = 1; k <= res.b; k++) KS_PUT(lagkey[k - 1], ks_wide(res.C[k - 1], n, W));
+    }
+    KS_PUT("loglik", val_float(res.loglik));
+    KS_PUT("logdetJ", val_float(res.logdetJ));
+    KS_PUT("nobs", val_int((int64_t)res.nobs));
+    if (M.want_cov) KS_PUT("lags", val_int(res.b));
+    if (M.want_fit) {
+        KS_PUT("yhat", ks_wide(res.yhat, m, T));
+        if (M.want_cov) KS_PUT("ysd", ks_wide(res.ysd, m, T));
+    }
+    if (M.want_stats) {
+        Value st = val_record(7); RecObj *so = as_rec(st);
+        static const char *sk[7] = { "S00", "S10", "S11", "Syy", "Sys", "Sss", "nT" };
+        Value sv[7] = { ks_wide(res.S00, n, n), ks_wide(res.S10, n, n), ks_wide(res.S11, n, n),
+                        ks_wide(res.Syy, m, 1), ks_wide(res.Sys, m, np), ks_wide(res.Sss, np, (size_t)np * m),
+                        ks_wide(res.nT, m, 1) };
+        for (int q = 0; q < 7; q++) { so->keys[q] = sk[q]; so->keylens[q] = (uint32_t)strlen(sk[q]); so->vals[q] = sv[q]; }
+        KS_PUT("stats", st);
+    }
+#undef KS_PUT
+    ks_free(&res);
+    return out;
+}
+
 static Value bi_qr(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -8573,6 +8767,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "lu",      bi_lu,      1, 1);
     def_builtin(e, "qr",      bi_qr,      1, 1);
     def_builtin(e, "chol",    bi_chol,    1, 1);
+    def_builtin(e, "ksmooth", bi_ksmooth, 2, 3);
     def_builtin(e, "eig",     bi_eig,     1, 1);
     def_builtin(e, "schur",   bi_schur,   1, 2);
     def_builtin(e, "ordschur", bi_ordschur, 2, 2);

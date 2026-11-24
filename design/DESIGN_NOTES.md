@@ -990,3 +990,79 @@ result array; dispatch and 40-byte values. TRIGGER: a map written in
 place in an inner loop; anything that makes the value representation
 worth revisiting.
 
+
+## 31. The Kalman smoother as one banded system — SHIPPED 0.1.45 (owner's
+request: phase 1 of a browser nowcasting app on Cozy, built on the
+owner's simultaneous Kalman smoother, github.com/micomrkaic/Kalman-Smoother).
+CONSIDERED: a general sparse `S \ b` (the founding kernel set refuses it;
+a sparse Cholesky with ordering is a large piece of work for one use);
+the smoother in Cozy over dense blocks (interpreted per period: too slow
+for the app's datasets, and tier0 is what the browser runs); the textbook
+companion form, as the reference package's nowcasting app does it (lagged
+factors as states, Q regularized with 1e-10: cond(J) about 3e10 on that
+app, seven digits lost). DECIDED: one builtin, `ksmooth(Y, model[,
+opts])`, over a pure-C kernel (kalman.c, no Interp: the embedding and the
+page can reach it the same way) that never forms J as a sparse matrix.
+J is stored as its lower blocks inside a block band of width b =
+max(1, p), where p is the number of measurement lags: H = [H0, ..., Hp]
+loads y_t on x_t .. x_{t-p}, which is what mixed frequency needs, and it
+widens the band instead of the state. Banded block Cholesky (no fill
+outside the band), triangular solves, then the Takahashi recurrence
+Sigma L = L^{-T} for the blocks of J^{-1} inside the band: P and the
+cross blocks P1..Pb, which is exactly what a nowcast's variance and the
+EM sufficient statistics need. DECIDED: the observation side folds the
+series first. Per distinct missing-data pattern (a 16-entry cache; mixed
+frequency cycles through three) it forms Hs_o' R_oo^{-1} Hs_o once, so
+hundreds of series become one state-sized block per period. A row that
+would load on a state before x_0 is dropped like a missing one. DECIDED:
+the log-likelihood counts only what entered (the reference package's
+marginal_loglik uses the full R and m*T, so it is undefined with NaN);
+a diffuse prior drops the prior term, the reference's convention.
+DECIDED: weights, not time-varying matrices, for now: wy (per period, or
+per series and period on a diagonal R) and wx are what the reference's
+robust and break-detecting smoothers iterate on. MEASURED: explicit
+inverses of the diagonal blocks lost a factor of six on the companion
+model (3.4e-7 from a 50-digit solve; SuperLU 5.7e-8); triangular solves
+2.9e-8. 200 series x 360 months x 4 factors x 2 lags with 30% gaps and
+full covariances: 10 ms native, 19 ms in WebAssembly. PROOF:
+tests/86_ksmooth.test (closed forms, equivalences, errors; also under
+ASan and test-wasm); tests/ref_ksmooth.py, a dense numpy reference that
+shares nothing with the kernel — 200 random models (lags 0-3, gaps,
+full and diagonal R, diffuse priors, intercepts, weights), worst
+relative error 8e-12, the log-likelihood from the Gaussian marginal of
+y directly — and the reference package on its own nowcasting model.
+RESIDUE: Q must be positive definite (a deterministic state component —
+the HP filter's companion form — has no Q^{-1}; a constraint form would
+admit it); F, Q, H, R constant in time; doubles only, so no dual-number
+gradient through ksmooth (EM, not BFGS, is the estimator for phase 2).
+TRIGGER: the nowcast package (phase 2) needing any of these.
+
+## 32. Nowcasting — SHIPPED 0.1.46 (owner's request: phase 2 of the app;
+entry 31's trigger). CONSIDERED: the M-step in Cozy from P and the cross
+blocks (per series, per period, small matrices in the interpreter: a
+second per EM step at 200 series); AR(1) idiosyncratic states, Banbura and
+Modugno's full model (n grows by the number of series, and the cost is
+n^3 per period); the news by forming Banbura and Modugno's weights (the
+joint covariance of all releases). DECIDED: the kernel returns the
+sums an EM step needs (stats = true) and the fitted signal (fit = true),
+both from the band of Sigma it already has; the package is Cozy over
+those. DECIDED: iid idiosyncratic errors and a VAR(1) factor, the model
+the EM is exact for; the prior on f_0 is the stationary distribution of
+the STARTING parameters, held fixed — re-deriving it each step (Banbura
+and Modugno) breaks the monotonicity the tests rely on. DECIDED: news by
+linearity. For fixed parameters the smoothed signal is linear in the data,
+so a series' contribution is the change from one extra run with only its
+releases at their values and the rest at their expectations — the
+decomposition itself, not an approximation, and no covariance of the
+releases. Revisions first, judged on the old releases; news against the
+revised data: their convention. DECIDED: series by name, options by
+field (the language has no type predicates); standardize by default and
+report in the data's units. PROOF: tests/ref_nowcast.py — the source
+application's nowcasts to 1e-7, a dense EM to 1e-15, the literal news
+formula to 1e-15; tests/87_nowcast.test, ASan clean. MEASURED: 200 series
+x 360 months, r = 3, ten quarterly (Mariano-Murasawa): E-step 14 ms,
+M-step 2 ms native (4 in WebAssembly). RESIDUE: AR(1) idiosyncratic
+errors; VAR(p) factors (a positive-definite Q cannot hold the companion
+block; transition lags in the kernel would); block-restricted loadings
+(global / real / nominal factors); news per release date rather than
+per series. TRIGGER: the app's users.

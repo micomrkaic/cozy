@@ -128,7 +128,7 @@ shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "dsge.cz"; "finance.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "dsge.cz"; "finance.cz"; "nowcast.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"]
 cozy> cd("packages");
 cozy> load("dist.cz"); norm.cdf(0, 0, 1)
 0.5
@@ -1315,6 +1315,71 @@ cozy> nnz(sprand(100, 100, 0.05))
 500
 ```
 
+### State space: the Kalman smoother
+
+`ksmooth(Y, model[, opts])` smooths a linear Gaussian state-space model by
+solving one sparse linear system, `J X = h`, where `J` is the posterior
+precision of the whole state path — the simultaneous form of the Kalman/RTS
+smoother. `Y` is series × periods, and `NaN` marks a missing observation
+(gaps, ragged edges, mixed frequencies). The model is a record:
+
+    x_t = F x_{t-1} + c + w_t,                    w_t ~ N(0, Q)
+    y_t = H_0 x_t + H_1 x_{t-1} + ... + H_p x_{t-p} + d + v_t,   v_t ~ N(0, R)
+    x_0 ~ N(a0, P0)
+
+`F`, `Q`, `H` and `R` are required; `H = [H0, H1, ..., Hp]` puts lags of the
+state into the measurement equation, so a quarterly series that averages a
+monthly factor is `H = [1/3, 1/3, 1/3]` on that factor — no companion states,
+no zero variances in `Q` (a `Q` that is not positive definite is an error
+that says so). `R` is a matrix, or its variances when it is diagonal. `a0`
+defaults to zeros; omit `P0` for a diffuse prior. `c` and `d` are intercepts,
+one column or one per period.
+
+The result holds the smoothed path `x` (states × periods+1: column 1 is
+`x_0`), its standard deviations `sd`, the covariance blocks `P` (block `t`
+is `Cov(x_t | Y)`, laid side by side), the cross-covariance blocks `P1`,
+`P2`, ... up to the bandwidth `lags` (`Cov(x_t, x_{t-k} | Y)`, `NaN` where
+`t < k`), the marginal log-likelihood `loglik`, `logdetJ` and `nobs`.
+Options: `cov = false` skips the covariances; `wy` and `wx` are precision
+weights per period (`R / wy_t`, `Q / wx_t`), or for a diagonal `R`, `wy` may
+be series × periods — the hook for robust (Student-t) smoothing by iterated
+reweighting. `fit = true` adds the fitted signal `yhat = E[H s_t + d | Y]`
+for every series and period, missing ones included (a nowcast is one of
+these), and `ysd`, its standard deviation without the measurement noise.
+`stats = true` adds the sums an EM step needs, `stats.S00`, `S10`, `S11`
+for the transition and, per series over the periods it entered, `Syy`,
+`Sys`, `Sss` and the count `nT` — `nowcast.cz` estimates a factor model
+from nothing else. The cost is linear in the periods and the series fold into
+small state-sized blocks first: 200 series over 360 months smooth in
+milliseconds, in the browser too.
+
+```
+cozy> let Y = [1.2, 0/0, 2.9, 3.1];
+cozy> let s = ksmooth(Y, {F = 0.9, Q = 1, H = 1, R = 0.5, P0 = 4});
+cozy> size(s.x)
+[1, 5]
+cozy> s.nobs
+3
+cozy> s.sd[3] > s.sd[2]
+true
+```
+
+A nowcast: one monthly indicator and a quarterly series observed in the
+third month of each quarter, with the second quarter not yet in. The
+quarter's value is the mean of its three months; its variance needs the
+cross blocks, which is why they are returned.
+
+```
+cozy> let Y = [0.4, 0.9, 1.3, 0.8, 0/0, 0/0; 0/0, 0/0, 0.9, 0/0, 0/0, 0/0];
+cozy> let mdl = {F = 0.7, Q = 0.25, H = [1, 0, 0; 1/3, 1/3, 1/3], R = [0.1; 0.05], P0 = 0.5};
+cozy> let s = ksmooth(Y, mdl); s.lags
+2
+cozy> format(4); let nowcast = mean(s.x[5:7])
+0.5829
+cozy> let v = (s.P[5] + s.P[6] + s.P[7] + 2 * (s.P1[6] + s.P1[7] + s.P2[7])) / 9; sqrt(v)
+0.3839
+```
+
 ## 16. Scripts and tools
 
 `cozy file.cz` runs a script (top level is a statement sequence; `#`/`%`
@@ -1670,6 +1735,7 @@ cozy> clear("scatter"); who
 | `lu(A)` | LU with partial pivoting -> {L, U, p}, so P*A = L*U |
 | `qr(A)` | Householder QR -> {Q, R} (real or complex) |
 | `chol(A)` | Cholesky factor L (lower), L*L' = A (SPD / Hermitian PD) |
+| `ksmooth(Y, model[, opts])` | simultaneous Kalman smoother: solves J X = h for the state path of {F, Q, H = [H0, ..., Hp], R[, a0, P0, c, d]}; NaN in Y is missing -> {x, sd, P, P1.., loglik, logdetJ, nobs, lags}; opts {cov, wy, wx, stats (EM sums), fit (yhat, ysd)} |
 | `eig(A)` | eigendecomposition -> {values, vectors}; Hermitian (ascending real) or general (complex) |
 | `schur(A) \| schur(A, "complex")` | Schur decomposition -> {U, T}, A = U*T*U' with U unitary. Real A: T quasi-triangular, a 2x2 block per complex pair of eigenvalues; "complex", or complex A: T triangular |
 | `ordschur(s, select)` | reorder a Schur form s = {U, T} -> {U, T, k}: the selected eigenvalues come first, k of them, and U*T*U' is unchanged. select: a logical vector over the diagonal of T, or "udi" / "udo" (inside / outside the unit disc), "lhp" / "rhp" (negative / positive real part) |

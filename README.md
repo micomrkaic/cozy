@@ -59,7 +59,7 @@ release; its case law lives in LESSONS.md.
 
 ## Packages
 
-Fourteen standard packages, all written in Cozy itself (see PACKAGES.md;
+Fifteen standard packages, all written in Cozy itself (see PACKAGES.md;
 worked problems in BOOK.md): **autodiff** (exact derivatives: `d(f)` and
 `grad(f)` on dual numbers), **optim** (BFGS minimize/maximize, box bounds,
 constrained via augmented Lagrangian), **sparselin** (conjugate gradient and
@@ -70,7 +70,9 @@ random matrices), **phys** (CODATA constants), **scatter** (scatter plots),
 **symb** (symbolic differentiation — expression trees as records), **ts**
 (time series: lags, growth, HP filter, acf/pacf, AR fits), **dsge** (a mini
 Dynare: models in Dynare's notation, solved to first order with exact
-derivatives), and
+derivatives), **nowcast** (a mixed-frequency dynamic factor model:
+EM estimation, nowcasts with standard errors, and the exact news
+decomposition of each data release), and
 **demo** — the guided tour: load it and watch the greatest hits compute live.
 
 ## As a library

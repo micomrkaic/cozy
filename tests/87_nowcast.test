@@ -1,0 +1,80 @@
+# nowcast.cz — mixed-frequency dynamic factor model, EM, nowcasts, news.
+# The reference numbers come from tests/ref_nowcast.py, which shares nothing
+# with the package: the nowcasts of simksmoother's own application
+# (app2_nowcasting.py, seed 33: companion states, Q regularized), a dense EM
+# written from the definitions (agrees to 1e-15), and Banbura and Modugno's
+# news formula from the joint Gaussian (agrees to 1e-15). Assertions are
+# closeness to those references, never printed digits of an iterative result.
+
+# --- simksmoother's application 2, known parameters, three data vintages ---
+# the companion form's 1e-10 variances limit the agreement to about 1e-7
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); Y[1:5, 119:120] = 0/0; let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.nowcast(f, "gdp"); abs(n.value - (-0.3484036774)) < 1e-6 && abs(n.sd - 0.3574333514) < 1e-6
+=> true
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); Y[1:5, 120] = 0/0; let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.nowcast(f, "gdp"); abs(n.value - (-0.4122132234)) < 1e-6 && abs(n.sd - 0.2118333636) < 1e-6
+=> true
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.nowcast(f, "gdp"); abs(n.value - (-0.3325315976)) < 1e-6 && abs(n.sd - 0.1188324102) < 1e-6
+=> true
+# the sd shrinks as the quarter's months come in; the GDP figure itself is not out
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); isnan(nowcast.nowcast(f, "gdp").actual)
+=> true
+
+# --- the news between the vintages: exact, additive, and it moves the old nowcast to the new
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let Y1 = Y; Y1[1:5, 119:120] = 0/0; let d = nowcast.data(Y1, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.news(f, Y, "gdp"); abs(n.old - (-0.3484036774)) < 1e-6 && abs(n.new - (-0.3325315976)) < 1e-6 && abs(n.old + sum(n.news) + sum(n.revisions) - n.new) < 1e-12
+=> true
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let Y1 = Y; Y1[1:5, 119:120] = 0/0; let d = nowcast.data(Y1, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.news(f, Y, "gdp"); [n.news[6] == 0, all(n.revisions == 0)]
+=> [true, true]
+# every monthly series released (b and c one month, a, d and e two); gdp did not
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let Y1 = Y; Y1[1:5, 119:120] = 0/0; let d = nowcast.data(Y1, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); isnan(nowcast.news(f, Y, "gdp").surprise)'
+=> [false, false, false, false, false, true]
+# no new data, no news
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.news(f, Y, "gdp"); [all(n.news == 0), all(n.revisions == 0), n.old == n.new]
+=> [true, true, true]
+# a revision alone: its effect is the whole change
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let Y2 = Y; Y2[1, 118] = Y[1, 118] + 1; let n = nowcast.news(f, Y2, "gdp"); abs(n.revisions[1] - (n.new - n.old)) < 1e-12 && n.revisions[1] > 0
+=> true
+
+# --- estimation: EM from principal components ---
+# the log-likelihood never falls, and it converges
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.fit(d, {agg = "mean", tol = 1e-6}); [f.converged, all(diff(f.loglik) > -1e-8)]
+=> [true, true]
+# a simulated one-factor panel: the estimated factor tracks the true one (up to sign and scale)
+rng(5); load("nowcast"); let T = 150; let e = randn(1, T); let ft = zeros(1, T); for t = 2:T do ft[t] = 0.8 * ft[t - 1] + e[t] end; let Y = [1; 0.7; -0.5; 1.2; 0.9] * ft + 0.5 * randn(5, T); Y[5, :] = (Y[5, :] + [0, Y[5, 1:T-1]] + [0, 0, Y[5, 1:T-2]]) / 3; for t = 1:T do (if mod(t, 3) != 0 then (Y[5, t] = 0/0) end) end; Y[1, T-1:T] = 0/0; let f = nowcast.fit(nowcast.data(Y, {quarterly = [0; 0; 0; 0; 1]}), {agg = "mean"}); abs(corr(f.state.f[1, 2:T+1]', ft')) > 0.95
+=> true
+# re-smoothing at the estimate is the fit's own state
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.fit(d, {agg = "mean", maxit = 20}); let a = nowcast.update(f, Y).state.yhat; let k = find(!isnan(a)); max(abs(a[k] - f.state.yhat[k])) < 1e-12
+=> true
+# two factors and Mariano-Murasawa weights: shapes
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1]}); let f = nowcast.fit(d, {r = 2, maxit = 15}); [size(f.params.A), size(f.params.Lam), size(f.W)]
+=> [2, 2, 6, 2, 6, 5]
+
+# --- forecasting into months not yet in the data ---
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let g = nowcast.update(f, nowcast.extend(Y, 3)); let a = nowcast.nowcast(g, "a", 123); let b = nowcast.nowcast(g, "a", 122); [abs(a.value / b.value - 0.7) < 1e-12, a.sd > b.sd]
+=> [true, true]
+
+# --- panels from tables ---
+load("nowcast"); let p = nowcast.panel({date = [date(2024, 1, 31); date(2024, 2, 29); date(2024, 3, 31); date(2024, 4, 30)], ip = [1.0; 2; 3; 0/0], gdp = [0/0; 0/0; 5; 0/0]}); [p.quarterly', size(p.Y)]
+=> [0, 1, 2, 4]
+load("nowcast"); nowcast.panel({month = [date(2024, 1, 31)], ip = [1.0]}, {date = "month"}).names
+=> ["ip"]
+load("nowcast"); nowcast.data([1, 2; 3, 4], {names = ["ip"; "cpi"]}).names
+=> ["ip"; "cpi"]
+
+# --- teaching errors ---
+load("nowcast"); let f = nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5])); nowcast.nowcast(f, "gdp")
+=> !no series named "gdp" (series: y1, y2)
+load("nowcast"); nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5]), {params = {A = 0.5, Q = 1}})
+=> !params needs Lam (A, Q, Lam, R)
+load("nowcast"); nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5]), {params = {A = 0.5, Q = 1, Lam = [1; 2; 3], R = [1; 1]}})
+=> !params for 2 series and 1 factor(s)
+load("nowcast"); nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5]), {r = 3})
+=> !3 factors need at least 3 monthly series (have 2)
+load("nowcast"); nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5]), {agg = "sum"})
+=> !agg must be "mm" or "mean", got "sum"
+load("nowcast"); let f = nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5])); nowcast.news(f, [1, 2, 0/0; 2, 4, 5], "y1")
+=> !Ynew drops 1 value(s) the old data had
+load("nowcast"); let f = nowcast.model(nowcast.data([1, 2, 3; 2, 4, 5])); nowcast.update(f, [1, 2, 3])
+=> !nowcast.update: 1 series, the fit has 2
+load("nowcast"); nowcast.panel({ip = [1.0]})
+=> !no date column "date" (columns: ip)
+load("nowcast"); nowcast.data([1, 2; 0/0, 0/0], {quarterly = [0; 1]}) |> nowcast.model
+=> !series 2 has no observations

@@ -3,7 +3,7 @@
 *The standard packages that ship with Cozy: probability distributions,
 polynomials, finance, a solar almanac, structured random matrices,
 physical constants, scatter plots,
-symbolic differentiation, and a guided tour — all written in Cozy itself.*
+symbolic differentiation, time series, DSGE models, nowcasting, and a guided tour — all written in Cozy itself.*
 
 A package is a file of `let` definitions; `load("packages/name.cz")` runs it
 in the current session and its bindings persist. Records of closures act as
@@ -889,6 +889,89 @@ In the table, `m` is `dsge.model(dsge.nk())` and `s` is `dsge.solve(m)`.
 | `dsge.moments(s, K)` | `size(dsge.moments(s).corr)` | `[5, 5]` |
 | `dsge.vardecomp(s)` | `round(sum(dsge.vardecomp(s)[1, :]))` | `100.000` |
 | `dsge.rbc(), dsge.nk()` | `dsge.nk().shocks` | `"en ev"` |
+
+## 15. nowcast.cz — nowcasting with a mixed-frequency factor model
+
+The current quarter's GDP is published weeks after the quarter ends; the
+monthly indicators that move with it come out earlier, on their own
+calendars. A nowcast reads the quarter from those indicators. This package
+does it the way central banks' desks do: a dynamic factor model in which a
+few common factors drive every series, monthly and quarterly together,
+estimated by EM (Banbura and Modugno, 2014) on whatever data are in — NaN
+for every gap, ragged edge and missing month. A quarterly series sits in
+its quarter's third month and loads on the factor through fixed weights:
+`agg = "mm"` (Mariano and Murasawa's 1, 2, 3, 2, 1 — quarterly growth from
+monthly growth; the default) or `"mean"` (a quarterly average). Underneath
+is the `ksmooth` builtin, so the weights are measurement lags and the
+state is just the factors: one smoothing run per EM step, in milliseconds
+for hundreds of series.
+
+`nowcast.panel(readtable(file))` reads a monthly table with a date column
+and finds the quarterly series itself (observed only in March, June,
+September and December); `nowcast.data(Y, opts)` builds the same panel from
+a series x months matrix. `nowcast.fit` estimates; `nowcast.nowcast(f,
+"gdp")` reads off a value and its standard error; `nowcast.update` puts
+new data through the same parameters; `nowcast.news` says which releases
+moved the nowcast and by how much — exact, and adding up to the change.
+
+The data below are those of the nowcasting application of the Kalman
+smoother package this one is built on (five monthly indicators, quarterly
+GDP, ten years): an old vintage with the last two months of the
+indicators not yet out, then the full one.
+
+```
+cozy> load("nowcast")
+cozy> let Y = readcsv("tests/data/app2_nowcast.csv"); size(Y)
+[6, 120]
+cozy> let names = ["ip"; "sales"; "jobs"; "hours"; "pmi"; "gdp"];
+cozy> let old = Y; old[1:5, 119:120] = 0/0;
+cozy> let d = nowcast.data(old, {names = names, quarterly = [0; 0; 0; 0; 0; 1]});
+cozy> let f = nowcast.fit(d, {agg = "mean"}); f.converged
+true
+cozy> format(3); let n = nowcast.nowcast(f, "gdp"); [n.value, n.sd]
+[-0.389, 0.315]
+cozy> let g = nowcast.update(f, Y); let m = nowcast.nowcast(g, "gdp"); [m.value, m.sd]
+[-0.343, 0.105]
+cozy> let w = nowcast.news(f, Y, "gdp"); [w.old, w.new]
+[-0.389, -0.343]
+cozy> w.news'
+[0.0388, -0.0389, 0.0148, 0.0278, 0.00360, 0.00]
+cozy> abs(w.old + sum(w.news) + sum(w.revisions) - w.new) < 1e-12
+true
+```
+
+Two months of indicators cut the standard error of the GDP nowcast by
+two thirds and raised it by 0.046; `w.news` says where that came from,
+series by series, and `w.surprise` how far each release was from what the
+old data expected of it. Revisions to data already out are separated
+first (`w.revisions`), Banbura and Modugno's convention. The model is
+estimated on standardized data and reports in the data's units; the
+parameters are `f.params` (`A`, `Q` for the factors' VAR(1), `Lam` the
+loadings, `R` the idiosyncratic variances), the log-likelihood path is
+`f.loglik` (it never falls), and the smoothed factors are `f.state.f`.
+`nowcast.model` skips estimation, for parameters you already have
+(`opts.params`) or to look at the principal-components start; with
+`standardize = false` and the true parameters it reproduces the source
+application's three nowcasts to seven digits (its companion-form states
+carry 1e-10 variances, which is the limit). Cross-checked against a dense
+numpy EM written from the definitions and Banbura and Modugno's news
+formula taken literally — both to 1e-15 (`tests/ref_nowcast.py`,
+`tests/87_nowcast.test`). The idiosyncratic errors are independent over
+time and across series, and the factors follow a VAR(1); both are the
+first generalizations a production desk would ask for.
+
+In the table, `d` is the full panel (all 120 months, the same names) and `f` its fit.
+
+| Function | Worked example | Result |
+|---|---|---|
+| `nowcast.panel(t, opts)` | `nowcast.panel({date = [date(2024, 3, 31)], gdp = [1.0]}).names` | `["gdp"]` |
+| `nowcast.data(Y, opts)` | `size(d.Y)` | `[6, 120]` |
+| `nowcast.fit(d, opts)` | `size(f.params.Lam)` | `[6, 1]` |
+| `nowcast.model(d, opts)` | `nowcast.model(d, {agg = "mean"}).iterations` | `0` |
+| `nowcast.nowcast(f, name, t)` | `nowcast.nowcast(f, "gdp").value` | `-0.340` |
+| `nowcast.update(f, Ynew)` | `size(nowcast.update(f, nowcast.extend(Y, 3)).state.yhat)` | `[6, 123]` |
+| `nowcast.extend(Y, h)` | `size(nowcast.extend(Y, 3))` | `[6, 123]` |
+| `nowcast.news(f, Ynew, name, t)` | `let Y2 = Y; Y2[1, 120] = Y[1, 120] + 1; nowcast.news(f, Y2, "gdp").revisions[1]` | `0.194` |
 
 ## Writing your own
 

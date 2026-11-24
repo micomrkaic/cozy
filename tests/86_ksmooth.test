@@ -1,0 +1,100 @@
+# ksmooth — the simultaneous Kalman smoother (design entry 31). The kernel's
+# numbers are checked against an independent dense reference by
+# tests/ref_ksmooth.py (200 random models, to about 1e-11); these goldens pin
+# closed forms, equivalences and the teaching errors.
+
+# one period, closed form: x1 = 0.5 x0 + w, y1 = x1 + v, x0 ~ N(0, 1): Var x1 = 1.25
+let s = ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}); abs(s.x[2] - 1.25 / 2.25 * 3) < 1e-12
+=> true
+let s = ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}); abs(s.P[2] - 1.25 / 2.25) < 1e-12
+=> true
+let s = ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}); abs(s.loglik - (-0.5 * (9 / 2.25 + log(2 * pi * 2.25)))) < 1e-12
+=> true
+# the lag-1 cross covariance: Cov(x1, x0 | y) = 0.5 - 0.5 * 1.25 / 2.25
+let s = ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}); abs(s.P1[2] - (0.5 - 0.625 / 2.25)) < 1e-12
+=> true
+let s = ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}); isnan(s.P1[1])
+=> true
+fields(ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1, P0 = 1}))
+=> ["x"; "sd"; "P"; "P1"; "loglik"; "logdetJ"; "nobs"; "lags"]
+fields(ksmooth([3], {F = 0.5, Q = 1, H = 1, R = 1}, {cov = false}))
+=> ["x"; "loglik"; "logdetJ"; "nobs"]
+
+# no data at all: the prior propagated, x_t = F^t a0, and the likelihood is log 1
+let s = ksmooth([0/0, 0/0, 0/0], {F = 0.5, Q = 1, H = 1, R = 1, a0 = 8, P0 = 1}); s.x
+=> [8, 4, 2, 1]
+abs(ksmooth([0/0, 0/0, 0/0], {F = 0.5, Q = 1, H = 1, R = 1, a0 = 8, P0 = 1}).loglik) < 1e-12
+=> true
+ksmooth([0/0, 0/0, 0/0], {F = 0.5, Q = 1, H = 1, R = 1, a0 = 8, P0 = 1}).nobs
+=> 0
+
+# a series that is all NaN is the same as a model without it
+let Y = [1, 2, 0/0, 4; 0/0, 0/0, 0/0, 0/0]; let a = ksmooth(Y, {F = 0.9, Q = 1, H = [1; 2], R = [1; 3], P0 = 1}); let b = ksmooth(Y[1, :], {F = 0.9, Q = 1, H = 1, R = 1, P0 = 1}); norm(a.x - b.x) + norm(a.P - b.P) + abs(a.loglik - b.loglik) < 1e-12
+=> true
+# a diagonal R as a matrix or as its variances
+let Y = [1, 2, 3; 2, 0/0, 1]; norm(ksmooth(Y, {F = 0.9, Q = 1, H = [1; 0.5], R = [1, 0; 0, 3], P0 = 1}).x - ksmooth(Y, {F = 0.9, Q = 1, H = [1; 0.5], R = [1; 3], P0 = 1}).x) < 1e-12
+=> true
+# weights: wy = 2 is R / 2, wx = 4 is Q / 4
+let Y = [1, 2, 3]; let a = ksmooth(Y, {F = 0.9, Q = 1, H = 1, R = 1, P0 = 1}, {wy = [2, 2, 2], wx = [4, 4, 4]}); let b = ksmooth(Y, {F = 0.9, Q = 0.25, H = 1, R = 0.5, P0 = 1}); norm(a.x - b.x) + norm(a.P - b.P) + abs(a.loglik - b.loglik) < 1e-12
+=> true
+# per-series weights on a diagonal R: series 2 down-weighted in period 2 only
+let Y = [1, 2, 3; 2, 9, 1]; let M = {F = 0.9, Q = 1, H = [1; 1], R = [1; 1], P0 = 1}; let a = ksmooth(Y, M, {wy = [1, 1, 1; 1, 0.01, 1]}); abs(a.x[3] - ksmooth(Y, M).x[3]) > 0.5
+=> true
+# intercepts: d shifts the measurement, c the transition
+let Y = [1, 2, 3]; norm(ksmooth(Y + 5, {F = 0.9, Q = 1, H = 1, R = 1, P0 = 1, d = 5}).x - ksmooth(Y, {F = 0.9, Q = 1, H = 1, R = 1, P0 = 1}).x) < 1e-12
+=> true
+norm(ksmooth([0/0, 0/0], {F = 1, Q = 1, H = 1, R = 1, a0 = 0, P0 = 1, c = 2}).x - [0, 2, 4]) < 1e-12
+=> true
+# a log-likelihood gain from the right model: c = 1 fits a drifting series better
+let Y = 1:20; ksmooth(Y, {F = 1, Q = 0.1, H = 1, R = 0.1, P0 = 1, c = 1}).loglik > ksmooth(Y, {F = 1, Q = 0.1, H = 1, R = 0.1, P0 = 1}).loglik
+=> true
+
+# measurement lags: H = [H0, H1, H2] loads y_t on x_t, x_{t-1}, x_{t-2}
+ksmooth([1, 2, 3], {F = 0.5, Q = 1, H = [1, 1], R = 1, P0 = 1}).lags
+=> 1
+ksmooth([1, 2, 3], {F = 0.5, Q = 1, H = [1, 1, 1], R = 1, P0 = 1}).lags
+=> 2
+# y_1 would need x_{-1}: it is dropped, the other two enter
+ksmooth([1, 2, 3], {F = 0.5, Q = 1, H = [1, 1, 1], R = 1, P0 = 1}).nobs
+=> 2
+fields(ksmooth([1, 2, 3], {F = 0.5, Q = 1, H = [1, 1, 1], R = 1, P0 = 1}))
+=> ["x"; "sd"; "P"; "P1"; "P2"; "loglik"; "logdetJ"; "nobs"; "lags"]
+# a pure lag: y_1 = x_0 + v informs x_0 directly (x_0 is a state like any other)
+ksmooth([4, 0/0], {F = 0.5, Q = 1, H = [0, 1], R = 1, P0 = 1}).x[1]
+=> 2
+# the quarterly mean of a monthly factor: observed each third month only
+let Y = [1, 0/0, 0/0, 2, 0/0, 0/0, 0.5; 0/0, 0/0, 3, 0/0, 0/0, 1, 0/0]; let s = ksmooth(Y, {F = 0.7, Q = 0.25, H = [1, 0, 0; 1/3, 1/3, 1/3], R = [0.1; 0.05], P0 = 0.5}); s.nobs
+=> 5
+# a diffuse prior: P0 omitted
+let s = ksmooth([1, 2, 3], {F = 0.9, Q = 1, H = 1, R = 1}); isfinite(s.loglik) && s.P[1] > s.P[2]
+=> true
+
+# teaching errors
+ksmooth([1, 2], {F = 1, Q = 0, H = 1, R = 1})
+=> !Q is not positive definite — a lagged state belongs in the measurement lags of H
+ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1, P0 = -1})
+=> !P0 is not positive definite (omit it for a diffuse prior)
+ksmooth([0/0, 0/0], {F = 1, Q = 1, H = 1, R = 1})
+=> !the posterior precision is singular at x_
+ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1, G = 2})
+=> !unknown model field 'G' (fields: F, Q, H, R, a0, P0, c, d)
+ksmooth([1, 2], {F = 1, Q = 1, H = 1})
+=> !the model needs R
+ksmooth([1, 2], [1, 2])
+=> !the model must be a record {F, Q, H, R[, a0, P0, c, d]}
+ksmooth([1, 2; 3, 4], {F = 1, Q = 1, H = 1, R = 1})
+=> !H has 1 rows but Y has 2 series (Y is series x periods)
+ksmooth([1, 2], {F = eye(2), Q = eye(2), H = [1, 0, 0], R = 1})
+=> !H must be 1 x 2(p+1)
+ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = [1, 2]})
+=> !R must be 1x1, or 1 variances for a diagonal R
+ksmooth([1, 2; 3, 4], {F = 1, Q = 1, H = [1; 1], R = [1, 0.5; 0.5, 1]}, {wy = [1, 1; 1, 1]})
+=> !per-series weights (wy as m x T) need a diagonal R
+ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1}, {wy = [1, -1]})
+=> !weights wy must be positive and finite
+ksmooth([1, 1/0], {F = 1, Q = 1, H = 1, R = 1})
+=> !Y has an infinite entry (use NaN for missing)
+ksmooth([1, 2], {F = 1, Q = 1, H = 1, R = 1}, {smooth = true})
+=> !unknown option 'smooth' (options: cov, wy, wx, stats, fit)
+ksmooth([1, 2], {F = 1i, Q = 1, H = 1, R = 1})
+=> !F must be a real matrix, got Complex

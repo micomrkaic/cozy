@@ -114,6 +114,18 @@ SPECS = {
     ("dsge.vardecomp(s)",        "round(sum(dsge.vardecomp(s)[1, :]))"),
     ("dsge.rbc(), dsge.nk()",    "dsge.nk().shocks"),
   ]),
+  "nowcast": ("load(\"packages/nowcast.cz\"); format(3); let Y = readcsv(\"tests/data/app2_nowcast.csv\"); "
+              "let d = nowcast.data(Y, {names = [\"ip\"; \"sales\"; \"jobs\"; \"hours\"; \"pmi\"; \"gdp\"], "
+              "quarterly = [0; 0; 0; 0; 0; 1]}); let f = nowcast.fit(d, {agg = \"mean\"})", [
+    ("nowcast.panel(t, opts)",    "nowcast.panel({date = [date(2024, 3, 31)], gdp = [1.0]}).names"),
+    ("nowcast.data(Y, opts)",     "size(d.Y)"),
+    ("nowcast.fit(d, opts)",      "size(f.params.Lam)"),
+    ("nowcast.model(d, opts)",    "nowcast.model(d, {agg = \"mean\"}).iterations"),
+    ("nowcast.nowcast(f, name, t)", "nowcast.nowcast(f, \"gdp\").value"),
+    ("nowcast.update(f, Ynew)",   "size(nowcast.update(f, nowcast.extend(Y, 3)).state.yhat)"),
+    ("nowcast.extend(Y, h)",      "size(nowcast.extend(Y, 3))"),
+    ("nowcast.news(f, Ynew, name, t)", "let Y2 = Y; Y2[1, 120] = Y[1, 120] + 1; nowcast.news(f, Y2, \"gdp\").revisions[1]"),
+  ]),
 }
 
 def esc(t): return t.replace("|", "\\|")

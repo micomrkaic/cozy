@@ -76,6 +76,13 @@ compiled.
 - **Underdetermined `\` uses normal-equation-free QR of Aᴴ.** Stable for
   full-row-rank `A`; rank-deficient wide systems raise rather than returning a
   pseudoinverse solution.
+- **`ksmooth` needs a positive-definite `Q`, constant matrices, and doubles.**
+  A deterministic state component (zero variance — the companion form of the
+  HP filter or of a local linear trend) is refused: the precision form needs
+  `Q^{-1}`. Lags of a state belong in the measurement lags of `H`, which
+  covers mixed frequency. `F`, `Q`, `H`, `R` are constant in time (per-period
+  precision weights `wy`, `wx` are the time-varying part), and the kernel is
+  real-valued, so dual numbers do not flow through it (design entry 31).
 
 ## Language features
 
