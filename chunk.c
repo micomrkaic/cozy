@@ -9,7 +9,7 @@ void chunk_free(Chunk *c)
     for (uint32_t i = 0; i < c->nconst; i++) value_release(c->consts[i]);
     for (uint32_t i = 0; i < c->nproto; i++) { chunk_free(c->protos[i]); free(c->protos[i]); }
     free(c->code); free(c->lines); free(c->consts);
-    free(c->names); free(c->namelens);
+    free(c->names); free(c->namelens); free(c->name_cache);
     free(c->protos); free(c->params); free(c->paramlens);
     *c = (Chunk){0};
 }
@@ -62,10 +62,12 @@ uint32_t chunk_add_name(Chunk *c, const char *s, uint32_t len)
         c->cname = c->cname ? c->cname * 2 : 8;
         c->names    = realloc(c->names,    c->cname * sizeof *c->names);
         c->namelens = realloc(c->namelens, c->cname * sizeof *c->namelens);
-        if (!c->names || !c->namelens) abort();
+        c->name_cache = realloc(c->name_cache, c->cname * sizeof *c->name_cache);
+        if (!c->names || !c->namelens || !c->name_cache) abort();
     }
     c->names[c->nname]    = s;
     c->namelens[c->nname] = len;
+    c->name_cache[c->nname] = (EnvCache){ .gen = 0, .name = nullptr, .slot = 0 };   /* nothing remembered */
     return c->nname++;
 }
 

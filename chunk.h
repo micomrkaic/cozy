@@ -78,6 +78,9 @@ typedef struct Chunk {
     Value    *consts;   uint32_t nconst, cconst;   /* owned */
     const char **names; uint32_t *namelens;
     uint32_t  nname, cname;                          /* non-owning arena slices */
+    EnvCache *name_cache;   /* parallel to names: where a global of that name was last
+                               found (value.h). One entry per place the name is written,
+                               since names are pooled by source position. */
     /* function protos (owned sub-chunks, one per lambda compiled inside) */
     struct Chunk **protos; uint32_t nproto, cproto;
     const char *src; uint32_t srclen;   /* lambda source span (session-lived buffer), for body()/save() */

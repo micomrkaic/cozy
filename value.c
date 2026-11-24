@@ -329,55 +329,25 @@ void arr_set(ArrObj *a, size_t k, Value v)
 /* ------------------------------------------------------------------ */
 /* environment                                                         */
 /* ------------------------------------------------------------------ */
-/* Scopes are made and dropped at every pass of a loop and every block, and
- * each used to cost a calloc for the environment, three reallocs for its
- * arrays, a strndup for each name, and the frees of all of them. A dropped
- * environment now goes on a short list with its arrays and its name strings
- * intact: the next scope takes it back, and a loop that binds the same
- * variable on every pass finds the string already there. */
-enum { ENV_POOL_MAX = 32, ENV_POOL_KEEP_CAP = 64 };
-static EnvObj *env_pool[ENV_POOL_MAX];
-static int env_pool_n = 0;
+/* One environment is made per session: the globals. (Until 0.1.39 every
+ * pass of a loop and every block made one too, and 0.1.38 kept a pool of
+ * them; locals are frame slots now, and the pool went with its reason.) */
+static uint64_t env_gen_counter = 0;       /* generations are unique across environments */
 
 EnvObj *env_new(EnvObj *parent)
 {
-    EnvObj *e;
-    if (env_pool_n > 0) {
-        e = env_pool[--env_pool_n];
-        e->obj.rc = 1;
-    } else {
-        e = (EnvObj *)alloc_obj(sizeof *e, VAL_NULL);  /* kind unused for env */
-    }
+    EnvObj *e = (EnvObj *)alloc_obj(sizeof *e, VAL_NULL);  /* kind unused for env */
     e->parent = parent;
     env_retain(parent);
     return e;
 }
 static void env_free(EnvObj *e)
 {
-    for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
+    for (uint32_t i = 0; i < e->count; i++) { value_release(e->vals[i]); free((char *)e->names[i]); }
     EnvObj *parent = e->parent;
-    if (env_pool_n < ENV_POOL_MAX && e->cap <= ENV_POOL_KEEP_CAP && !e->index) {
-        if (e->count > e->kept) e->kept = e->count;    /* the strings stay for the next use */
-        e->count = 0; e->n_protected = 0; e->parent = nullptr;
-        env_pool[env_pool_n++] = e;
-    } else {
-        uint32_t named = e->count > e->kept ? e->count : e->kept;
-        for (uint32_t i = 0; i < named; i++) free((char *)e->names[i]);
-        free(e->names); free(e->namelens); free(e->vals); free(e->index);
-        free(e);
-    }
+    free(e->names); free(e->namelens); free(e->vals); free(e->index);
+    free(e);
     env_release(parent);
-}
-
-/* Give the pooled environments back (at exit, so that a leak check sees none). */
-void env_pool_drain(void)
-{
-    while (env_pool_n > 0) {
-        EnvObj *e = env_pool[--env_pool_n];
-        for (uint32_t i = 0; i < e->kept; i++) free((char *)e->names[i]);
-        free(e->names); free(e->namelens); free(e->vals);
-        free(e);
-    }
 }
 
 /* ---- the index of a large environment ---------------------------------
@@ -476,38 +446,50 @@ void env_define(EnvObj *e, const char *name, uint32_t len, Value v)
         e->vals     = realloc(e->vals,     e->cap * sizeof *e->vals);
         if (!e->names || !e->namelens || !e->vals) abort();
     }
-    if (e->count < e->kept) {                     /* a recycled scope: the string of its last use */
-        if (e->namelens[e->count] != len || memcmp(e->names[e->count], name, len) != 0) {
-            free((char *)e->names[e->count]);
-            e->names[e->count] = strndup(name, len);
-        }
-    } else {
-        e->names[e->count] = strndup(name, len);  /* env OWNS names (entry 11):
+    e->names[e->count] = strndup(name, len);      /* env OWNS names (entry 11):
                                        bindings must outlive the line's source */
-    }
     if (!e->names[e->count]) abort();
     e->namelens[e->count] = len;
     e->vals[e->count]     = value_retain(v);
     e->count++;
+    e->gen = ++env_gen_counter;                   /* a binding was added: every EnvCache of
+                                                     this environment must look again */
     if (e->index && !e->index_stale) {            /* keep the table current, or let it be rebuilt */
         if (e->index_cap >= e->count * 2) env_index_put(e, e->count - 1);
         else e->index_stale = true;
     }
 }
 
+/* The slot of the newest binding of name in e itself, or -1: the table of
+ * a large environment first, then the scan that is the definition. */
+static int64_t env_find(EnvObj *e, const char *name, uint32_t len)
+{
+    int64_t at = e->count >= ENV_INDEX_FROM ? env_index_find(e, name, len) : -1;   /* a large environment's shortcut */
+    if (at >= 0) return at;
+    for (uint32_t i = e->count; i > 0; i--)              /* newest binding wins */
+        if (slot_is(e, i - 1, name, len)) {
+            if (e->index) e->index_stale = true;         /* the table missed a name that is here */
+            return i - 1;
+        }
+    return -1;
+}
+
 bool env_lookup(EnvObj *e, const char *name, uint32_t len, Value *out)
 {
     for (; e; e = e->parent) {
-        int64_t at = e->count >= ENV_INDEX_FROM ? env_index_find(e, name, len) : -1;   /* a large environment's shortcut */
+        int64_t at = env_find(e, name, len);
         if (at >= 0) { *out = value_retain(e->vals[at]); return true; }
-        for (uint32_t i = e->count; i > 0; i--)          /* newest binding wins */
-            if (slot_is(e, i - 1, name, len)) {
-                if (e->index) e->index_stale = true;     /* the table missed a name that is here */
-                *out = value_retain(e->vals[i - 1]);
-                return true;
-            }
     }
     return false;
+}
+
+bool env_lookup_at(EnvObj *e, const char *name, uint32_t len, EnvCache *c, Value *out)
+{
+    int64_t at = env_find(e, name, len);
+    if (at < 0) return env_lookup(e->parent, name, len, out);
+    c->slot = (uint32_t)at; c->gen = e->gen; c->name = e->names[at];
+    *out = value_retain(e->vals[at]);
+    return true;
 }
 
 /* Assign to the binding a lookup of the name would find: newest first. A
@@ -516,23 +498,39 @@ bool env_lookup(EnvObj *e, const char *name, uint32_t len, Value *out)
  * it. (This used to scan oldest first: with `let e = 0` shadowing the
  * constant e, an assignment to e inside a loop went to the constant, the
  * variable kept its value, and the constant was gone until restart.) */
+/* the assignable slot of name in e itself (never a protected one), or -1 */
+static int64_t env_find_assignable(EnvObj *e, const char *name, uint32_t len)
+{
+    int64_t at = e->count >= ENV_INDEX_FROM ? env_index_find(e, name, len) : -1;
+    if (at >= (int64_t)e->n_protected) return at;        /* (a protected slot is not assignable: the scan says so) */
+    for (uint32_t i = e->count; i > e->n_protected; i--)
+        if (slot_is(e, i - 1, name, len)) return i - 1;
+    return -1;
+}
+
 bool env_assign(EnvObj *e, const char *name, uint32_t len, Value v)
 {
     for (; e; e = e->parent) {
-        int64_t at = e->count >= ENV_INDEX_FROM ? env_index_find(e, name, len) : -1;
-        if (at >= (int64_t)e->n_protected) {             /* (a protected slot is not assignable: the scan says so) */
-            value_release(e->vals[at]);
+        int64_t at = env_find_assignable(e, name, len);
+        if (at >= 0) {
+            Value old = e->vals[at];
             e->vals[at] = value_retain(v);
+            value_release(old);
             return true;
         }
-        for (uint32_t i = e->count; i > e->n_protected; i--)
-            if (slot_is(e, i - 1, name, len)) {
-                value_release(e->vals[i - 1]);
-                e->vals[i - 1] = value_retain(v);
-                return true;
-            }
     }
     return false;
+}
+
+bool env_assign_at(EnvObj *e, const char *name, uint32_t len, EnvCache *c, Value v)
+{
+    int64_t at = env_find_assignable(e, name, len);
+    if (at < 0) return env_assign(e->parent, name, len, v);
+    c->slot = (uint32_t)at; c->gen = e->gen; c->name = e->names[at];
+    Value old = e->vals[at];
+    e->vals[at] = value_retain(v);
+    value_release(old);
+    return true;
 }
 
 /* Release every binding and empty the frame. A global-scope closure captures
@@ -542,10 +540,9 @@ bool env_assign(EnvObj *e, const char *name, uint32_t len, Value v)
  * count is zeroed so the later env_free does not double-release. */
 void env_clear(EnvObj *e)
 {
-    uint32_t named = e->count > e->kept ? e->count : e->kept;
     for (uint32_t i = 0; i < e->count; i++) value_release(e->vals[i]);
-    for (uint32_t i = 0; i < named; i++) free((char *)e->names[i]);
-    e->count = 0; e->kept = 0;
+    for (uint32_t i = 0; i < e->count; i++) free((char *)e->names[i]);
+    e->count = 0;
     if (e->index) e->index_stale = true;
 }
 

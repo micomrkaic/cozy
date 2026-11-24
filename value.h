@@ -99,9 +99,9 @@ struct EnvObj {
                                 the defining line's source buffer) */
     uint32_t    *namelens;
     Value       *vals;       /* owned refs */
+    uint64_t     gen;        /* changes whenever a binding is ADDED (env_define);
+                                see EnvCache. 0 = nothing was ever added */
     /* private to value.c (0.1.38) */
-    uint32_t     kept;       /* a recycled scope: names[count..kept) are strings left
-                                from its last use, taken up again or freed on define */
     uint32_t    *index;      /* a large environment: hash of a name -> slot + 1 of its
                                 newest binding. Only ever a shortcut: every hit is
                                 checked against the slot, every miss falls back to the scan */
@@ -125,8 +125,7 @@ static inline bool kind_is_heap(ValueKind k)
 }
 Value value_retain(Value v);
 void  value_release(Value v);
-void  env_pool_drain(void);        /* free the recycled scopes (at exit) */
-void  vm_pool_drain(void);         /* and the VM's recycled stacks (vm.c) */
+void  vm_pool_drain(void);         /* free the VM's recycled stacks (vm.c), at exit */
 
 /* --- scalar constructors (immediate) --- */
 static inline Value val_null(void)        { return (Value){ .kind = VAL_NULL }; }
@@ -162,6 +161,34 @@ EnvObj *env_new(EnvObj *parent);                       /* returns +1 ref */
 void    env_retain(EnvObj *e);
 void    env_release(EnvObj *e);
 void    env_define(EnvObj *e, const char *name, uint32_t len, Value v);  /* retains v */
+/* A remembered place of a global (0.1.40). Each use of a global in
+ * compiled code keeps one of these (chunk.h: name_cache): the slot where
+ * the name was found last time, and the environment's generation then.
+ *
+ * It is a checked shortcut, like the hash index it sits in front of:
+ *   - a binding is only ever ADDED by env_define, which gives the
+ *     environment a new generation (unique across environments). While
+ *     the generation is the remembered one, no newer binding of any name
+ *     exists, so the remembered slot cannot have been shadowed;
+ *   - bindings are REMOVED by code that edits the arrays directly (clear,
+ *     keep, the load groups), which tells nobody. So a hit also requires
+ *     the slot to be in range and still to hold the very string it held:
+ *     the environment owns one string per binding, a removal frees it and
+ *     moves others by pointer, and no string is made without a new
+ *     generation. After a removal the slot holds another binding's string
+ *     or is past the end, and the ordinary lookup answers (and remembers
+ *     afresh).
+ * A name has at most two bindings, the standard library's and the
+ * user's, and the user's is the newer; so the newest binding a lookup
+ * remembers is also the one an assignment may write, unless it is
+ * protected, which the assignment tests live. */
+typedef struct { uint64_t gen; const char *name; uint32_t slot; } EnvCache;
+static inline bool env_cache_hit(const EnvObj *e, const EnvCache *c)
+{ return c->gen == e->gen && c->slot < e->count && e->names[c->slot] == c->name; }
+/* env_lookup / env_assign in `e` itself, remembering the slot in *c; a name
+ * not in `e` is looked for in its parents, and nothing is remembered. */
+bool env_lookup_at(EnvObj *e, const char *name, uint32_t len, EnvCache *c, Value *out);
+bool env_assign_at(EnvObj *e, const char *name, uint32_t len, EnvCache *c, Value v);
 bool    env_assign(EnvObj *e, const char *name, uint32_t len, Value v);  /* update existing up the chain; retains v */
 bool    env_lookup(EnvObj *e, const char *name, uint32_t len, Value *out); /* out gets +1 */
 void    env_clear(EnvObj *e);   /* release all bindings (breaks closure/env cycles at teardown) */

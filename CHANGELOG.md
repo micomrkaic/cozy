@@ -1,5 +1,80 @@
 # Cozy changelog
 
+## 0.1.40 — globals remembered, the pool retired
+
+The two items 0.1.39 left: the idle pool of environments, and globals
+still found through a hash of their name on every use.
+
+Milliseconds, best of five, built-in backend, a million passes:
+
+| | 0.1.39 | 0.1.40 |
+|---|---|---|
+| `w = w + i * i`, `w` a global | 65 | 59 |
+| the same with long names (`total_consumption`, `beta_discount`) | 95 | 71 |
+| `s = s + sq(i)`, `sq` a function of yours | 78 | 72 |
+| `s = s + sin(i) * cos(i)` | 124 | 113 |
+| long names and `sin(i)` at the prompt, three packages loaded | 140 | 101 |
+
+The gain grows with the length of the names, because what is saved is
+hashing them. A loop over locals is unchanged (it never looked anything
+up).
+
+### Changed
+- **A use of a global remembers where it found it.** Each place a
+  global is read or assigned in compiled code keeps the slot of the
+  session's environment where the name was last found, and goes straight
+  there next time. It is a checked shortcut, like the hash index of
+  0.1.38 that it sits in front of. The environment has a generation that
+  changes whenever a binding is added, so a remembered place is believed
+  only while nothing has been added (nothing can have shadowed it), the
+  slot is still in range, and it still holds the very string it held.
+  `clear`, `keep` and the load groups remove bindings by editing the
+  environment directly and tell nobody; after a removal the slot holds
+  another binding or none, the test fails, and the ordinary lookup
+  answers and remembers afresh.
+- **The pool of environments is gone.** 0.1.38 kept dropped scopes for
+  reuse; since 0.1.39 there are no scopes, and the only environment ever
+  made is the session's. `env_new` allocates and `env_free` frees again;
+  the `kept` name strings and `env_pool_drain` went with the pool
+  (about sixty lines of value.c).
+
+### Fixed
+- **The elementary functions read anything as a number.** `sin`, `cos`,
+  `tan`, `exp`, `log`, `log10`, `log2`, the hyperbolic and inverse
+  functions, and `floor`, `ceil`, `round`, `trunc` took whatever they
+  were given as if it were a Float: `sin("s")`, `sin(sin)` and
+  `cos({a = 1})` printed the pointer as a number, different every run;
+  `log(true)` was -744.44; `floor([true, false])` was `[0, 0]`;
+  `sin(null)` was 0. They are errors now ("sin: expected a number, got
+  String"; "expected numbers, got an array of Bool"). `sqrt`, `abs`,
+  `gamma` and the other real-only functions already refused. A Date is
+  still accepted (it is a number of days), as before. Found, like the
+  `map` bug of 0.1.39, by a generator of random programs whose two
+  interpreters printed different noise.
+
+### Verified
+- tests/82_globals.test: 63 cases. The 43 about remembered places were
+  generated from the 0.1.39 binary and must be answered the same: a
+  function that reads a global which is then assigned, redefined,
+  shadowed, cleared, defined again; a global appearing or going in the
+  middle of a loop that uses it; a removal that moves other globals;
+  assignment through a remembered place, and to a name that is only the
+  library's.
+- 10,000 random sessions (four functions that read and assign globals,
+  then a dozen statements that `let`, assign, `clear`, `keep` and `eval`
+  definitions of the same names, some inside loops, with the functions
+  called in between) run through 0.1.39 and 0.1.40: identical output
+  and errors, once the pointers that 0.1.39 printed as numbers are
+  masked. The 10,000 scoping programs of 0.1.39 again, a quarter of
+  them: identical. 4,000 of the two kinds under the sanitizers: clean.
+- The golden suite (1829 inputs) under the built-in and the OpenBLAS
+  backend, under the sanitizers and under WebAssembly; the stress
+  workout.
+
+### Not done
+- Dispatch, 40-byte values and a VM run per element of `map` and the
+  indexed reductions are where they were (design entry 26).
+
 ## 0.1.39 — locals are slots
 
 The item 0.1.38 listed as not done. A loop variable, a `let` inside a

@@ -175,9 +175,10 @@ Until 0.1.39 every variable except a parameter was found by name at run
 time, and a million passes of `s = s + i * i` took about 0.09 s. Locals
 are frame slots now (design entry 26) and the same loop takes about
 0.055 s: a little under twice CPython, a tenth of Octave. What remains is
-the interpreter itself -- about fifteen machine instructions of dispatch
-per bytecode, and values of 40 bytes copied whole -- and a global is
-still found through a hash of its name. Array code does not pay any of
+the interpreter itself: about fifteen machine instructions of dispatch
+per bytecode, and values of 40 bytes copied whole. (A global costs a
+little more than a local; since 0.1.40 each use remembers where it found
+the name.) Array code does not pay any of
 this (the loop is inside the kernel), which is where numerical work
 belongs in this language. `sum[k = 1:n]` and `map` pay more: they start
 a run of the VM for each element, about 100 ns.

@@ -1,0 +1,150 @@
+# Globals: where a name was found is remembered at the place it is used (0.1.40).
+#
+# A use of a global in compiled code remembers the slot of the session's
+# environment where the name was last found, and goes straight there the
+# next time, provided nothing was added to the environment since and the
+# slot still holds that binding. Every case in the first sections has the
+# answer 0.1.39 gave (they were generated from it): a remembered place must
+# never be believed after the name was shadowed, redefined, cleared, or
+# moved by the removal of another. A session is used where the function
+# must survive from one statement to the next.
+
+
+# --- a function keeps finding a global that is redefined, shadowed, cleared ---
+let v = 1; let f = fn z -> v * 10; f(0)
+=> 10
+.. v = 2; f(0)
+=> 20
+.. let v = 3; f(0)
+=> 30
+.. eval("let v = 4"); f(0)
+=> 40
+.. clear("v"); f(0)
+=> !undefined name 'v'
+let f = fn x -> sin(x); let a = f(0); let sin = fn t -> 42; [a, f(0)]
+=> [0, 42]
+.. clear("sin"); f(0)
+=> 0
+.. let sin = fn t -> 7; f(0)
+=> 7
+.. clear("sin"); f(1) == sin(1)
+=> true
+let f = fn z -> pi; let a = f(0); let pi = 3; [a == f(0), f(0) == 3]
+=> [false, true]
+.. clear("pi"); f(0) > 3.14
+=> true
+let g = fn z -> e; g(0) > 2.7
+=> true
+.. let e = 0; g(0)
+=> 0
+.. e = e + 5; g(0)
+=> 5
+.. clear("e"); g(0) > 2.7
+=> true
+
+# --- a global appears, or goes, in the middle of a loop that uses it ---
+let o = ""; for i = 1:3 do if i == 2 then eval("let pi = 7") end; o = o + str(floor(pi)) + " " end; o
+=> "3 7 7 "
+let o = ""; let sin = fn t -> 0; for i = 1:3 do if i == 2 then clear("sin") end; o = o + str(sin(0) + i) + " " end; o
+=> "1 2 3 "
+let w = 5; let o = 0; for i = 1:4 do o = o * 10 + w; if i == 2 then (let w = 7) end end; o
+=> 5555
+let w = 5; for i = 1:3 do if i == 2 then clear("w") end; w end
+=> !undefined name 'w'
+let o = 0; for i = 1:3 do eval("let nv" + str(i) + " = " + str(i)); o = o + abs(-i) end; [o, nv1 + nv2 + nv3]
+=> [6, 6]
+
+# --- removing one global moves others; whoever remembered a place looks again ---
+let a = 1; let b = 2; let c = 3; let f = fn z -> c * 10 + b; f(0)
+=> 32
+.. clear("a"); f(0)
+=> 32
+.. let a = 9; let d = 4; clear("b"); let b = 6; f(0)
+=> 36
+.. keep("f", "c", "b"); f(0)
+=> 36
+.. clear("c"); f(0)
+=> !undefined name 'c'
+let a = 1; let b = 2; let c = 3; let d = 4; let f = fn z -> [a, b, c, d]; f(0)
+=> [1, 2, 3, 4]
+.. clear("b"); let b = 20; f(0)
+=> [1, 20, 3, 4]
+.. clear("a"); clear("c"); let c = 30; let a = 10; f(0)
+=> [10, 20, 30, 4]
+.. keep("f", "d", "a", "b", "c"); f(0)
+=> [10, 20, 30, 4]
+.. keep("f", "a", "b", "c"); f(0)
+=> !undefined name 'd' — it lives in packages/autodiff.cz; load(
+let o = 0; for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; let f = fn z -> v7 + v30 + v60; f(0)
+=> 97
+.. clear("v8"); clear("v1"); f(0)
+=> 97
+.. keep("f", "v7", "v30", "v60", "v59"); f(0)
+=> 97
+.. clear("v30"); f(0)
+=> !undefined name 'v30'
+
+# --- assignment through a remembered place ---
+let n = 0; let inc = fn z -> (n = n + 1; n); inc(0); inc(0)
+=> 2
+.. let n = 10; inc(0)
+=> 11
+.. clear("n"); let n = 100; inc(0)
+=> 101
+.. clear("n"); inc(0)
+=> !undefined name 'n'
+let f = fn z -> (e = e + 1; e); let e = 0; [f(0), f(0)]
+=> [1, 2]
+.. clear("e"); f(0)
+=> !cannot assign to the builtin 'e' — write let e = ... to make
+let t = 0; for i = 1:3 do t = t + i; if i == 2 then (let t = 100) end end; t
+=> 6
+let f = fn z -> (pi = 3; pi); f(0)
+=> !cannot assign to the builtin 'pi' — write let pi = ... to ma
+let total = 0; let add = fn x -> (total = total + x; total); for i = 1:100 do add(i) end; total
+=> 5050
+
+# --- the elementary functions take numbers (found while testing the above) ---
+# sin, cos, exp, log, floor and their kin read whatever they were given
+# as if it were a Float: sin("s") and sin(sin) printed the pointer as a
+# number, different every run; log(true) was -744.44.
+sin(sin)
+=> !sin: expected a number, got Builtin
+sin("s")
+=> !sin: expected a number, got String
+exp(fn t -> t)
+=> !exp: expected a number, got Closure
+cos({a = 1})
+=> !cos: expected a number, got Record
+atan(null)
+=> !atan: expected a number, got Null
+log(true)
+=> !log: expected a number, got Bool
+log10("s")
+=> !log10: expected a number, got String
+acosh(sin)
+=> !acosh: expected a number, got Builtin
+floor(sin)
+=> !floor: expected a number, got Builtin
+round(true)
+=> !round: expected a number, got Bool
+sin([1, 2] > 1)
+=> !sin: expected numbers, got an array of Bool
+floor(["a", "b"])
+=> !floor: expected numbers, got an array of String
+tanh(speye(2))
+=> !tanh: expected a number, got Sparse
+sin([0, 1])
+=> [0, 0.841471]
+floor([2.5, -2.5])
+=> [2, -3]
+log(-1)
+=> 3.14159i
+exp(1i * 0)
+=> 1+0i
+floor(date("2024-01-01") + 0.5) == floor(date("2024-01-01"))
+=> true
+sqrt("s")
+=> !sqrt: expected a number, got String
+gamma(sin)
+=> !gamma: expected a real number, got Builtin

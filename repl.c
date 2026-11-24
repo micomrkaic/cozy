@@ -613,7 +613,7 @@ int repl_run(void)
     free(acc);                                   /* any unfinished entry */
     env_clear(globals);                          /* break global closure/env cycles */
     env_release(globals);
-    env_pool_drain(); vm_pool_drain();
+    vm_pool_drain();
     vm_session_end();                            /* free retained chunks before arenas */
     keep_free_all(&keep);                        /* closures are gone; safe to free arenas/srcs */
     return 0;

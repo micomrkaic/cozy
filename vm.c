@@ -327,7 +327,13 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         case OP_GET_VAR: {
             uint16_t k = RD_U16();
             Value out;
-            if (!env_lookup(st->globals, ch_->names[k], ch_->namelens[k], &out))
+            EnvObj *g = st->globals;
+            EnvCache *gc = &ch_->name_cache[k];          /* where this global was last time */
+            if (env_cache_hit(g, gc)) {
+                PUSH(vm_retain(g->vals[gc->slot]));
+                break;
+            }
+            if (!env_lookup_at(g, ch_->names[k], ch_->namelens[k], gc, &out))
                 {
                     /* teach the load line when the name is a known package
                      * export (pkg_hints.h, generated from packages/) — born
@@ -350,7 +356,15 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         }
         case OP_SET_VAR: {
             uint16_t k = RD_U16();
-            if (!env_assign(st->globals, ch_->names[k], ch_->namelens[k], PEEK(0))) {
+            EnvObj *g = st->globals;
+            EnvCache *gc = &ch_->name_cache[k];
+            if (env_cache_hit(g, gc) && gc->slot >= g->n_protected) {
+                Value old = g->vals[gc->slot];           /* (a library name is shadowed by let, never assigned) */
+                g->vals[gc->slot] = vm_retain(PEEK(0));
+                value_release(old);
+                break;
+            }
+            if (!env_assign_at(g, ch_->names[k], ch_->namelens[k], gc, PEEK(0))) {
                 Value held;
                 if (env_lookup(st->globals, ch_->names[k], ch_->namelens[k], &held)) {
                     value_release(held);             /* the name exists, but only as a builtin */

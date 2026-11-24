@@ -842,3 +842,37 @@ still found through the hash index (a per-site cache would be the next
 step if top-level loops matter). TRIGGER: a workload where scalar loops
 dominate after this, or the pool removed as housekeeping.
 
+## 27. Globals remembered in place; the pool retired — SHIPPED 0.1.40
+(entry 26's residue; owner-triggered: "now remove the idle environment
+pool and cache global lookups"). DECIDED: one EnvCache per entry of a
+chunk's name pool (names are pooled by source position, so this is one
+per place a global is written): {generation, slot, the environment's
+own string for the name}. A hit needs all three to hold. DECIDED: the
+generation changes only when a binding is ADDED (env_define's append),
+from a counter shared by all environments, so no two environments ever
+show the same one. That is the whole of what has to be told, and
+env_define is the one place that adds. REMOVALS are done by eval.c
+editing the arrays (clear, keep, the load groups: truncate, compact,
+swap-remove) and are deliberately not told, for the reason entry 25
+gave for the hash index. The argument that this is safe: the
+environment owns exactly one string per binding; a removal frees that
+string and moves the survivors by pointer; no string is allocated into
+an environment without a new generation. So within one generation a
+slot holding the remembered pointer holds the remembered binding, and
+since nothing was added it is still the newest of its name. REJECTED:
+comparing the name at the slot instead of the pointer (correct, but a
+memcmp per use, and the pointer test is the stronger statement);
+bumping the generation in the five removal sites (a table that has to
+be told). DECIDED: assignment uses the same entry and tests
+`slot >= n_protected` live, so a remembered library binding is never
+written. DECIDED: the 0.1.38 environment pool is removed outright; with
+one environment per session it could only ever hold nothing. FOUND ON
+THE WAY: the elementary functions read non-numbers as doubles (fixed,
+changelog); the second bug in two releases surfaced by diffing two
+interpreters on generated programs -- the noise differs between runs,
+so it shows as a difference even where both are wrong. PROOF:
+tests/82_globals.test; 10,000 generated sessions identical to 0.1.39.
+MEASURED: 5 to 10% on loops over short-named globals and builtin calls,
+25% with long names; nothing on loops over locals. RESIDUE: as entry
+26, minus these two.
+

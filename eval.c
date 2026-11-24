@@ -6645,6 +6645,25 @@ static Cplx c_asinhz(Cplx z) { return c_logz(c_add(z, c_sqrtz(c_add(c_mul(z,z), 
 static Cplx c_acoshz(Cplx z) { return c_logz(c_add(z, c_sqrtz(c_sub(c_mul(z,z), (Cplx){1,0})))); }
 static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0}, z), c_sub((Cplx){1,0}, z)))); }
 
+/* What the functions below accept: a number, or an array of numbers. Their
+ * scalar kernels end in as_double(v), which reads an Int or a Float and,
+ * until 0.1.40, anything else as if it were one: sin("s"), sin(sin) and
+ * sin of a record printed the pointer as a double, log(true) was -744.44,
+ * floor([true, false]) was [0, 0]. (A Date is a double and passes, as it
+ * always did. sqrt, abs and the real-only functions refuse for themselves.) */
+static void want_numeric(Interp *I, const char *name, Value v)
+{
+    if (is_array(v)) {
+        EltType e = as_arr(v)->elt;
+        if (e == ELT_BOOL || e == ELT_STRING)
+            runtime_error(I, "%s: expected numbers, got an array of %s", name,
+                          e == ELT_BOOL ? "Bool" : "String");
+        return;
+    }
+    if (is_num(v) || v.kind == VAL_DATE) return;
+    runtime_error(I, "%s: expected a number, got %s", name, type_name(v.kind));
+}
+
 /* entire on the reals: real -> real, complex -> complex */
 /* Each kernel's dual case applies the chain rule: f(x + dx eps) =
  * f(x) + dx f'(x) eps, with the derivative expression dexpr in x. */
@@ -6660,7 +6679,8 @@ static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0
     static bool rk_##name(const double *in, double *o, size_t n) {                    \
         for (size_t k = 0; k < n; k++) o[k] = rfn(in[k]);                             \
         return true; }                                                                \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; want_numeric(I, #name, a[0]);          \
+        return map_real(I, a[0], sc_##name, rk_##name, true); }
 ENTIRE_UNARY(exp,   exp,   c_expz,   exp(x),  exp(x))
 ENTIRE_UNARY(sin,   sin,   c_sinz,   cos(x),  -sin(x))
 ENTIRE_UNARY(cos,   cos,   c_cosz,   -sin(x), -cos(x))
@@ -6695,7 +6715,8 @@ ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0), -x / pow(x * x + 1
             if (!((indomain) || isnan(x))) return false;      /* complex: not here */ \
             o[k] = rfn(x); }                                                          \
         return true; }                                                                \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; want_numeric(I, #name, a[0]);          \
+        return map_real(I, a[0], sc_##name, rk_##name, true); }
 TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x,               -1.0 / (x * x))
 TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0, 1.0 / sqrt(1.0 - x * x),  x / pow(1.0 - x * x, 1.5))
 TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0, -1.0 / sqrt(1.0 - x * x), -x / pow(1.0 - x * x, 1.5))
@@ -6724,7 +6745,8 @@ TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x), 
             if (x < 0.0) return false;                                                \
             o[k] = log(x)/l; }                                                        \
         return true; }                                                                \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; want_numeric(I, #name, a[0]);          \
+        return map_real(I, a[0], sc_##name, rk_##name, true); }
 LOGB_UNARY(log10, 10.0)
 LOGB_UNARY(log2,   2.0)
 #undef LOGB_UNARY
@@ -6743,7 +6765,8 @@ LOGB_UNARY(log2,   2.0)
     static bool rk_##name(const double *in, double *o, size_t n) {                    \
         for (size_t k = 0; k < n; k++) { double r0 = rfn(in[k]); o[k] = r0 == 0.0 ? 0.0 : r0; } \
         return true; }                                                                \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, false); }
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; want_numeric(I, #name, a[0]);          \
+        return map_real(I, a[0], sc_##name, rk_##name, false); }
 ROUND_UNARY(floor, floor)
 ROUND_UNARY(ceil,  ceil)
 ROUND_UNARY(round, round)
