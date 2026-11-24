@@ -876,3 +876,36 @@ MEASURED: 5 to 10% on loops over short-named globals and builtin calls,
 25% with long names; nothing on loops over locals. RESIDUE: as entry
 26, minus these two.
 
+## 28. One run of the VM for a map — SHIPPED 0.1.42 (entry 26's residue
+"a VM run per element"; owner-triggered: "make map and the indexed sum
+fast"). The indexed reduction is the language's showpiece notation and
+was slower than the loop it replaces. DECIDED: vm_call_each(callee,
+{argc, next, take, ctx}): the VM calls the closure, hands each result to
+`take`, asks `next` for the following arguments, and re-enters the SAME
+frame (closure kept in slot 0, arguments stored, locals emptied, ip 0,
+marks and the 'end' stack reset). While take and next run the VM shows
+no frame (nframe 0, stack one deep), so an error they raise is swept and
+backtraced exactly as an error after a finished call_value was. Errors
+leave through I->jmp as before; bi_map's own cleanup is unchanged in
+shape. A builtin callee is called in a plain loop. DECIDED: map writes
+Int and Float results into the result array directly and leaves that
+path, by boxing what it has, at the first other kind; pack_array remains
+the definition for everything else, so no mixture is packed by new code.
+MEASURED, AND THE LESSON AGAIN: making the calls in one run halved the
+instruction count and changed the time by nothing; the time was in the
+forty-megabyte temporary (first-touch page faults) and in tearing the
+frame down and building it up. Frame reuse and the typed result are what
+moved the clock. DECIDED: an Int or Float squared joins binop_numbers.
+REJECTED: fusing range, map and reduction into one pass (a compiler
+change; the two arrays cost about 2 ms per million); converting the
+numerical routines' call_f1 to the same mechanism (their call pattern is
+the algorithm's, not an iteration, and a call is a smaller share of
+their work); a cheaper nested run for every call_value (it means
+replacing the jmp_buf save and restore at some thirty sites). FOUND ON
+THE WAY: Bool mixed with numbers was stored as numbers (fixed, as the
+matrix literal's error). PROOF: tests/83_map.test from the 0.1.41
+binary; 6,000 generated sessions. RESIDUE: the three rejected items;
+dispatch and 40-byte values as before. TRIGGER: reductions over short
+ranges in inner loops (fusion); root-finding or quadrature dominated by
+call overhead.
+

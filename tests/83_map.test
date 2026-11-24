@@ -1,0 +1,170 @@
+# map calls its function in one run of the VM, and keeps numbers unboxed (0.1.42).
+#
+# map -- and with it `x ~> f` and the indexed reductions, sum[k = a:b] and
+# the rest, which are a map and a reduction -- used to start a run of the VM
+# for every element and to collect the results as boxed values before
+# packing them. It now makes all the calls in one run, reusing the frame,
+# and writes Int and Float results straight into the array it returns.
+# None of that is meant to show. Every answer below is what 0.1.41 gave
+# (the file was generated from that binary), and 9,000 random programs
+# were run through both.
+
+
+# --- the kind of the result: Int until a Float arrives, anything else the general way ---
+map(fn k -> k * k, 1:5)
+=> [1, 4, 9, 16, 25]
+map(fn k -> k / 2, 1:4)
+=> [0.5, 1, 1.5, 2]
+map(fn k -> if k > 2 then k + 0.5 else k end, 1:4)
+=> [1, 2, 3.5, 4.5]
+map(fn k -> if k == 4 then 0.5 else k end, 1:4)
+=> [1, 2, 3, 0.5]
+map(fn k -> if k < 2 then 0.5 else k end, 1:4)
+=> [0.5, 2, 3, 4]
+map(fn k -> if k == 3 then 1i else k end, 1:4)
+=> [1+0i, 2+0i, 1i, 4+0i]
+map(fn k -> if k == 3 then 1i else k + 0.5 end, 1:4)
+=> [1.5+0i, 2.5+0i, 1i, 4.5+0i]
+map(fn k -> if k == 1 then 1.5 else if k == 3 then 2i else k end end, 1:4)
+=> [1.5+0i, 2+0i, 2i, 4+0i]
+map(fn k -> k > 2, 1:4)
+=> [false, false, true, true]
+map(fn k -> if k > 2 then null else k end, 1:4)
+=> [1+0i, 2+0i, 0+0i, 0+0i]
+map(fn k -> str(k), 1:3)
+=> ["1", "2", "3"]
+map(fn k -> if k > 2 then "s" else k end, 1:4)
+=> !map: the function returned strings for some elements and numbers for o
+map(fn k -> if k > 2 then k else "s" end, 1:4)
+=> !map: the function returned strings for some elements and numbers for o
+map(fn k -> date("2024-01-01") + k, 1:2)
+=> [2024-01-02, 2024-01-03]
+map(fn k -> 9223372036854775807 + k, 0:2) == 9223372036854775807
+=> [true, true, true]
+map(fn k -> if k == 2 then 0.1 else 9007199254740993 end, 1:3) - 9007199254740992
+=> [0, -9.0072e+15, 0]
+let r = map(fn k -> k, [1, 2; 3, 4]); [size(r), r[2, 1]]
+=> [2, 2, 3]
+let r = map(fn k -> k + 0.5, zeros(0, 3)); size(r)
+=> [0, 3]
+map(fn k -> k, [])
+=> []
+map(fn s -> s + "!", ["a", "bc"])
+=> ["a!", "bc!"]
+map(fn z -> z * 1i, [1 + 1i, 2])
+=> [-1+1i, 2i]
+
+# --- every call starts from a clean frame ---
+map(fn x -> (let s = 0; for i = 1:3 do (if i == 2 then (let q = x) end; s = s + i * x) end; s), 1:3)
+=> [6, 12, 18]
+let q = 100; map(fn x -> (if x == 2 then (let q = 5) end; q + x), 1:3)
+=> [101, 7, 103]
+map(fn x -> (if x > 2 then (return 0) end; x * 10), 1:4)
+=> [10, 20, 0, 0]
+let v = [5, 6, 7]; map(fn x -> v[(return x * 2)], 1:3)
+=> [2, 4, 6]
+map(fn x, y = 10 -> (y = y + x; y), 1:3)
+=> [11, 12, 13]
+map(fn x -> (let t = [x, x, x]; for i = 1:3 do if i == x then break end; t[i] = 0 end; sum(t)), 1:3)
+=> [3, 4, 3]
+map(fn x -> x |> @ * (x |> @ + 1), 1:3)
+=> [2, 6, 12]
+let g = 0; let r = map(fn x -> (g = g + x; g), 1:4); [r, g]
+=> [1, 3, 6, 10, 10]
+let f = fn n -> if n <= 1 then 1 else sum(map(fn k -> f(n - 1), 1:n)) end; f(5)
+=> 120
+map(fn x -> sum(map(fn y -> sum(map(fn z -> x * y * z, 1:2)), 1:2)), 1:3)
+=> [9, 18, 27]
+
+# --- the callee: a builtin, a function with defaults, the wrong thing ---
+map(abs, [-1, 2, -3])
+=> [1, 2, 3]
+map(str, 1:3)
+=> ["1", "2", "3"]
+map(fn x, y = 10 -> x + y, 1:3)
+=> [11, 12, 13]
+map(fn x, y -> x + y, 1:3)
+=> !function expects 2 argument(s), got 1
+map(fn -> 1, 1:3)
+=> !function expects 0 argument(s), got 1
+map(fn x, y -> x + y, [])
+=> []
+map(5, 1:3)
+=> !value of type Int is not callable
+map(5, [])
+=> []
+map(fn x -> x, 5)
+=> !map: second argument must be an Array
+
+# --- an error in the middle: what ran before it ran, and nothing is kept ---
+let g = 0; map(fn x -> (g = g + 1; if x == 3 then error("stop") else x end), 1:5)
+=> !stop
+let g = 0; let f = fn x -> (g = g + 1; if x == 3 then [x] else x end); let a = sum(map(f, 1:2)); [a, g]
+=> [3, 2]
+.. map(f, 1:5)
+=> !map: the function must return a number or a string for each element, g
+map(fn x -> (if x == 2 then undefined_name else x + 0.5 end), 1:3)
+=> !undefined name 'undefined_name'
+map(fn x -> if x == 3 then {a = 1} else str(x) end, 1:4)
+=> !map: the function must return a number or a string for each element, g
+map(fn x -> x[2], 1:3)
+=> !value of type Int is not indexable
+
+# --- the elementwise pipe and the indexed reductions are this map ---
+[1, 2, 3] ~> (_ * 2 + 1)
+=> [3, 5, 7]
+[1, 2, 3] ~> (fn x -> x / 2)
+=> [0.5, 1, 1.5]
+sum[k = 1:10] k ^ 2
+=> 385
+sum[k = 1:100] 1 / k ^ 2
+=> 1.63498
+prod[k = 1:5] k
+=> 120
+max[k = 1:5] (k - 3) ^ 2
+=> 4
+mean[k = 1:4] k / 2
+=> 1.25
+sum[k = 1:0] k
+=> 0
+sum[i = 1:3] sum[j = 1:i] i * j
+=> 25
+let n = 4; sum[k = 1:n] (let t = k * n in t + 1)
+=> 44
+sum[k = 1:3] (k + 1i)
+=> 6+3i
+sum[k = 1:3] [k, 2]
+=> !map: the function must return a number or a string for each element, g
+
+# --- at size: the frame and the result array a million times over ---
+sum[k = 1:1000000] k
+=> 500000500000
+sum[k = 1:1000000] 1 / k ^ 2
+=> 1.64493
+let r = map(fn k -> if k == 1000000 then 0.5 else k end, 1:1000000); [r[1], r[999999], r[1000000], sum(r)]
+=> [1, 999999, 0.5, 5e+11]
+let r = map(fn k -> if k == 1000000 then 1i else k end, 1:1000000); [r[1], r[1000000]]
+=> [1+0i, 1i]
+length(map(fn k -> str(k), 1:100000))
+=> 100000
+let t = 0; for r = 1:20000 do t = t + sum[k = 1:3] k * r end; t
+=> 1200060000
+
+# --- changed in 0.1.42: Bool for some elements and numbers for others ---
+# The Bools were stored as if they were numbers: true became 0 in an Int
+# array and 4.94e-324 in a Float one. It is the error a matrix literal
+# gives for the same mixture.
+map(fn k -> if k > 2 then true else k end, 1:4)
+=> !map: the function returned Bool for some elements and numbers for others
+map(fn k -> if k > 2 then k + 0.5 else false end, 1:4)
+=> !map: the function returned Bool for some elements and numbers for others
+map(fn k -> if k > 2 then "s" else true end, 1:4)
+=> !map: the function returned Bool for some elements and strings for others
+map(fn k -> if k > 2 then null else true end, 1:4)
+=> !Bool for some elements and numbers for others
+sum[k = 1:4] (if k > 2 then true else k end)
+=> !Bool for some elements and numbers for others
+map(fn k -> k > 2, 1:4)
+=> [false, false, true, true]
+map(fn k -> if k > 2 then 1 else 0 end, 1:4)
+=> [0, 0, 1, 1]

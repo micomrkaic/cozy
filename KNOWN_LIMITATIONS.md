@@ -180,6 +180,8 @@ per bytecode, and values of 40 bytes copied whole. (A global costs a
 little more than a local; since 0.1.40 each use remembers where it found
 the name.) Array code does not pay any of
 this (the loop is inside the kernel), which is where numerical work
-belongs in this language. `sum[k = 1:n]` and `map` pay more: they start
-a run of the VM for each element, about 100 ns.
+belongs in this language. `sum[k = 1:n]` and `map` cost about as much
+per element as a pass of a loop since 0.1.42 (they used to start a run
+of the VM for each element); `fzero`, `integral` and the optimisers
+still start one for each evaluation of your function, about 100 ns.
 Status: DOCUMENTED COST.

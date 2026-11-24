@@ -207,9 +207,26 @@ void vm_pool_drain(void)
     }
 }
 
+/* Put a call of `clo` on an EMPTY stack: the closure in slot 0, the arguments
+ * (lent; retained here) in slots 1..argc, null for the parameters not given
+ * (entry 13: their defaults fill them), then the frame with its locals. */
+static CallFrame *enter_closure(VM *st, Chunk *ch, Value closure, CloObj *clo, const Value *args, uint32_t argc)
+{
+    uint32_t np = clo->chunk->nparams;
+    while (st->cap < (size_t)np + 1) stack_grow(st);
+    st->stack[0] = value_retain(closure);               /* slot 0 = self        */
+    for (uint32_t i = 0; i < argc; i++) st->stack[1 + i] = value_retain(args[i]);
+    for (uint32_t i = argc; i < np; i++) st->stack[1 + i] = val_null();
+    st->sp = np + 1;
+    return push_frame(st, ch, clo, /*slot_base=*/0);
+}
+
 /* closure: VAL_CLOSURE -> run it with callee at slot 0 and args at slots 1..argc;
- * VAL_NULL -> top-level statement chunk (no slots). */
-static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, bool *ok)
+ * VAL_NULL -> top-level statement chunk (no slots).
+ * each: not null -> when the closure returns, hand the result to each->take,
+ * ask each->next for the next arguments, and call it again in this same run
+ * (nrt.h); the value returned is then null. */
+static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, VMEach *each, bool *ok)
 {
     if (vm_depth >= VM_MAX_DEPTH) runtime_error(I, "maximum call depth exceeded");
     vm_depth++;
@@ -222,18 +239,8 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
     if (st->cap == 0) stack_grow(st);
 
     CloObj *clo = closure.kind == VAL_CLOSURE ? as_clo(closure) : nullptr;
-    if (clo) {                                          /* set up initial slots */
-        st->stack[st->sp++] = value_retain(closure);    /* slot 0 = self        */
-        for (uint32_t i = 0; i < argc; i++) {
-            if (st->sp >= st->cap) stack_grow(st);
-            st->stack[st->sp++] = value_retain(args[i]); /* slots 1..argc        */
-        }
-        for (uint32_t i = argc; i < clo->chunk->nparams; i++) {
-            if (st->sp >= st->cap) stack_grow(st);
-            st->stack[st->sp++] = val_null();            /* entry 13: pad to nparams */
-        }
-    }
-    push_frame(st, ch, clo, /*slot_base=*/0);
+    if (clo) enter_closure(st, ch, closure, clo, args, argc);
+    else     push_frame(st, ch, nullptr, /*slot_base=*/0);
 
     if (setjmp(I->jmp)) {                                /* runtime_error landed here */
         for (uint32_t k = 0; k < st->sp; k++) value_release(st->stack[k]);
@@ -464,6 +471,38 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         }
 
         case OP_RETURN: {
+            if (each && st->nframe == 1) {
+                /* The function of a vm_call_each returns (nrt.h). Its frame is
+                 * kept for the next call: slot 0 still holds the closure, and
+                 * only the arguments, the locals and the temporaries go. While
+                 * take and next run there is no frame (nframe 0, the stack one
+                 * value deep), so an error they raise is swept and reported as
+                 * one raised after a finished call always was. */
+                Value result = sp > fr->temp_base ? stack[DROP(1)] : val_null();
+                while (sp > base + 1) vm_release(stack[DROP(1)]);
+                st->nmark = fr->mark_base;
+                st->nframe = 0;
+                Value again[VM_EACH_MAXARGS];
+                each->take(I, each, result);            /* the caller owns it; may raise */
+                if (each->next(I, each, again)) {       /* the next call, in the same frame */
+                    uint32_t np = fr->chunk->nparams, argc2 = each->argc;
+                    for (uint32_t i = 0; i < argc2; i++) slot_put(&stack[base + 1 + i], &again[i]);
+                    for (uint32_t i = argc2; i < np; i++) stack[base + 1 + i] = val_null();
+                    for (uint32_t i = base + 1 + np; i < fr->temp_base; i++) stack[i] = slot_empty();
+                    st->sp = sp = fr->temp_base;
+                    fr->ip = ip = 0;
+                    st->end_sp = 0;                     /* (a return from inside an index left its 'end') */
+                    st->nframe = 1;
+                    break;
+                }
+                value_release(stack[DROP(1)]);          /* the closure: the calls are over */
+                I->vm_cur = st->prev;
+                vm_give(st);
+                memcpy(I->jmp, saved, sizeof(jmp_buf));
+                vm_depth--;
+                *ok = true;
+                return val_null();
+            }
             Value result = sp > fr->temp_base ? stack[DROP(1)] : val_null();
             while (sp > fr->slot_base) value_release(stack[DROP(1)]);
             st->nmark = fr->mark_base;                  /* discard this frame's loop marks */
@@ -688,20 +727,44 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 #undef FRAME_IN
 }
 
-/* Builtin -> closure path: nests a fresh vm_run with the callee as slot 0. */
-Value vm_run_closure(Interp *I, Value callee, Value *args, uint32_t n)
+static void want_arity(Interp *I, const CloObj *c, uint32_t n)
 {
-    CloObj *c = as_clo(callee);
     uint32_t np3 = c->chunk->nparams, nd3 = c->chunk->ndefaults;
     if (n < np3 - nd3 || n > np3) {
         if (nd3 == 0)
             runtime_error(I, "function expects %u argument(s), got %u", np3, n);
         runtime_error(I, "function expects %u to %u argument(s), got %u", np3 - nd3, np3, n);
     }
+}
+
+/* Builtin -> closure path: nests a fresh vm_run with the callee as slot 0. */
+Value vm_run_closure(Interp *I, Value callee, Value *args, uint32_t n)
+{
+    CloObj *c = as_clo(callee);
+    want_arity(I, c, n);
     bool ok;
-    Value r = vm_run(I, c->chunk, callee, args, n, &ok);
+    Value r = vm_run(I, c->chunk, callee, args, n, nullptr, &ok);
     if (!ok) longjmp(I->jmp, 1);
     return r;
+}
+
+/* One function, many calls, one run of the VM (nrt.h). Nothing is checked
+ * or set up before there is a first call to make, so a function that
+ * cannot be called is no error over no elements, as it never was. */
+void vm_call_each(Interp *I, Value callee, VMEach *e)
+{
+    Value args[VM_EACH_MAXARGS];
+    if (!e->next(I, e, args)) return;
+    if (callee.kind != VAL_CLOSURE) {                   /* a builtin (or the error for neither) */
+        do e->take(I, e, call_value(I, callee, args, e->argc));
+        while (e->next(I, e, args));
+        return;
+    }
+    CloObj *c = as_clo(callee);
+    want_arity(I, c, e->argc);
+    bool ok;
+    vm_run(I, c->chunk, callee, args, e->argc, e, &ok);
+    if (!ok) longjmp(I->jmp, 1);
 }
 
 Value vm_eval_program(Interp *I, AstNode *block, EnvObj *globals, bool echo)
@@ -721,7 +784,7 @@ Value vm_eval_program(Interp *I, AstNode *block, EnvObj *globals, bool echo)
         Chunk *ch = malloc(sizeof *ch);
         if (!vm_compile(I, s, ch)) { free(ch); value_release(last); return val_null(); }
         bool ok;
-        Value r = vm_run(I, ch, val_null(), nullptr, 0, &ok);
+        Value r = vm_run(I, ch, val_null(), nullptr, 0, nullptr, &ok);
         if (ch->nproto > 0) keep_chunk(ch);
         else { chunk_free(ch); free(ch); }
         if (!ok) { value_release(last); return val_null(); }

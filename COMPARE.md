@@ -405,7 +405,7 @@ the same library NumPy and Octave use, and since 0.1.38 its own array
 kernels run over raw numbers as theirs do. Seconds, best of three, on one
 four-core machine, with NumPy 2.5.3 and Octave 8.4.0:
 
-| | Cozy 0.1.39 | NumPy | Octave |
+| | Cozy 0.1.42 | NumPy | Octave |
 |---|---|---|---|
 | `A * B`, n = 1000 | 0.016 | 0.007 | 0.011 |
 | `A \ b`, n = 1000 | 0.021 | 0.009 | 0.015 |
@@ -414,6 +414,7 @@ four-core machine, with NumPy 2.5.3 and Octave 8.4.0:
 | `sum(sin(x) .^ 2 + cos(x) .^ 2)`, 5 million elements | 0.14 | 0.08 | 0.17 |
 | `sort(x)`, 5 million elements | 0.24 | 0.04 | 0.55 |
 | a scalar loop of a million passes | 0.06 | 0.03 | 0.56 |
+| `sum[k = 1:n] 1 / k ^ 2`, an indexed sum as in example 3, a million terms | 0.07 | 0.065 | 2.4 |
 
 Unlike the transcripts, these numbers are not checked by any test: they
 are one machine on one day, and the ratios are what to read. Dense
@@ -422,6 +423,10 @@ two decompositions because it calls LAPACK's older QR drivers when
 vectors are asked for; Cozy and NumPy call the divide-and-conquer ones.
 NumPy's sort and its elementwise loops are written with SIMD instructions
 and are the ones to beat. In scalar loops Cozy sits between CPython and Octave.
+The last row is `sum[k = 1:n] 1 / k ^ 2` against Python's
+`sum(1 / k ** 2 for k in range(1, n + 1))` (plain Python: NumPy has no
+indexed form) and Octave's `sum(arrayfun(@(k) 1/k^2, 1:n))`; all three
+are much faster vectorised (0.016, 0.002 and 0.011 s).
 
 ## Where Cozy does not win
 

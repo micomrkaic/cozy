@@ -22,7 +22,9 @@
  * scalar_arith_k and scalar_cmp answer them, without the walk through the
  * kinds that are not numbers: Int with Int stays Int while it fits and
  * promotes to Float when it does not; anything with a Float is done in
- * doubles; division is always Float. Returns false, touching nothing, for
+ * doubles; division is always Float. Of the powers only the square is
+ * answered (an Int squared while it fits, a Float squared), being most of
+ * the powers ever written. Returns false, touching nothing, for the other
  * powers and for every other kind and operator: apply_binop then decides.
  * It is the top of apply_binop, written here so that the VM's OP_BINOP can
  * ask it without a call (0.1.39); there is one copy of the rule. */
@@ -42,6 +44,9 @@ static inline bool binop_numbers(enum TokenKind op, const Value *a, const Value 
         case TOK_LE: *out = val_bool(x <= y); return true;
         case TOK_GT: *out = val_bool(x >  y); return true;
         case TOK_GE: *out = val_bool(x >= y); return true;
+        case TOK_CARET: case TOK_DOT_CARET:      /* a square that fits: what ipow_checked gives */
+            if (y == 2 && !__builtin_mul_overflow(x, x, &r)) { *out = val_int(r); return true; }
+            return false;
         default: return false;
         }
     }
@@ -59,11 +64,40 @@ static inline bool binop_numbers(enum TokenKind op, const Value *a, const Value 
         case TOK_LE: *out = val_bool(x <= y); return true;
         case TOK_GT: *out = val_bool(x >  y); return true;
         case TOK_GE: *out = val_bool(x >= y); return true;
+        case TOK_CARET: case TOK_DOT_CARET:      /* a Float squared: real_pow's x * x */
+            if (a->kind == VAL_FLOAT && b->kind == VAL_INT && b->as.i == 2) { *out = val_float(x * x); return true; }
+            return false;
         default: return false;
         }
     }
     return false;
 }
+/* Calling one function many times (0.1.42). map, and through it `~>` and
+ * the indexed reductions, called the function through call_value once per
+ * element, and every such call was a run of the VM of its own: a jmp_buf
+ * saved and restored, a setjmp, a VM taken and given back, about 100 ns
+ * before the first instruction of the body. vm_call_each makes the calls in
+ * ONE run: when the function returns, its result is handed to `take`, the
+ * next arguments are asked of `next`, and the frame is set up again on the
+ * stack that is already there.
+ *   next: write this call's e->argc arguments to args[] and return true,
+ *         or return false when there are no more. The arguments are LENT:
+ *         the VM takes its own references.
+ *   take: receives the result of the call just made and OWNS it. It may
+ *         raise (after putting the value where the caller's error path
+ *         will release it), exactly as code after a call_value could.
+ * An error in the function, in next or in take leaves through I->jmp as an
+ * error in a call_value would, so the caller's own cleanup is unchanged. A
+ * callee that is a builtin is simply called in a loop. */
+enum { VM_EACH_MAXARGS = 4 };
+typedef struct VMEach {
+    uint32_t argc;
+    bool (*next)(Interp *I, struct VMEach *e, Value *args);
+    void (*take)(Interp *I, struct VMEach *e, Value result);
+    void *ctx;
+} VMEach;
+void vm_call_each(Interp *I, Value callee, VMEach *e);
+
 Value apply_binop(Interp *I, enum TokenKind op, Value a, Value b);
 Value apply_unary(Interp *I, enum TokenKind op, Value v);
 Value transpose (Interp *I, Value v, bool conj);

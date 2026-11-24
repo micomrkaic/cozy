@@ -1,5 +1,87 @@
 # Cozy changelog
 
+## 0.1.42 — the sum with its index, at speed
+
+`map`, and with it `x ~> f` and the indexed reductions (`sum[k = a:b]`,
+`prod`, `max`, ...), which are a map and a reduction. The notation the
+language is proudest of was the slow way to write a sum; it is now the
+fast one.
+
+Milliseconds, best of five, built-in backend, a million elements:
+
+| | 0.1.41 | 0.1.42 | the same loop written out |
+|---|---|---|---|
+| `sum[k = 1:n] 1 / k ^ 2` | 143 | 71 | 103 |
+| `sum[k = 1:n] k * k` | 112 | 50 | 80 |
+| `sum(1:n ~> (_ * 2))` | 112 | 48 | |
+| `sum(map(fn t -> t * t + 1, x))`, x Float | 120 | 58 | |
+| `map(fn k -> k, 1:n)` alone | 78 | 26 | |
+
+For scale, on the same machine: Python's
+`sum(1 / k ** 2 for k in range(1, n + 1))` takes 65, Octave's
+`sum(arrayfun(@(k) 1/k^2, 1:n))` 2450 and its `for` loop 830. The
+vectorised form, `sum(1 ./ (1:n) .^ 2)`, is still the fastest way to say
+it in Cozy (16) and in NumPy (2.4).
+
+### Changed
+- **All the calls of a `map` are made in one run of the VM.** Each
+  element used to be a `call_value`: a run of the VM of its own, with a
+  jump buffer saved and restored, a `setjmp`, a VM taken and returned.
+  `vm_call_each` (nrt.h) runs the function once per element inside a
+  single run. When the function returns, its result is handed to the
+  caller and the next argument is put into the same frame: the closure
+  stays in slot 0, the locals are emptied, the instruction pointer goes
+  back to 0.
+- **Numbers are not boxed on the way to the array.** The results were
+  collected as forty-byte values -- forty megabytes for a million
+  elements, touched once -- and packed at the end. While every result is
+  an Int or a Float they are written straight into the array that is
+  returned: Ints until the first Float arrives, which turns what is
+  there into Floats in place. At the first result of any other kind
+  (complex, a string, a date, a dual, null) the numbers so far are boxed
+  after all and the general path, unchanged, carries on. This was the
+  larger half of the gain; the temporary cost more than the calls did.
+- **A square is answered without a call.** `x ^ 2` for an Int that fits
+  and for a Float joins the two-number operators the VM answers inline
+  (`binop_numbers`), giving what the general path gives: 2,332 power
+  expressions over awkward values print the same in 0.1.41 and 0.1.42.
+
+### Fixed
+- **`map` with a function that returns Bool for some elements and
+  numbers for others.** The Bools were stored as if they were numbers:
+  `map(fn k -> if k > 2 then true else k end, 1:4)` was `[1, 2, 0, 0]`,
+  and with Floats the `true`s came out as 4.94e-324. It is an error now
+  ("map: the function returned Bool for some elements and numbers for
+  others"), the one a matrix literal gives for `[true, 2]`. All Bool is
+  a logical array, as before.
+
+### Verified
+- tests/83_map.test: 71 cases, 64 of them generated from the 0.1.41
+  binary: the kind of the result for every order in which Ints, Floats,
+  complex numbers, strings, dates and nulls can arrive; a clean frame
+  for every call (skipped lets, early returns, a return from inside an
+  index, defaults, loops left by `break`); builtins and wrong things as
+  the function; errors in the middle; the pipe and the reductions; a
+  million elements with the kind changing at the last one.
+- 6,000 random sessions of maps, pipes and reductions (functions that
+  print, assign globals, return early, raise, return every kind, call
+  `map` themselves) run through 0.1.41 and 0.1.42: 5,706 identical in
+  output and errors; the other 294 contain the Bool mixture above and
+  are identical once those statements are taken out. 3,000 of them
+  under the sanitizers: clean.
+- The golden suite (1900 inputs) under both backends, the sanitizers
+  and WebAssembly, built with GCC 13, GCC 14 and clang; the stress
+  workout.
+
+### Not done
+- An indexed reduction still builds its range and the mapped array
+  before reducing them (two arrays of n numbers); fusing the three would
+  save that. A reduction over three elements costs about 400 ns, nearly
+  all of it setting up.
+- The numerical routines that call your function (`fzero`, `integral`,
+  the optimisers) still start a run of the VM per evaluation.
+- `x ^ 3` and other powers go the general way.
+
 ## 0.1.41 — builds with GCC 14
 
 ### Fixed

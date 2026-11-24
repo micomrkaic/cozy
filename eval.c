@@ -2240,6 +2240,101 @@ static Value sc_hdual12(Interp *I, Value v)
 static Value bi_hdualval(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdualval); }
 static Value bi_hdual12(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sc_hdual12); }
 
+/* map: f over the elements, all the calls in one run of the VM
+ * (vm_call_each, nrt.h).
+ *
+ * The results used to be collected as boxed Values -- forty bytes each,
+ * forty megabytes for a million elements, touched once and thrown away --
+ * and packed into the array at the end. While every result is an Int or a
+ * Float they now go straight into the array that will be returned: an Int
+ * array until the first Float arrives, which turns what is there into
+ * Floats in place (what packing did with a mixture). At the first result of
+ * any other kind -- complex, Bool, a string, a date, a dual, null -- the
+ * numbers so far are boxed after all and the general path carries on from
+ * there, so every such case is packed by the code that always packed it. */
+typedef struct {
+    const ArrObj *arr;
+    size_t nn, at;                 /* elements; the next one to hand to f */
+    Value  out;                    /* the result, while it is all Int or all Float */
+    bool   typed, floats;          /* out is in use; and holds doubles */
+    Value *tmp;                    /* else: the boxed results ... */
+    volatile size_t done;          /* how many results there are: what an error must release */
+    bool saw_str, saw_bool, saw_other;
+} MapRun;
+
+static bool map_next(Interp *I, VMEach *e, Value *args)
+{
+    (void)I;
+    MapRun *m = e->ctx;
+    if (m->at == m->nn) return false;
+    args[0] = arr_get(m->arr, m->at++);       /* borrowed from arr (see arr_get) */
+    return true;
+}
+
+/* leave the typed path: box what is there, as the kind it was stored as */
+static void map_untype(MapRun *m)
+{
+    ArrObj *o = as_arr(m->out);
+    Value *tmp = m->nn ? malloc(m->nn * sizeof *tmp) : nullptr;
+    if (m->nn && !tmp) abort();
+    for (size_t k = 0; k < m->done; k++)
+        tmp[k] = m->floats ? val_float(((const double *)o->data)[k]) : val_int(((const int64_t *)o->data)[k]);
+    m->tmp = tmp;
+    m->typed = false;
+    if (m->done) m->saw_other = true;
+    value_release(m->out);
+    m->out = val_null();
+}
+
+static void map_take(Interp *I, VMEach *e, Value mapped)
+{
+    MapRun *m = e->ctx;
+    if (m->typed) {
+        ArrObj *o = as_arr(m->out);
+        if (mapped.kind == VAL_INT) {
+            if (m->floats) ((double *)o->data)[m->done] = (double)mapped.as.i;
+            else           ((int64_t *)o->data)[m->done] = mapped.as.i;
+            m->done = m->done + 1;
+            return;
+        }
+        if (mapped.kind == VAL_FLOAT) {
+            if (!m->floats) {                          /* the Ints so far become Floats */
+                for (size_t k = 0; k < m->done; k++)
+                    ((double *)o->data)[k] = (double)((const int64_t *)o->data)[k];
+                o->elt = ELT_FLOAT;
+                m->floats = true;
+            }
+            ((double *)o->data)[m->done] = mapped.as.f;
+            m->done = m->done + 1;
+            return;
+        }
+        map_untype(m);
+    }
+    m->tmp[m->done] = mapped;
+    m->done = m->done + 1;
+    /* The result is an array of what f returned, so each must be
+     * something an array can hold. An Array, Record or function used
+     * to be packed as if it were a number -- its pointer read as a
+     * complex -- and printed as noise (found 0.1.39 by the generator
+     * that tests scoping; `sum[k = 1:3] [k, 2]` reaches here too).
+     * A null is still let through and packed as zero, as it always
+     * was: `map(fn k -> print(k), x);` is somebody's for-each. */
+    if (mapped.kind == VAL_STRING) m->saw_str = true;
+    else if (mapped.kind == VAL_BOOL) m->saw_bool = true;
+    else if (is_num(mapped) || mapped.kind == VAL_DATE || mapped.kind == VAL_NULL) m->saw_other = true;
+    else
+        runtime_error(I, "map: the function must return a number or a string for each element, got %s",
+                      type_name(mapped.kind));
+    if (m->saw_str && m->saw_other)
+        runtime_error(I, "map: the function returned strings for some elements and numbers for others");
+    /* Bool with anything else: an array is logical or it is not, as in a
+     * matrix literal. (Until 0.1.42 the Bools were stored as if they were
+     * numbers -- true read as a Float is 4.94e-324, as an Int 0.) */
+    if (m->saw_bool && (m->saw_other || m->saw_str))
+        runtime_error(I, "map: the function returned Bool for some elements and %s for others",
+                      m->saw_str ? "strings" : "numbers");
+}
+
 static Value bi_map(Interp *I, Value *args, uint32_t n)
 {
     (void)n;
@@ -2247,40 +2342,23 @@ static Value bi_map(Interp *I, Value *args, uint32_t n)
     if (!is_array(a)) runtime_error(I, "map: second argument must be an Array");
     ArrObj *arr = as_arr(a);
     size_t nn = (size_t)arr->rows * arr->cols;
-    Value *tmp = nn ? malloc(nn * sizeof *tmp) : nullptr;
+    MapRun m = { .arr = arr, .nn = nn, .out = val_array(ELT_INT, arr->rows, arr->cols), .typed = true };
+    VMEach each = { .argc = 1, .next = map_next, .take = map_take, .ctx = &m };
 
-    /* If an element call raises, free the partial result and re-raise — array
-     * elements are immediate scalars, so only the computed results leak. */
+    /* If an element call raises, free the partial result and re-raise. */
     jmp_buf saved;
     memcpy(saved, I->jmp, sizeof(jmp_buf));
-    volatile size_t done = 0;
-    bool saw_str = false, saw_other = false;
-    if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);
-    for (size_t k = 0; k < nn; k++) {
-        Value e = arr_get(arr, k);            /* borrowed from arr (see arr_get) */
-        Value one[1] = { e };
-        Value mapped = call_value(I, f, one, 1);
-        tmp[k] = mapped;
-        done = k + 1;
-        /* The result is an array of what f returned, so each must be
-         * something an array can hold. An Array, Record or function used
-         * to be packed as if it were a number -- its pointer read as a
-         * complex -- and printed as noise (found 0.1.39 by the generator
-         * that tests scoping; `sum[k = 1:3] [k, 2]` reaches here too).
-         * A null is still let through and packed as zero, as it always
-         * was: `map(fn k -> print(k), x);` is somebody's for-each. */
-        if (mapped.kind == VAL_STRING) saw_str = true;
-        else if (is_num(mapped) || mapped.kind == VAL_BOOL || mapped.kind == VAL_DATE
-                 || mapped.kind == VAL_NULL) saw_other = true;
-        else
-            runtime_error(I, "map: the function must return a number or a string for each element, got %s",
-                          type_name(mapped.kind));
-        if (saw_str && saw_other)
-            runtime_error(I, "map: the function returned strings for some elements and numbers for others");
+    if (setjmp(I->jmp)) {
+        if (!m.typed) array_build_abort(I, m.tmp, m.done, saved);
+        value_release(m.out);
+        memcpy(I->jmp, saved, sizeof(jmp_buf));
+        longjmp(I->jmp, 1);
     }
+    vm_call_each(I, f, &each);
     memcpy(I->jmp, saved, sizeof(jmp_buf));
-    Value r = pack_array(tmp, nn, arr->rows, arr->cols);
-    free(tmp);
+    if (m.typed) return m.out;
+    Value r = pack_array(m.tmp, nn, arr->rows, arr->cols);
+    free(m.tmp);
     return r;
 }
 
