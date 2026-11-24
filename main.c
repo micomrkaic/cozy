@@ -163,6 +163,7 @@ int main(int argc, char **argv)
         value_release(result);
         env_clear(globals);     /* break global-scope closure/env cycles */
         env_release(globals);
+    env_pool_drain(); vm_pool_drain();
         vm_session_end();       /* free retained chunks before the arena they reference */
     }
 

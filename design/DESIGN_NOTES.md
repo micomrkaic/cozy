@@ -761,3 +761,38 @@ the covariance for second. DECIDED: derivatives stay with respect to the
 shocks themselves, not to orthogonalised innovations, so a shock whose
 variance is zero keeps its place in the rule. RESIDUE: correlated shocks
 in the package's interface.
+
+## 25. The interpreter's own overhead — SHIPPED 0.1.38 (entry 23's
+residue "the interpreter's own overhead"; owner-triggered: "it costs
+nothing in precision"). Profiling said the bytecode loop was not where
+the time went. In array code it was the generality of the elementwise
+kernels (box, dispatch on kind, repack: about 60% of
+`sin(x).^2 + cos(x).^2`); in sorting, qsort's comparator on boxed
+values; in scalar code, the environment (an allocation per scope, names
+compared as strings up the chain). DECIDED: fast paths beside the
+general kernels, not instead of them -- the general path stays the
+definition, a fast path must reproduce it to the bit and decline
+whenever an element would change the result's type, and
+tests/80_fastpaths.test plus a differential run against the previous
+binary are the proof. DECIDED: x^2 is x*x in both scalar and array
+kernels (correctly rounded; the only result that may differ from
+0.1.37, in the last bit, toward the exact value). DECIDED: sorting is
+stable by construction (merge below 4096 elements, LSD radix on a
+monotone key above), which is what glibc's qsort happened to give and
+the C standard does not promise. DECIDED: the hash index of a large
+environment is a checked shortcut, never the truth: eval.c edits the
+global environment's arrays in five places (clear, keep, load groups),
+and a table that had to be told of each would be a bug waiting; a hit is
+verified against its slot and a miss falls back to the scan. DECIDED:
+dsyevd/zheevd/dgesdd/zgesdd on the LAPACK backends (the drivers NumPy
+uses; ten times faster with vectors at n = 1000, residuals no worse).
+REJECTED for this release: compile-time slots for let and loop
+variables. It is the right fix for scalar loops (a lookup would be an
+index), but `eval`, `names` and `who` see a function's locals through
+the environment chain today, and closures snapshot free variables by
+looking them up at creation; slots change what those mean and need
+their own design. TRIGGER: scalar-loop speed becoming the complaint, or
+a JIT-shaped ambition. RESIDUE: the dispatch loop itself (about sixty
+machine instructions per bytecode, largely 40-byte Values copied by
+value); the built-in backend's eig and svd, untouched here; prod, cumsum,
+var/std and the dim-wise reductions, still on the general path.

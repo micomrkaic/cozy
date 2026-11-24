@@ -232,6 +232,11 @@ static void rng_normal_pair(Interp *I, double *z0, double *z1)   /* Box-Muller *
     *z0 = r * cos(th); *z1 = r * sin(th);
 }
 
+/* x^y on reals. A square is a multiplication: x * x is the correctly
+ * rounded square, which pow() only nearly is, and it is what the scalar
+ * and the array paths must both do to agree. */
+static inline double real_pow(double x, double y) { return y == 2.0 ? x * x : pow(x, y); }
+
 static Arith arith_of(enum TokenKind op)
 {
     switch (op) {
@@ -335,7 +340,7 @@ static Value scalar_arith_k(Interp *I, Arith kind, Value a, Value b)
             if (x < 0.0 && isfinite(x) && isfinite(y) && y != floor(y)) {
                 Cplx r = negreal_pow(x, y); return val_complex(r.re, r.im);
             }
-            return val_float(pow(x, y));
+            return val_float(real_pow(x, y));
         default:     break;
         }
         break;
@@ -490,6 +495,204 @@ static EltType elt_max(EltType a, EltType b) { return a > b ? a : b; }   /* nume
  * An all-Bool batch yields a logical array; bools never raise the numeric tower. */
 [[noreturn]] static void array_build_abort(Interp *I, Value *tmp, size_t done, jmp_buf saved);
 
+/* ---- fast paths over real arrays ----------------------------------------
+ * The elementwise loops further down are written for the whole numeric
+ * tower: each element is boxed into a Value, sent through scalar_arith_k
+ * (or a scalar kernel), and the results are scanned again to choose the
+ * array's element type. That is the definition of these operations, and
+ * for complex, dual, string and mixed arrays it is also how they are
+ * computed.
+ *
+ * For the case that carries nearly all numerical work -- Int and Float
+ * arrays and scalars -- the type of the answer is known before the loop
+ * starts, and the loop can run over the doubles (or the int64s)
+ * themselves. Every fast path here computes what the general path
+ * computes: the same operations on the same operands in the same order,
+ * so the result is the same to the last bit. Where an element would leave
+ * the path's type -- an Int overflow, which promotes to Float; a negative
+ * base with a fractional exponent, or a square root of a negative number,
+ * which go complex -- the fast path declines and the general path decides.
+ * tests/80_fastpaths.test holds the two against each other. */
+
+typedef struct {
+    const double  *d;       /* a Float array's data, or the converted copy of an Int array's */
+    const int64_t *i;       /* an Int array's data */
+    double sd; int64_t si;  /* a scalar's value, both ways */
+    bool arr, isint;
+    double *own;            /* the converted copy, to free */
+} RealArg;
+
+static bool real_arg(Value v, RealArg *r)
+{
+    *r = (RealArg){ 0 };
+    if (v.kind == VAL_FLOAT) { r->sd = v.as.f; return true; }
+    if (v.kind == VAL_INT)   { r->si = v.as.i; r->sd = (double)v.as.i; r->isint = true; return true; }
+    if (v.kind != VAL_ARRAY) return false;
+    const ArrObj *a = as_arr(v);
+    if (a->elt == ELT_FLOAT) { r->d = (const double *)a->data;  r->arr = true; return true; }
+    if (a->elt == ELT_INT)   { r->i = (const int64_t *)a->data; r->arr = true; r->isint = true; return true; }
+    return false;
+}
+
+/* an Int array as doubles (as_double of each element), made when a Float is across from it */
+static bool real_arg_doubles(RealArg *r, size_t n)
+{
+    if (!r->arr || !r->isint || r->d) return true;
+    r->own = malloc(n * sizeof(double));
+    if (!r->own) return false;
+    for (size_t k = 0; k < n; k++) r->own[k] = (double)r->i[k];
+    r->d = r->own;
+    return true;
+}
+
+/* one loop for each shape of operands, so that none tests the shape per element */
+#define REAL_LOOP(OUT, EXPR)                                                          \
+    do {                                                                              \
+        if (pa && pb) for (size_t k = 0; k < n; k++) { double u = pa[k], v = pb[k]; (OUT)[k] = (EXPR); } \
+        else if (pa)  for (size_t k = 0; k < n; k++) { double u = pa[k], v = sb;    (OUT)[k] = (EXPR); } \
+        else          for (size_t k = 0; k < n; k++) { double u = sa,    v = pb[k]; (OUT)[k] = (EXPR); } \
+    } while (0)
+
+/* a (op) b elementwise, for Int and Float operands of which at least one is an array */
+static bool ew_fast(Arith kind, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+{
+    size_t n = (size_t)rows * cols;
+    RealArg x, y;
+    if (n == 0 || !real_arg(a, &x) || !real_arg(b, &y)) return false;
+    if (kind == AR_LDIV) { RealArg t = x; x = y; y = t; kind = AR_DIV; }      /* a \ b is b / a */
+
+    if (x.isint && y.isint && kind != AR_DIV) {        /* Int with Int stays Int while it fits */
+        Value r = val_array(ELT_INT, rows, cols);
+        int64_t *o = (int64_t *)as_arr(r)->data;
+        bool ok = true;
+        for (size_t k = 0; k < n && ok; k++) {
+            int64_t u = x.arr ? x.i[k] : x.si, v = y.arr ? y.i[k] : y.si;
+            switch (kind) {
+            case AR_ADD: ok = !__builtin_add_overflow(u, v, &o[k]); break;
+            case AR_SUB: ok = !__builtin_sub_overflow(u, v, &o[k]); break;
+            case AR_MUL: ok = !__builtin_mul_overflow(u, v, &o[k]); break;
+            case AR_POW: ok = v >= 0 && ipow_checked(u, v, &o[k]); break;
+            default:     ok = false; break;
+            }
+        }
+        if (!ok) { value_release(r); return false; }   /* an element promotes to Float: not here */
+        *out = r;
+        return true;
+    }
+
+    if (!real_arg_doubles(&x, n) || !real_arg_doubles(&y, n)) { free(x.own); free(y.own); return false; }
+    const double *pa = x.arr ? x.d : nullptr, *pb = y.arr ? y.d : nullptr;
+    double sa = x.sd, sb = y.sd;
+    if (kind == AR_POW) {                              /* the tower: these elements are complex */
+        bool complex_result = false;
+        if (pa && pb) for (size_t k = 0; k < n && !complex_result; k++)
+            complex_result = pa[k] < 0.0 && isfinite(pa[k]) && isfinite(pb[k]) && pb[k] != floor(pb[k]);
+        else if (pa) { if (isfinite(sb) && sb != floor(sb))
+            for (size_t k = 0; k < n && !complex_result; k++) complex_result = pa[k] < 0.0 && isfinite(pa[k]); }
+        else if (sa < 0.0 && isfinite(sa))
+            for (size_t k = 0; k < n && !complex_result; k++) complex_result = isfinite(pb[k]) && pb[k] != floor(pb[k]);
+        if (complex_result) { free(x.own); free(y.own); return false; }
+    }
+    Value r = val_array(ELT_FLOAT, rows, cols);
+    double *o = (double *)as_arr(r)->data;
+    switch (kind) {
+    case AR_ADD: REAL_LOOP(o, u + v); break;
+    case AR_SUB: REAL_LOOP(o, u - v); break;
+    case AR_MUL: REAL_LOOP(o, u * v); break;
+    case AR_DIV: REAL_LOOP(o, u / v); break;
+    case AR_POW:
+        if (pa && !pb && sb == 2.0) for (size_t k = 0; k < n; k++) o[k] = pa[k] * pa[k];
+        else REAL_LOOP(o, real_pow(u, v));
+        break;
+    default:
+        value_release(r); free(x.own); free(y.own);
+        return false;
+    }
+    free(x.own); free(y.own);
+    *out = r;
+    return true;
+}
+
+/* a (cmp) b elementwise: Int with Int compares as integers, anything with a Float as doubles */
+static bool cmp_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+{
+    size_t n = (size_t)rows * cols;
+    RealArg x, y;
+    if (n == 0 || !real_arg(a, &x) || !real_arg(b, &y)) return false;
+    if (op != TOK_EQ && op != TOK_NE && op != TOK_LT && op != TOK_LE && op != TOK_GT && op != TOK_GE) return false;
+    Value r = val_array(ELT_BOOL, rows, cols);
+    unsigned char *o = (unsigned char *)as_arr(r)->data;
+    if (x.isint && y.isint) {
+        for (size_t k = 0; k < n; k++) {
+            int64_t u = x.arr ? x.i[k] : x.si, v = y.arr ? y.i[k] : y.si;
+            o[k] = op == TOK_EQ ? u == v : op == TOK_NE ? u != v : op == TOK_LT ? u < v
+                 : op == TOK_LE ? u <= v : op == TOK_GT ? u > v : u >= v;
+        }
+        *out = r;
+        return true;
+    }
+    if (!real_arg_doubles(&x, n) || !real_arg_doubles(&y, n)) { free(x.own); free(y.own); value_release(r); return false; }
+    const double *pa = x.arr ? x.d : nullptr, *pb = y.arr ? y.d : nullptr;
+    double sa = x.sd, sb = y.sd;
+    switch (op) {
+    case TOK_EQ: REAL_LOOP(o, u == v); break;
+    case TOK_NE: REAL_LOOP(o, u != v); break;
+    case TOK_LT: REAL_LOOP(o, u <  v); break;
+    case TOK_LE: REAL_LOOP(o, u <= v); break;
+    case TOK_GT: REAL_LOOP(o, u >  v); break;
+    default:     REAL_LOOP(o, u >= v); break;
+    }
+    free(x.own); free(y.own);
+    *out = r;
+    return true;
+}
+
+/* a & b, a | b on masks: both sides Bool (an array of them, or one) */
+static bool logical_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+{
+    size_t n = (size_t)rows * cols;
+    bool aa = is_array(a), ba = is_array(b);
+    if (n == 0 || !(aa ? as_arr(a)->elt == ELT_BOOL : a.kind == VAL_BOOL)
+               || !(ba ? as_arr(b)->elt == ELT_BOOL : b.kind == VAL_BOOL)) return false;
+    Value r = val_array(ELT_BOOL, rows, cols);
+    unsigned char *o = (unsigned char *)as_arr(r)->data;
+    const unsigned char *pa = aa ? (const unsigned char *)as_arr(a)->data : nullptr;
+    const unsigned char *pb = ba ? (const unsigned char *)as_arr(b)->data : nullptr;
+    bool sa = !aa && a.as.b, sb = !ba && b.as.b;
+    if (op == TOK_AMP) for (size_t k = 0; k < n; k++) o[k] = ((pa ? pa[k] != 0 : sa) && (pb ? pb[k] != 0 : sb));
+    else               for (size_t k = 0; k < n; k++) o[k] = ((pa ? pa[k] != 0 : sa) || (pb ? pb[k] != 0 : sb));
+    *out = r;
+    return true;
+}
+
+/* A function of one real variable over a real array. The kernel writes
+ * f(in[k]) to out[k] and returns false if an element's result is not a real
+ * number (the general path then builds the complex array); in and out may
+ * be the same. `ints`: an Int array is read as doubles (false for the
+ * functions that return an Int for an Int, which the general path does). */
+typedef bool (*RealKernel)(const double *in, double *out, size_t n);
+static Value map_unary(Interp *I, Value v, Value (*f)(Interp *, Value));
+
+static Value map_real(Interp *I, Value v, Value (*f)(Interp *, Value), RealKernel kernel, bool ints)
+{
+    if (is_array(v)) {
+        const ArrObj *a = as_arr(v);
+        size_t nn = (size_t)a->rows * a->cols;
+        if (nn > 0 && (a->elt == ELT_FLOAT || (ints && a->elt == ELT_INT))) {
+            Value out = val_array(ELT_FLOAT, a->rows, a->cols);
+            double *o = (double *)as_arr(out)->data;
+            const double *in = (const double *)a->data;
+            if (a->elt == ELT_INT) {
+                for (size_t k = 0; k < nn; k++) o[k] = (double)((const int64_t *)a->data)[k];
+                in = o;
+            }
+            if (kernel(in, o, nn)) return out;
+            value_release(out);
+        }
+    }
+    return map_unary(I, v, f);
+}
+
 static Value pack_array(Value *tmp, size_t n, uint32_t rows, uint32_t cols)
 {
     EltType e = ELT_INT;
@@ -516,6 +719,8 @@ static Value elementwise(Interp *I, Arith kind, Value a, Value b)
     } else if (aa) { rows = as_arr(a)->rows; cols = as_arr(a)->cols; }
     else           { rows = as_arr(b)->rows; cols = as_arr(b)->cols; }
 
+    Value fast;
+    if (ew_fast(kind, a, b, rows, cols, &fast)) return fast;
     size_t n = (size_t)rows * cols;
     Value *tmp = n ? malloc(n * sizeof *tmp) : nullptr;
     jmp_buf saved; memcpy(saved, I->jmp, sizeof(jmp_buf));
@@ -551,6 +756,8 @@ static Value elementwise_cmp(Interp *I, enum TokenKind op, Value a, Value b)
 {
     bool aa, ba; uint32_t rows, cols;
     ew_dims(I, a, b, &aa, &ba, &rows, &cols);
+    Value fast;
+    if (cmp_fast(op, a, b, rows, cols, &fast)) return fast;
     Value out = val_array(ELT_BOOL, rows, cols);    /* pre-setjmp: handler may release it */
     ArrObj *o = as_arr(out);
     size_t n = (size_t)rows * cols;
@@ -571,6 +778,8 @@ static Value elementwise_logical(Interp *I, enum TokenKind op, Value a, Value b)
 {
     bool aa, ba; uint32_t rows, cols;
     ew_dims(I, a, b, &aa, &ba, &rows, &cols);
+    Value fast;
+    if (logical_fast(op, a, b, rows, cols, &fast)) return fast;
     Value out = val_array(ELT_BOOL, rows, cols);
     ArrObj *o = as_arr(out);
     size_t n = (size_t)rows * cols;
@@ -1461,6 +1670,40 @@ Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; r
 
 Value apply_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
+    /* Two plain numbers -- every step of a scalar loop -- answered here as
+     * scalar_arith_k and scalar_cmp answer them, without the walk through
+     * the kinds that are not numbers: Int with Int stays Int while it fits
+     * and promotes to Float when it does not; anything with a Float is done
+     * in doubles; division is always Float. Powers, and every other kind,
+     * go the general way below. */
+    if ((a.kind == VAL_INT || a.kind == VAL_FLOAT) && (b.kind == VAL_INT || b.kind == VAL_FLOAT)) {
+        if (a.kind == VAL_INT && b.kind == VAL_INT) {
+            int64_t x = a.as.i, y = b.as.i, r;
+            switch (op) {
+            case TOK_PLUS:  return __builtin_add_overflow(x, y, &r) ? val_float((double)x + (double)y) : val_int(r);
+            case TOK_MINUS: return __builtin_sub_overflow(x, y, &r) ? val_float((double)x - (double)y) : val_int(r);
+            case TOK_STAR: case TOK_DOT_STAR:
+                            return __builtin_mul_overflow(x, y, &r) ? val_float((double)x * (double)y) : val_int(r);
+            case TOK_SLASH: case TOK_DOT_SLASH: return val_float((double)x / (double)y);
+            case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
+            case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
+            case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
+            default: break;
+            }
+        } else {
+            double x = a.kind == VAL_INT ? (double)a.as.i : a.as.f, y = b.kind == VAL_INT ? (double)b.as.i : b.as.f;
+            switch (op) {
+            case TOK_PLUS:  return val_float(x + y);
+            case TOK_MINUS: return val_float(x - y);
+            case TOK_STAR: case TOK_DOT_STAR:   return val_float(x * y);
+            case TOK_SLASH: case TOK_DOT_SLASH: return val_float(x / y);
+            case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
+            case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
+            case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
+            default: break;
+            }
+        }
+    }
     if (is_sparse(a) || is_sparse(b)) return sparse_binop(I, op, a, b);
     if (is_array(a) || is_array(b)) return array_binop(I, op, a, b);
     switch (op) {
@@ -1754,6 +1997,19 @@ static Value bi_sum(Interp *I, Value *args, uint32_t n)
         int64_t cnt = 0;
         for (size_t k = 0; k < nn; k++) cnt += ((unsigned char *)arr->data)[k] != 0;
         return val_int(cnt);
+    }
+    if (arr->elt == ELT_FLOAT && nn > 0) {            /* the same additions in the same order */
+        const double *d = (const double *)arr->data;
+        double s = 0.0;
+        for (size_t k = 0; k < nn; k++) s += d[k];
+        return val_float(s);
+    }
+    if (arr->elt == ELT_INT) {                        /* exact while it fits; else the loop below promotes */
+        const int64_t *d = (const int64_t *)arr->data;
+        int64_t s = 0;
+        size_t k = 0;
+        while (k < nn && !__builtin_add_overflow(s, d[k], &s)) k++;
+        if (k == nn) return val_int(s);
     }
     Value acc = val_int(0);
     for (size_t k = 0; k < nn; k++) {
@@ -2084,8 +2340,21 @@ static Value sqrt_scalar(Interp *I, Value v)
     runtime_error(I, "sqrt: expected a number, got %s", type_name(v.kind));
 }
 
-static Value bi_abs(Interp *I, Value *args, uint32_t n)  { (void)n; return map_unary(I, args[0], abs_scalar); }
-static Value bi_sqrt(Interp *I, Value *args, uint32_t n) { (void)n; return map_unary(I, args[0], sqrt_scalar); }
+static bool rk_abs(const double *in, double *o, size_t n)
+{
+    for (size_t k = 0; k < n; k++) o[k] = fabs(in[k]);
+    return true;
+}
+static bool rk_sqrt(const double *in, double *o, size_t n)
+{
+    for (size_t k = 0; k < n; k++) {
+        if (in[k] < 0) return false;                  /* the tower: complex, by the general path */
+        o[k] = sqrt(in[k]);
+    }
+    return true;
+}
+static Value bi_abs(Interp *I, Value *args, uint32_t n)  { (void)n; return map_real(I, args[0], abs_scalar, rk_abs, false); }
+static Value bi_sqrt(Interp *I, Value *args, uint32_t n) { (void)n; return map_real(I, args[0], sqrt_scalar, rk_sqrt, true); }
 
 static Value fill_array(Interp *I, Value *args, double fill)
 {
@@ -6402,7 +6671,10 @@ static Cplx c_atanhz(Cplx z) { return c_scale(0.5, c_logz(c_div(c_add((Cplx){1,0
             HDual r = hd_chain(v.as.h, rfn(x), (dexpr), (d2expr));                    \
             return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         return val_float(rfn(as_double(v))); }                                        \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+    static bool rk_##name(const double *in, double *o, size_t n) {                    \
+        for (size_t k = 0; k < n; k++) o[k] = rfn(in[k]);                             \
+        return true; }                                                                \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
 ENTIRE_UNARY(exp,   exp,   c_expz,   exp(x),  exp(x))
 ENTIRE_UNARY(sin,   sin,   c_sinz,   cos(x),  -sin(x))
 ENTIRE_UNARY(cos,   cos,   c_cosz,   -sin(x), -cos(x))
@@ -6432,7 +6704,12 @@ ENTIRE_UNARY(asinh, asinh, c_asinhz, 1.0 / sqrt(x * x + 1.0), -x / pow(x * x + 1
         double x = as_double(v);                                                      \
         if ((indomain) || isnan(x)) return val_float(rfn(x));                         \
         Cplx r = cfn((Cplx){ x, 0.0 }); return val_complex(r.re, r.im); }             \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+    static bool rk_##name(const double *in, double *o, size_t n) {                    \
+        for (size_t k = 0; k < n; k++) { double x = in[k];                            \
+            if (!((indomain) || isnan(x))) return false;      /* complex: not here */ \
+            o[k] = rfn(x); }                                                          \
+        return true; }                                                                \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
 TOWER_UNARY(log,   log,   c_logz,   x >= 0.0,             1.0 / x,               -1.0 / (x * x))
 TOWER_UNARY(asin,  asin,  c_asinz,  x >= -1.0 && x <= 1.0, 1.0 / sqrt(1.0 - x * x),  x / pow(1.0 - x * x, 1.5))
 TOWER_UNARY(acos,  acos,  c_acosz,  x >= -1.0 && x <= 1.0, -1.0 / sqrt(1.0 - x * x), -x / pow(1.0 - x * x, 1.5))
@@ -6456,7 +6733,12 @@ TOWER_UNARY(atanh, atanh, c_atanhz, x > -1.0 && x < 1.0,   1.0 / (1.0 - x * x), 
         double x = as_double(v);                                                      \
         if (!(x < 0.0)) return val_float(log(x)/l);   /* NaN stays real */            \
         Cplx r = c_logz((Cplx){ x, 0.0 }); return val_complex(r.re/l, r.im/l); }       \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+    static bool rk_##name(const double *in, double *o, size_t n) { double l = log((double)base); \
+        for (size_t k = 0; k < n; k++) { double x = in[k];                            \
+            if (x < 0.0) return false;                                                \
+            o[k] = log(x)/l; }                                                        \
+        return true; }                                                                \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
 LOGB_UNARY(log10, 10.0)
 LOGB_UNARY(log2,   2.0)
 #undef LOGB_UNARY
@@ -6472,7 +6754,10 @@ LOGB_UNARY(log2,   2.0)
         return val_float(r0 == 0.0 ? 0.0 : r0); }   /* canonical zero: gemm can
             leave -1e-17 where the boxed loop left +0, and round(-eps) must
             not print -0 (the 05_decomp golden that caught this) */                                        \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+    static bool rk_##name(const double *in, double *o, size_t n) {                    \
+        for (size_t k = 0; k < n; k++) { double r0 = rfn(in[k]); o[k] = r0 == 0.0 ? 0.0 : r0; } \
+        return true; }                                                                \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, false); }
 ROUND_UNARY(floor, floor)
 ROUND_UNARY(ceil,  ceil)
 ROUND_UNARY(round, round)
@@ -6491,7 +6776,10 @@ static const double AD_2_SQRTPI = 1.1283791670955126;  /* 2/sqrt(pi): d/dx erf *
             return val_hdual(r.v, r.e1, r.e2, r.e12); }                               \
         if (v.kind == VAL_INT || v.kind == VAL_FLOAT) return val_float(rfn(as_double(v))); \
         runtime_error(I, #name ": expected a real number, got %s", type_name(v.kind)); } \
-    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_unary(I, a[0], sc_##name); }
+    static bool rk_##name(const double *in, double *o, size_t n) {                    \
+        for (size_t k = 0; k < n; k++) o[k] = rfn(in[k]);                             \
+        return true; }                                                                \
+    static Value bi_##name(Interp *I, Value *a, uint32_t n) { (void)n; return map_real(I, a[0], sc_##name, rk_##name, true); }
 #define HD_NO_D2(name) (runtime_error(I, #name ": second derivative needs trigamma, " \
         "which is not implemented — docket residue"), 0.0)
 REAL_ONLY(cbrt,   cbrt,   1.0 / (3.0 * cbrt(x) * cbrt(x)), -2.0 / (9.0 * x * cbrt(x) * cbrt(x)))
@@ -6843,6 +7131,16 @@ static Value bi_min(Interp *I, Value *args, uint32_t n)
     if (a->elt == ELT_STRING) runtime_error(I, "min: undefined for strings");
     size_t nn = (size_t)a->rows * a->cols;
     if (nn == 0) runtime_error(I, "min: empty array");
+    if (a->elt == ELT_FLOAT) {
+        const double *d = (const double *)a->data;
+        double best = d[0];
+        if (isnan(best)) return val_float(best);
+        for (size_t k = 1; k < nn; k++) {
+            if (isnan(d[k])) return val_float(d[k]);  /* a missing element makes the answer missing */
+            if (d[k] < best) best = d[k];
+        }
+        return val_float(best);
+    }
     Value best = arr_get(a, 0);
     if (isnan(as_double(best))) return best;          /* a missing element makes the answer missing */
     for (size_t k = 1; k < nn; k++) {
@@ -6871,6 +7169,16 @@ static Value bi_max(Interp *I, Value *args, uint32_t n)
     if (a->elt == ELT_STRING) runtime_error(I, "max: undefined for strings");
     size_t nn = (size_t)a->rows * a->cols;
     if (nn == 0) runtime_error(I, "max: empty array");
+    if (a->elt == ELT_FLOAT) {
+        const double *d = (const double *)a->data;
+        double best = d[0];
+        if (isnan(best)) return val_float(best);
+        for (size_t k = 1; k < nn; k++) {
+            if (isnan(d[k])) return val_float(d[k]);  /* a missing element makes the answer missing */
+            if (d[k] > best) best = d[k];
+        }
+        return val_float(best);
+    }
     Value best = arr_get(a, 0);
     if (isnan(as_double(best))) return best;          /* a missing element makes the answer missing */
     for (size_t k = 1; k < nn; k++) {
@@ -6911,18 +7219,104 @@ static Value bi_toc(Interp *I, Value *args, uint32_t n)
 /* unique                                                              */
 /* ------------------------------------------------------------------ */
 
-static int dbl_cmp(const void *a, const void *b)
-{
-    double x = *(const double *)a, y = *(const double *)b;
-    if (isnan(x)) return isnan(y) ? 0 : 1;      /* NaNs sort last (total order: */
-    if (isnan(y)) return -1;                    /* qsort needs transitivity)    */
-    return (x > y) - (x < y);
-}
-
 static int i64_cmp(const void *a, const void *b)
 {
     int64_t x = *(const int64_t *)a, y = *(const int64_t *)b;
     return (x > y) - (x < y);
+}
+
+/* ---- sorting numbers as numbers --------------------------------------------
+ * sort, unique, median and quantile used the C library's qsort, on boxed
+ * Values or through a comparison function called for every pair. These sort
+ * the doubles themselves, in the order that comparison defined: ascending,
+ * NaNs last, and stable -- equal elements keep their order, and -0 equals
+ * 0, so the two stay as they came. (The C standard does not promise that of
+ * qsort; glibc's happens to be stable, macOS's is not. Here it is a
+ * property of the language.)
+ *
+ * Short arrays: insertion sort in runs, merged bottom-up. Long ones: a
+ * radix sort by bytes, least significant first, on a key that orders the
+ * way the numbers do -- the bits of x + 0.0 (which is x, except that it
+ * turns -0 into 0, so the two share a key) with the sign bit flipped for
+ * positive numbers and every bit flipped for negative ones. NaNs are set
+ * aside first and put back at the end, in order. */
+
+#define DEFINE_MERGE_SORT(NAME, T, BEFORE)                                            \
+    static void NAME(T *a, T *tmp, size_t n)                                          \
+    {                                                                                 \
+        enum { RUN = 24 };                                                            \
+        for (size_t lo = 0; lo < n; lo += RUN) {                                      \
+            size_t hi = lo + RUN < n ? lo + RUN : n;                                  \
+            for (size_t i = lo + 1; i < hi; i++) {                                    \
+                T x = a[i]; size_t j = i;                                             \
+                while (j > lo && BEFORE(x, a[j - 1])) { a[j] = a[j - 1]; j--; }       \
+                a[j] = x;                                                             \
+            }                                                                         \
+        }                                                                             \
+        T *src = a, *dst = tmp;                                                       \
+        for (size_t w = RUN; w < n; w *= 2) {                                         \
+            for (size_t lo = 0; lo < n; lo += 2 * w) {                                \
+                size_t mid = lo + w < n ? lo + w : n, hi = lo + 2 * w < n ? lo + 2 * w : n; \
+                size_t i = lo, j = mid, k = lo;                                       \
+                while (i < mid && j < hi) dst[k++] = BEFORE(src[j], src[i]) ? src[j++] : src[i++]; \
+                while (i < mid) dst[k++] = src[i++];                                  \
+                while (j < hi)  dst[k++] = src[j++];                                  \
+            }                                                                         \
+            T *t = src; src = dst; dst = t;                                           \
+        }                                                                             \
+        if (src != a) memcpy(a, src, n * sizeof(T));                                  \
+    }
+/* a sorts strictly before b: NaN after every number, NaNs equal among themselves */
+#define DBL_BEFORE(a, b) (isnan(b) ? !isnan(a) : (a) < (b))
+/* Ints are compared as sort always compared them, through their doubles */
+#define INT_BEFORE(a, b) ((double)(a) < (double)(b))
+DEFINE_MERGE_SORT(msort_doubles, double, DBL_BEFORE)
+DEFINE_MERGE_SORT(msort_ints, int64_t, INT_BEFORE)
+
+static inline uint64_t dbl_key(double x)
+{
+    double y = x + 0.0;                                /* -0 -> 0: one key for both */
+    uint64_t u; memcpy(&u, &y, sizeof u);
+    return u ^ ((u >> 63) ? ~UINT64_C(0) : UINT64_C(0x8000000000000000));
+}
+
+/* a[0..n) in order; tmp is scratch of the same size */
+static void sort_doubles_with(double *a, double *tmp, size_t n)
+{
+    if (n < 4096) { msort_doubles(a, tmp, n); return; }
+    size_t m = 0, nans = 0;                            /* numbers to the front of tmp, NaNs behind them */
+    for (size_t k = 0; k < n; k++) nans += isnan(a[k]);
+    size_t q = n - nans;
+    for (size_t k = 0; k < n; k++) { if (isnan(a[k])) tmp[q++] = a[k]; else tmp[m++] = a[k]; }
+    memcpy(a + m, tmp + m, nans * sizeof *a);          /* the NaNs are placed */
+    size_t (*hist)[256] = calloc(8, sizeof *hist);
+    if (!hist) { memcpy(a, tmp, m * sizeof *a); msort_doubles(a, tmp, m); return; }
+    for (size_t k = 0; k < m; k++) {
+        uint64_t u = dbl_key(tmp[k]);
+        for (int b = 0; b < 8; b++) hist[b][(u >> (8 * b)) & 0xff]++;
+    }
+    double *src = tmp, *dst = a;
+    for (int b = 0; b < 8; b++) {
+        size_t *h = hist[b];
+        bool one_bucket = false;                       /* every key has the same byte here: nothing to do */
+        for (int v = 0; v < 256 && !one_bucket; v++) one_bucket = h[v] == m;
+        if (one_bucket) continue;
+        size_t at = 0;
+        for (int v = 0; v < 256; v++) { size_t c = h[v]; h[v] = at; at += c; }
+        for (size_t k = 0; k < m; k++) { double x = src[k]; dst[h[(dbl_key(x) >> (8 * b)) & 0xff]++] = x; }
+        double *t = src; src = dst; dst = t;
+    }
+    free(hist);
+    if (src != a) memcpy(a, src, m * sizeof *a);
+}
+
+static void sort_doubles(double *a, size_t n)
+{
+    if (n < 2) return;
+    double *tmp = malloc(n * sizeof *tmp);
+    if (!tmp) abort();
+    sort_doubles_with(a, tmp, n);
+    free(tmp);
 }
 
 /* unique(A): sorted distinct elements. A vector keeps its orientation; a
@@ -6984,7 +7378,7 @@ static Value bi_unique(Interp *I, Value *args, uint32_t n)
     double *buf = malloc(nn * sizeof *buf);
     if (!buf) abort();
     memcpy(buf, a->data, nn * sizeof *buf);
-    qsort(buf, nn, sizeof *buf, dbl_cmp);
+    sort_doubles(buf, nn);
     size_t k = 0;
     for (size_t i = 0; i < nn; i++)
         if (i == 0 || !(buf[i] == buf[k-1])) buf[k++] = buf[i];   /* NaN != NaN: kept */
@@ -7029,7 +7423,7 @@ static double st_std(Interp *I, double *buf, size_t n, double w)
 static double st_median(Interp *I, double *buf, size_t n, double unused)
 {
     (void)I; (void)unused;
-    qsort(buf, n, sizeof *buf, dbl_cmp);
+    sort_doubles(buf, n);
     if (isnan(buf[n - 1])) return buf[n - 1];         /* NaNs sort last: missing in, missing out */
     return (n & 1) ? buf[n / 2] : 0.5 * (buf[n/2 - 1] + buf[n/2]);
 }
@@ -7037,7 +7431,7 @@ static double st_median(Interp *I, double *buf, size_t n, double unused)
 static double st_quantile(Interp *I, double *buf, size_t n, double p)
 {
     (void)I;
-    qsort(buf, n, sizeof *buf, dbl_cmp);
+    sort_doubles(buf, n);
     if (isnan(buf[n - 1])) return buf[n - 1];         /* NaNs sort last: missing in, missing out */
     if (n == 1) return buf[0];
     double h = (double)(n - 1) * p;
@@ -7292,6 +7686,12 @@ static Value bi_mean(Interp *I, Value *args, uint32_t n)
     ArrObj *a = as_arr(v);
     size_t nn = (size_t)a->rows * a->cols;
     if (nn == 0) runtime_error(I, "mean: empty array");
+    if (a->elt == ELT_FLOAT) {
+        const double *d = (const double *)a->data;
+        double s = 0.0;
+        for (size_t k = 0; k < nn; k++) s += d[k];
+        return val_float(s / (double)nn);
+    }
     Value acc = val_int(0);
     for (size_t k = 0; k < nn; k++) acc = scalar_arith_k(I, AR_ADD, acc, numify(arr_get(a, k)));   /* numify: masks mean their fraction, like every other reduction */
     return scalar_arith_k(I, AR_DIV, acc, val_int((int64_t)nn));
@@ -7448,6 +7848,36 @@ static Value bi_sort(Interp *I, Value *args, uint32_t n)
     if (a->elt == ELT_COMPLEX) runtime_error(I, "sort: undefined for complex");
     uint32_t R = a->rows, C = a->cols;
     Value out = val_array(a->elt, R, C); ArrObj *o = as_arr(out);
+    if ((a->elt == ELT_FLOAT || a->elt == ELT_INT) && (size_t)R * C > 0) {   /* numbers, sorted as numbers */
+        bool isint = a->elt == ELT_INT;
+        size_t nn = (size_t)R * C, len = (R == 1 || C == 1) ? nn : R, width = isint ? sizeof(int64_t) : sizeof(double);
+        void *tmp = malloc(len * width);
+        if (!tmp) abort();
+        if (R == 1 || C == 1) {                        /* vector: one sequence */
+            memcpy(o->data, a->data, nn * width);
+            if (isint) msort_ints((int64_t *)o->data, (int64_t *)tmp, nn);
+            else       sort_doubles_with((double *)o->data, (double *)tmp, nn);
+        } else {                                       /* matrix: sort each column */
+            void *col = malloc(R * width);
+            if (!col) abort();
+            for (uint32_t c = 0; c < C; c++) {
+                if (isint) {
+                    int64_t *x = (int64_t *)col; const int64_t *in = (const int64_t *)a->data;
+                    for (uint32_t r = 0; r < R; r++) x[r] = in[(size_t)r * C + c];
+                    msort_ints(x, (int64_t *)tmp, R);
+                    for (uint32_t r = 0; r < R; r++) ((int64_t *)o->data)[(size_t)r * C + c] = x[r];
+                } else {
+                    double *x = (double *)col; const double *in = (const double *)a->data;
+                    for (uint32_t r = 0; r < R; r++) x[r] = in[(size_t)r * C + c];
+                    sort_doubles_with(x, (double *)tmp, R);
+                    for (uint32_t r = 0; r < R; r++) ((double *)o->data)[(size_t)r * C + c] = x[r];
+                }
+            }
+            free(col);
+        }
+        free(tmp);
+        return out;
+    }
     if (R == 1 || C == 1) {                            /* vector: one sequence */
         size_t nn = (size_t)R * C;
         Value *buf = nn ? malloc(nn * sizeof *buf) : nullptr;

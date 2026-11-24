@@ -72,6 +72,7 @@ int main(void)
 
     env_clear(globals);
     env_release(globals);
+    env_pool_drain(); vm_pool_drain();
     vm_session_end();            /* free closure-bearing chunks (closures now gone) */
     free(buf);                    /* getline's buffer */
     keep_free_all(&keep);

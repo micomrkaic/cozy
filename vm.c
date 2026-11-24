@@ -153,6 +153,40 @@ void vm_backtrace(Interp *I, char *buf, size_t cap)
         }
 }
 
+/* A run of the VM needs a value stack, a frame stack and two small side
+ * stacks. Builtins that take a function (map, fzero, integral, the index-
+ * bound reductions) start a run for every call they make, and each used to
+ * allocate and free all four; the finished ones are kept and handed out
+ * again. Nested runs each hold their own. */
+enum { VM_POOL_MAX = 16 };
+static VM *vm_pool[VM_POOL_MAX];
+static int vm_pool_n = 0;
+
+static VM *vm_take(void)
+{
+    VM *st;
+    if (vm_pool_n > 0) st = vm_pool[--vm_pool_n];
+    else {
+        st = malloc(sizeof *st);
+        if (!st) abort();
+        *st = (VM){ 0 };
+    }
+    st->sp = 0; st->nframe = 0; st->end_sp = 0; st->nmark = 0;
+    return st;
+}
+static void vm_give(VM *st)
+{
+    if (vm_pool_n < VM_POOL_MAX && st->cap <= 4096) { vm_pool[vm_pool_n++] = st; return; }
+    free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+}
+void vm_pool_drain(void)
+{
+    while (vm_pool_n > 0) {
+        VM *st = vm_pool[--vm_pool_n];
+        free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+    }
+}
+
 /* closure: VAL_CLOSURE -> run it with callee at slot 0 and args at slots 1..argc;
  * VAL_NULL -> top-level statement chunk (no slots). */
 static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, bool *ok)
@@ -162,14 +196,10 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
     jmp_buf saved;
     memcpy(saved, I->jmp, sizeof(jmp_buf));
 
-    VM *st = malloc(sizeof *st);
-    st->stack = nullptr; st->sp = 0; st->cap = 0;
-    st->frames = nullptr; st->nframe = 0; st->fcap = 0;
+    VM *st = vm_take();
     st->globals = I->globals;
-    st->end_dims = nullptr; st->end_sp = 0; st->end_cap = 0;
-    st->marks = nullptr; st->nmark = 0; st->mcap = 0;
     st->prev = I->vm_cur; I->vm_cur = st;               /* backtrace chain */
-    stack_grow(st);
+    if (st->cap == 0) stack_grow(st);
 
     CloObj *clo = closure.kind == VAL_CLOSURE ? as_clo(closure) : nullptr;
     if (clo) {                                          /* set up initial slots */
@@ -192,7 +222,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             while (fr->env != st->globals) scope_pop(st, fr);
         }
         I->vm_cur = st->prev;
-        free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+        vm_give(st);
         memcpy(I->jmp, saved, sizeof(jmp_buf));
         vm_depth--;
         *ok = false;
@@ -215,7 +245,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             st->nframe--;
             if (st->nframe == 0) {
                 I->vm_cur = st->prev;
-                free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+                vm_give(st);
                 memcpy(I->jmp, saved, sizeof(jmp_buf));
                 vm_depth--;
                 *ok = true;
@@ -378,7 +408,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             st->nframe--;
             if (st->nframe == 0) {
                 I->vm_cur = st->prev;
-                free(st->stack); free(st->frames); free(st->end_dims); free(st->marks); free(st);
+                vm_give(st);
                 memcpy(I->jmp, saved, sizeof(jmp_buf));
                 vm_depth--;
                 *ok = true;

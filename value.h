@@ -99,11 +99,21 @@ struct EnvObj {
                                 the defining line's source buffer) */
     uint32_t    *namelens;
     Value       *vals;       /* owned refs */
+    /* private to value.c (0.1.38) */
+    uint32_t     kept;       /* a recycled scope: names[count..kept) are strings left
+                                from its last use, taken up again or freed on define */
+    uint32_t    *index;      /* a large environment: hash of a name -> slot + 1 of its
+                                newest binding. Only ever a shortcut: every hit is
+                                checked against the slot, every miss falls back to the scan */
+    uint32_t     index_cap;
+    bool         index_stale;
 };
 
 /* --- refcounting --- */
 Value value_retain(Value v);
 void  value_release(Value v);
+void  env_pool_drain(void);        /* free the recycled scopes (at exit) */
+void  vm_pool_drain(void);         /* and the VM's recycled stacks (vm.c) */
 
 /* --- scalar constructors (immediate) --- */
 static inline Value val_null(void)        { return (Value){ .kind = VAL_NULL }; }

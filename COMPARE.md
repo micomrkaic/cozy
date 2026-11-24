@@ -31,7 +31,8 @@ describes the same behaviour, but it was not checked here.
 5. [The Greeks, without deriving them](#5-the-greeks-without-deriving-them)
 6. [A logistic regression and its standard errors](#6-a-logistic-regression-and-its-standard-errors)
 7. [A derivative, as a formula](#7-a-derivative-as-a-formula)
-8. [Where Cozy does not win](#where-cozy-does-not-win)
+8. [Speed](#speed)
+9. [Where Cozy does not win](#where-cozy-does-not-win)
 
 ## 1. A chained comparison
 
@@ -395,6 +396,32 @@ lines of Cozy in the standard packages: expressions are records, the
 derivative is a recursion over them, and the result can be handed back to
 the numerical side as a function (`dfun("sin(x)/x")` goes straight into
 `fzero`).
+
+## Speed
+
+None of the above is bought with speed. Built on OpenBLAS (`make
+BACKEND=openblas`; Accelerate on a Mac), Cozy hands its linear algebra to
+the same library NumPy and Octave use, and since 0.1.38 its own array
+kernels run over raw numbers as theirs do. Seconds, best of three, on one
+four-core machine, with NumPy 2.5.3 and Octave 8.4.0:
+
+| | Cozy 0.1.38 | NumPy | Octave |
+|---|---|---|---|
+| `A * B`, n = 1000 | 0.016 | 0.007 | 0.011 |
+| `A \ b`, n = 1000 | 0.021 | 0.009 | 0.015 |
+| symmetric `eig` with vectors, n = 1000 | 0.13 | 0.08 | 1.03 |
+| `svd` with vectors, n = 1000 | 0.26 | 0.27 | 2.09 |
+| `sum(sin(x) .^ 2 + cos(x) .^ 2)`, 5 million elements | 0.14 | 0.08 | 0.17 |
+| `sort(x)`, 5 million elements | 0.24 | 0.04 | 0.55 |
+| a scalar loop of a million passes | 0.09 | 0.03 | 0.56 |
+
+Unlike the transcripts, these numbers are not checked by any test: they
+are one machine on one day, and the ratios are what to read. Dense
+linear algebra is the library's speed in all three. Octave is slow on the
+two decompositions because it calls LAPACK's older QR drivers when
+vectors are asked for; Cozy and NumPy call the divide-and-conquer ones.
+NumPy's sort and its elementwise loops are written with SIMD instructions
+and are the ones to beat. In scalar loops Cozy sits between CPython and Octave.
 
 ## Where Cozy does not win
 

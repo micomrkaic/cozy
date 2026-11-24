@@ -1,0 +1,250 @@
+# Fast paths over real arrays, and what they must not change (0.1.38).
+#
+# Elementwise arithmetic, comparisons, masks, the unary functions, sum,
+# mean, min, max and sort have loops of their own for Int and Float arrays:
+# straight over the numbers, without boxing each element. They are meant to
+# be invisible. Each computes what the general path computes, and where an
+# element would change the type of the answer -- an Int overflowing into
+# Float, a root or a power going complex -- the general path takes over.
+# These tests pin the edges; the array kernel is also held against the
+# scalar one, which is separate code.
+
+# --- arithmetic: Float, Int, mixed; array with array, with a scalar ---
+[1.5, -2, 0.25] + [1, 2, 3]
+=> [2.5, 0, 3.25]
+[1, 2, 3] - 0.5
+=> [0.5, 1.5, 2.5]
+10 - [1, 2, 3]
+=> [9, 8, 7]
+[1, 2, 3] .* [4, 5, 6]
+=> [4, 10, 18]
+[1, 2, 3] / 2
+=> [0.5, 1, 1.5]
+2 \ [1, 2, 3]
+=> [0.5, 1, 1.5]
+[1, 2, 4] ./ [2, 2, 8]
+=> [0.5, 1, 0.5]
+-[1.5, -2]
+=> [-1.5, 2]
+-[1, -2]
+=> [-1, 2]
+# Int with Int stays Int ...
+[1, 2, 3] + [10, 20, 30]
+=> [11, 22, 33]
+[2, 3, 4] .^ 2
+=> [4, 9, 16]
+[2, 3] .^ [3, 2]
+=> [8, 9]
+# ... until one element does not fit, and then the whole answer is Float, as before
+[9223372036854775807, 1] + 1
+=> [9.22337e+18, 2]
+[9223372036854775807, 1] - [-1, 1]
+=> [9.22337e+18, 0]
+[4611686018427387904, 3] * 2
+=> [9.22337e+18, 6]
+[10, 3] .^ 19
+=> [1e+19, 1.16226e+09]
+# an Int to a negative power is a Float
+[2, 4] .^ -1
+=> [0.5, 0.25]
+# division is Float even when it comes out whole
+[4, 6] / 2
+=> [2, 3]
+# a matrix keeps its shape
+[1, 2; 3, 4] .* [1.5, 1; 1, 2]
+=> [1.5, 2; 3, 8]
+# the array kernel and the scalar kernel agree to the last bit
+rng(3); let x = randn(1, 200); let y = randn(1, 200); [all((x + y) == (1:200 ~> (fn k -> x[k] + y[k]))), all((x .* y) == (1:200 ~> (fn k -> x[k] * y[k]))), all((x ./ y) == (1:200 ~> (fn k -> x[k] / y[k]))), all((x - 1.5) == (x ~> (_ - 1.5)))]
+=> [true, true, true, true]
+rng(4); let x = rand(1, 200) * 5; [all((x .^ 2.5) == (x ~> (_ ^ 2.5))), all((x .^ 2) == (x ~> (_ ^ 2))), all((2 .^ x) == (x ~> (2 ^ _)))]
+=> [true, true, true]
+# a square is a multiplication, in both kernels
+[0.1 ^ 2 == 0.1 * 0.1, all([0.1, 0.3, 1e-200, -7.7] .^ 2 == [0.1 * 0.1, 0.3 * 0.3, 1e-200 * 1e-200, 7.7 * 7.7])]
+=> [true, true]
+# nan and inf go through untouched
+[1, 0/0, 1/0] + 1
+=> [2, nan, inf]
+[1, 0/0, 1/0] .* 0
+=> [0, nan, nan]
+[0, 1] ./ 0
+=> [nan, inf]
+# shapes are still checked first
+[1, 2, 3] + [1, 2]
+=> !shape mismatch: 1x3 vs 1x2
+
+# --- the tower: one complex element makes the array complex ---
+[4, -4] .^ 0.5
+=> [2+0i, 2i]
+[-8, 8] .^ (1 / 3)
+=> [1+1.73205i, 2+0i]
+(-8) .^ [2, 0.5]
+=> [64+0i, 2.82843i]
+[-8, 8] .^ 2
+=> [64, 64]
+sqrt([4, 9])
+=> [2, 3]
+sqrt([4, -9])
+=> [2+0i, 3i]
+sqrt([4, 0/0])
+=> [2, nan]
+log([1, exp(1)])
+=> [0, 1]
+log([1, -1])
+=> [0+0i, 3.14159i]
+asin([0.5, 2])
+=> [0.523599+0i, 1.5708-1.31696i]
+# (the real part of acosh(0.5) is zero to rounding, and which side of zero depends on the C library)
+let r = acosh([1, 0.5]); [real(r[1]) == 0, imag(r[1]) == 0, abs(real(r[2])) < 1e-12, abs(imag(r[2]) - acos(0.5)) < 1e-12]
+=> [true, true, true, true]
+log2([8, -8])
+=> [3+0i, 3+4.53236i]
+# Float results from Int arrays
+sqrt([4, 9, 16]) == [2, 3, 4]
+=> [true, true, true]
+exp([0, 1]) == [1, exp(1)]
+=> [true, true]
+# rounding keeps an Int array Int and never prints a negative zero
+floor([1.5, -0.2, -1.5])
+=> [1, -1, -2]
+1 ./ round([-0.2, 0.2])
+=> [inf, inf]
+round([1, 2])
+=> [1, 2]
+abs([-1.5, 2])
+=> [1.5, 2]
+abs([-1, 2])
+=> [1, 2]
+# the array kernels against the scalar ones
+rng(5); let x = randn(1, 300) * 3; [all(sin(x) == (x ~> sin)), all(exp(x) == (x ~> exp)), all(atan(x) == (x ~> atan)), all(abs(x) == (x ~> abs)), all(floor(x) == (x ~> floor)), all(erf(x) == (x ~> erf)), all(tanh(x) == (x ~> tanh))]
+=> [true, true, true, true, true, true, true]
+rng(6); let x = rand(1, 300) * 3; [all(sqrt(x) == (x ~> sqrt)), all(log(x) == (x ~> log)), all(log10(x) == (x ~> log10)), all(acosh(x + 1) == ((x + 1) ~> acosh))]
+=> [true, true, true, true]
+
+# --- comparisons and masks ---
+[1, 2, 3] < 2.5
+=> [true, true, false]
+[1.5, 2.5] >= [2, 2]
+=> [false, true]
+2 == [1, 2, 3]
+=> [false, true, false]
+[1, 0/0] == [1, 0/0]
+=> [true, false]
+[1, 0/0] ~= [1, 0/0]
+=> [false, true]
+# two Ints compare as Ints; an Int against a Float as doubles
+[9007199254740993, 1] == [9007199254740992, 1]
+=> [false, true]
+[9007199254740993, 1] == [9007199254740992.0, 1.0]
+=> [true, true]
+[true, false, true] & [true, true, false]
+=> [true, false, false]
+[true, false] | false
+=> [true, false]
+0 < [-1, 0.5, 2] < 1
+=> [false, true, false]
+[1, 2] & [true, false]
+=> !'&' requires Bool operands
+rng(8); let x = randn(1, 300); [all(pick(x < 0.3, 1, 0) == pick(x ~> (_ < 0.3), 1, 0)), all(pick(x >= x[1], 1, 0) == pick(x ~> (_ >= x[1]), 1, 0))]
+=> [true, true]
+
+# --- reductions ---
+sum([0.1, 0.2, 0.3])
+=> 0.6
+sum([1, 2, 3])
+=> 6
+sum([9223372036854775807, 1])
+=> 9.22337e+18
+sum([1.5; 2.5])
+=> 4
+mean([1, 2, 4])
+=> 2.33333
+mean([0.5, 1.5])
+=> 1
+min([3, 1, 2])
+=> 1
+max([3.5, 1, 2])
+=> 3.5
+max([1, 0/0, 3])
+=> nan
+min([0/0, 1])
+=> nan
+# (a negative zero has to be made: the literal -0.0 is 0 - 0.0, which is 0)
+let z = 0.0 * -1; [1 / z, 1 / min([0, z]), 1 / min([z, 0])]
+=> [-inf, inf, -inf]
+# the same sum as the loop that defines it
+rng(9); let x = randn(1, 1000); let s = 0; for k = 1:1000 do s = s + x[k] end; [sum(x) == s, mean(x) == s / 1000]
+=> [true, true]
+
+# --- sort: ascending, NaNs last, equal elements in the order they came ---
+sort([3, 1, 2])
+=> [1, 2, 3]
+sort([3.5, -1, 2])
+=> [-1, 2, 3.5]
+sort([0/0, 2, 1, 0/0, -1/0, 1/0])
+=> [-inf, 1, 2, inf, nan, nan]
+let z = 0.0 * -1; 1 ./ sort([0, z])
+=> [inf, -inf]
+let z = 0.0 * -1; 1 ./ sort([z, 0])
+=> [-inf, inf]
+let z = 0.0 * -1; 1 ./ sort([1, 0, z, -1, z, 0])
+=> [-1, inf, -inf, -inf, inf, 1]
+sort([3, 1; 2, 4; 1, 0])
+=> [1, 0; 2, 1; 3, 4]
+sort([2.5; 1.5])
+=> [1.5; 2.5]
+# long arrays take another road (a radix sort) to the same place
+rng(10); let x = round(randn(1, 20000) * 50) / 10; let s = sort(x); [all(diff(s) >= 0), s[1] == min(x), s[end] == max(x), abs(sum(s) - sum(x)) < 1e-6, length(unique(x)) == length(unique(s))]
+=> [true, true, true, true, true]
+rng(11); let x = randn(1, 20000); x[7] = 0/0; x[9000] = 0/0; x[3] = 1/0; x[5] = -1/0; let s = sort(x); [isnan(s[end]), isnan(s[end - 1]), s[end - 2] == 1/0, s[1] == -1/0, all(diff(s[1:19998]) >= 0)]
+=> [true, true, true, true, true]
+rng(12); let x = randn(1, 5000); let s = sort(x); let t = sort(x[1:4000]); [all(s[1:10] == sort(s[10:-1:1])), all(diff(t) >= 0)]
+=> [true, true]
+median([3, 1, 2, 10])
+=> 2.5
+quantile([1, 2, 3, 4, 5], 0.25)
+=> 2
+unique([3, 1, 3, 2, 1])
+=> [1, 2, 3]
+
+# --- scalars ---
+9223372036854775807 + 1
+=> 9.22337e+18
+-9223372036854775807 - 2
+=> -9.22337e+18
+3037000500 * 3037000500
+=> 9.22337e+18
+7 / 2
+=> 3.5
+6 / 3
+=> 2
+1 < 2.5
+=> true
+9007199254740993 == 9007199254740992
+=> false
+9007199254740993 == 9007199254740992.0
+=> true
+2 ^ 10
+=> 1024
+"a" + 1
+=> !arithmetic on non-numbers (String, Int)
+
+# --- names: a large workspace, a shadowed builtin ---
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; [v1, v30, v60, v60 + v1]
+=> [1, 30, 60, 61]
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; v7 = 700; let v8 = 800; [v7, v8, sin(0)]
+=> [700, 800, 0]
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; let sin = 5; let a = sin + 1; clear("sin"); [a, sin(0)]
+=> [6, 0]
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; clear("v30"); v30
+=> !undefined name 'v30'
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; keep("v2", "v59"); [v2, v59]
+=> [2, 59]
+for k = 1:60 do eval("let v" + str(k) + " = " + str(k)) end; keep("v2"); v59
+=> !undefined name 'v59'
+# a variable of the loop body does not outlive its pass
+for k = 1:3 do (if k == 1 then (let t = 5; t) else 0 end) end; let r = 0; for k = 1:3 do r = r + (if k == 2 then (let t = k; t) else 0 end) end; r
+=> 2
+let s = 0; for k = 1:3 do let q = k * 2; s = s + q end; q
+=> !undefined name 'q'
+let total = 0; for i = 1:50 do for j = 1:50 do total = total + i * j end end; total
+=> 1625625

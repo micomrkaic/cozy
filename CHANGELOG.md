@@ -1,5 +1,114 @@
 # Cozy changelog
 
+## 0.1.38 — the same answers, sooner
+
+A release about speed. Nothing computes a different number, with one
+exception stated below that makes a result more exact, not less. The
+whole golden suite is unchanged; in addition the old and the new
+interpreter were run side by side on about 48,000 expressions built from
+awkward values (nan, inf, signed zeros, Ints at the edge of overflow,
+negative bases, mixed kinds) and printed at 17 significant digits: the
+outputs are identical to the character.
+
+Seconds, best of three, on four cores, OpenBLAS build (NumPy 2.5.3 and
+Octave 8.4.0 on the same machine for scale):
+
+| | 0.1.37 | 0.1.38 | NumPy | Octave |
+|---|---|---|---|---|
+| symmetric `eig`, n = 1000, with vectors | 0.81 | 0.13 | 0.08 | 1.03 |
+| `svd`, n = 1000, with vectors | 2.18 | 0.26 | 0.27 | 2.09 |
+| `sum(sin(x) .^ 2 + cos(x) .^ 2)`, 5 million | 1.40 | 0.14 | 0.08 | 0.17 |
+| `(x + y) .* (x - y) ./ (1 + x)`, 5 million | 1.08 | 0.09 | | |
+| `sum(0.25 < x < 0.75)`, 5 million | 0.22 | 0.03 | | |
+| `sum(x)`, 5 million | 0.084 | 0.004 | | |
+| `sort(x)`, 5 million | 2.22 | 0.24 | 0.04 | 0.55 |
+| `sum[k = 1:1000000] 1 / k ^ 2` | 0.21 | 0.10 | | |
+| a scalar loop of a million passes | 0.133 | 0.092 | 0.031 | 0.56 |
+| the same loop calling `sin`, three packages loaded | 0.30 | 0.11 | | |
+| `A * B`, `A \ b`, `inv(A)`, n = 1000 | 0.018, 0.023, 0.045 | 0.016, 0.021, 0.036 | 0.007, 0.009, 0.026 | 0.011, 0.015, 0.030 |
+
+### Changed
+- **Elementwise work on Int and Float arrays runs over the numbers
+  themselves.** The operators (`+ - .* ./ .\ .^`, a scalar on either
+  side), the comparisons, `&` and `|` on masks, the unary functions
+  (`exp log sin cos tan sinh cosh tanh asin acos atan asinh acosh atanh
+  log10 log2 sqrt cbrt abs floor ceil round trunc erf erfc gamma
+  lgamma`),
+  and `sum`, `mean`, `min`, `max` used to box every element into a
+  Value, send it through the kernel that serves the whole numeric tower,
+  and scan the results again to choose the array's type. That remains
+  the definition, and the path for complex, dual, string and mixed
+  arrays. For Int and Float operands the type of the answer is known
+  before the loop starts, and the loop now does the same operations in
+  the same order on the raw doubles or int64s. Where one element would
+  change the answer's type the fast path stands aside and the general
+  one decides, exactly as before: an Int sum or product that overflows
+  (the array becomes Float), a negative base with a fractional exponent,
+  `sqrt` or `log` of a negative number (the array becomes complex).
+- **`sort`, `unique`, `median` and `quantile` sort numbers as numbers.**
+  They called the C library's `qsort` on boxed values, or through a
+  comparison function invoked for every pair. Arrays under 4096 elements
+  are now merge-sorted in place of that; longer ones are radix-sorted by
+  bytes on a key that orders as the numbers do. The order is the one the
+  comparison defined (ascending, NaNs last), and it is now stable by
+  construction: equal elements, and so 0 and -0, stay in the order they
+  came. glibc's `qsort` happened to do that; macOS's does not promise to.
+- **A scope no longer costs an allocation.** Every pass of a loop and
+  every block made an environment (one calloc, three reallocs, a strndup
+  per name) and freed it. Dropped environments are kept, with their
+  arrays and name strings, and handed out again.
+- **Large environments are indexed.** The global environment holds the
+  standard library, every loaded package and your variables, and a name
+  was found by comparing strings down the list: the more packages
+  loaded, the slower every reference to a builtin. Environments of 24
+  names or more keep a hash table from name to slot. The table is only
+  ever a shortcut -- a hit is checked against the slot, and a miss falls
+  back to the scan that was always the definition -- because `clear`,
+  `keep` and the load groups edit the global environment directly.
+- **Two numbers are combined without ceremony.** `a + b`, `a * b`,
+  `a < b` and the rest on two Ints or Floats are answered at the top of
+  the operator dispatch, with the semantics of the general kernel (Int
+  overflow promotes to Float, division is Float).
+- **The VM's stacks are reused.** `map`, `fzero`, `integral`, the
+  optimisers and the index-bound reductions start a run of the VM for
+  every call of the function they are given; each run allocated and
+  freed four stacks.
+- **LAPACK's divide-and-conquer drivers** (OpenBLAS and Accelerate
+  builds): the symmetric and Hermitian eigenproblems use `dsyevd` and
+  `zheevd`, the SVD `dgesdd` and `zgesdd`, in place of the QR-iteration
+  drivers `dsyev`, `zheev`, `dgesvd`, `zgesvd`. They are what NumPy
+  calls. On the test matrices the residuals and the orthogonality of the
+  vectors are slightly better than before (2e-15 and 5e-14 at n = 400,
+  against 5e-15 and 1e-13), and every golden and transcript prints what
+  it printed. The built-in backend (and so the browser) is unchanged.
+
+### The one number that can change
+- **`x ^ 2` and `x .^ 2` are `x * x`.** `pow(x, 2)` in the C library is
+  accurate to a little over half a unit in the last place; `x * x` is the
+  correctly rounded square. The two agreed on every value tried here,
+  but they are not guaranteed to, and when they differ the product is
+  the exact one. The scalar and the array kernels both use it, so they
+  agree with each other everywhere (tests/80_fastpaths.test holds them
+  together).
+
+### Verified
+- tests/80_fastpaths.test: 104 cases at the edges of the fast paths --
+  Int overflow inside an array, the complex tower entered by one
+  element, nan and inf, an Int compared with a Float, signed zeros
+  through `sort` and `min`, the array kernels held against the scalar
+  ones element by element, a workspace of sixty names with a builtin
+  shadowed and cleared, a loop body's variable not outliving its pass.
+- The whole suite under both the built-in and the OpenBLAS backend, the
+  sanitizer suite (1683 inputs, leak-clean with the pools in place), the
+  stress workout.
+
+### Not done
+- Variables other than parameters are still found by name at run time.
+  A scalar loop is 1.4 times faster than it was and about four times
+  slower than CPython's; resolving `let` and loop variables to slots at
+  compile time would close most of that, and is a change to the compiler
+  and to what `eval` can see, not to a kernel (design entry 25).
+
 ## 0.1.37 — Cozy beside NumPy and Octave
 
 ### Added
