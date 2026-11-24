@@ -137,6 +137,8 @@ w('  let going = true;\n')
 w('  while going do\n')
 w('    demo_menu();\n')
 w('    let s = trim(input("  section (number; a = all; q or Enter quits): "));\n')
+# the menu advertises demo9 (etc.): typed at this prompt, it means section 9
+w('    let s = if startswith(s, "demo") then trim(strrep(strrep(s, "demo", ""), "()", "")) else s end;\n')
 w('    if s == "q" | s == "" then (going = false)\n')
 w('    elseif s == "a" then (')
 for si in range(1, len(sections) + 1):
@@ -144,7 +146,7 @@ for si in range(1, len(sections) + 1):
 w('print(""); print("  Tour complete — the book has the prose."); going = false)\n')
 for si in range(1, len(sections) + 1):
     w(f'    elseif s == "{si}" then demo_sec{si}()\n')
-w('    else praw("  (unrecognized: " + s + ")") end\n')
+w('    else praw("  (unrecognized: " + s + " — type a section number, a, or q)") end\n')
 w('  end; null)\n\n')
 w('demo_menu()\n')
 text = out.getvalue()

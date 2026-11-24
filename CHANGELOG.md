@@ -1,5 +1,37 @@
 # Cozy changelog
 
+## 0.1.49 — the demo in the browser
+
+### Fixed
+- **demo() in the playground kept asking for the section number.** Three
+  faults behind one symptom:
+  - The page called the engine plainly, so at the first `pause()` the
+    call returned early (Asyncify suspends) and the page took the command
+    as finished. It then ran its workspace refresh into the waiting demo,
+    which tore down the demo's output: the rest of the section went to the
+    browser's console, the remaining pauses stopped waiting, and the menu
+    loop went straight back to its prompt. The page now calls with
+    `ccall(..., {async: true})`, so a command ends when it ends; commands
+    queue one at a time; and the engine refuses a second command while one
+    is suspended instead of breaking it.
+  - `input()` was a modal `window.prompt`, raised before the menu above
+    it reached the screen, so the question came with no menu to answer
+    from. It is now asked in the terminal: what was printed and the prompt
+    appear first, you type the answer at the terminal's own prompt, and it
+    is echoed in place. (Pages without the terminal keep `window.prompt`;
+    the nowcast page's worker never asks.)
+  - The stepping tour (`demo5`, then Enter for the next problem) never
+    advanced on a bare Enter: the page looked for the "Enter for the next
+    problem" marker only in its own messages, not in results.
+- **`demo5` typed at demo()'s section prompt** — as its menu suggests — now
+  plays section 5, instead of being "unrecognized" and asking again.
+
+### Added
+- **tests/run_playground_page.js**: the playground in Chromium (Playwright;
+  skipped without it) — demo()'s menu, sections and prompt in the terminal,
+  pauses stepped with Enter, the stepping tour, input() and pause() in the
+  terminal, and nothing lost to the console.
+
 ## 0.1.48 — the nowcasting page meets a browser cache
 
 ### Fixed

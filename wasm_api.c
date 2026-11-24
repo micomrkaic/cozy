@@ -112,6 +112,45 @@ const int *cozy_get_dims(void) { return g_dims; }
 EMSCRIPTEN_KEEPALIVE
 const char *cozy_version(void) { return COZY_VERSION " (wasm, built " COZY_BUILT ")"; }
 
+/* input() in the browser (0.1.49): the question is asked in the page's own
+ * terminal, not in a modal window.prompt. The pending output — the demo's
+ * menu, say — and the prompt are streamed first, so the reader sees what is
+ * being asked; then, as for pause, Asyncify yields until the page delivers
+ * the typed line (globalThis.__cozyInputReady / __cozyInputValue). A page
+ * without the terminal hook (__cozyInputSupported unset) gets the old
+ * window.prompt, and a worker without one gets "". Returns malloc'd text. */
+char *nu_wasm_input(const char *prompt, uint32_t plen)
+{
+    int term = g_cap && EM_ASM_INT({ return (globalThis.__cozyInputSupported && globalThis.__cozyStream) ? 1 : 0; });
+    if (term) {
+        fwrite(prompt, 1, plen, g_cap);
+        fflush(g_cap);
+        EM_ASM({
+            globalThis.__cozyInputReady = 0; globalThis.__cozyInputValue = "";
+            globalThis.__cozyStream(UTF8ToString($0));
+            globalThis.__cozyInputWaiting = 1;
+        }, g_buf + g_streamed);
+        g_streamed = g_cap_len;
+        while (!EM_ASM_INT({ return (globalThis.__cozyInputReady | 0); }))
+            emscripten_sleep(40);
+    }
+    char cp[256];
+    snprintf(cp, sizeof cp, "%.*s", (int)plen, prompt);
+    return (char *)(intptr_t)EM_ASM_INT({
+        var r;
+        if ($1) { r = globalThis.__cozyInputValue; globalThis.__cozyInputWaiting = 0; globalThis.__cozyInputReady = 0; }
+        else r = (typeof window !== "undefined" && window.prompt) ? window.prompt(UTF8ToString($0)) : "";
+        if (r === null || r === undefined) r = "";
+        r = String(r);
+        var len = lengthBytesUTF8(r) + 1;
+        var b = _malloc(len);
+        stringToUTF8(r, b, len);
+        return b;
+    }, cp, term);
+}
+
+static int g_running;      /* an eval is in progress (perhaps suspended at pause/input) */
+
 EMSCRIPTEN_KEEPALIVE
 void cozy_init(void)
 {
@@ -137,11 +176,17 @@ static const char *wasm_command(const char *line, const char *word)
 EMSCRIPTEN_KEEPALIVE
 const char *cozy_eval(const char *line)
 {
+    /* A page that calls again while an eval waits at pause or input would
+     * tear down that eval's output stream (0.1.49: the demo's sections then
+     * went to the browser console and its pauses stopped waiting). Refuse;
+     * pages call with ccall(..., {async: true}) and wait their turn. */
+    if (g_running) return "  busy: the previous command is still running (waiting for Enter or input)\n";
+    g_running = 1;
     free(g_buf); g_buf = NULL;
     g_cap_len = 0; g_streamed = 0;
     FILE *cap = open_memstream(&g_buf, &g_cap_len);
     g_cap = cap;
-    if (!cap) return "internal: out of memory\n";
+    if (!cap) { g_running = 0; return "internal: out of memory\n"; }
     value_set_out(cap);
 
     const char *arg;
@@ -152,6 +197,7 @@ const char *cozy_eval(const char *line)
         else fprintf(cap, "usage: pretty on | off\n");
         fclose(cap); g_cap = NULL;
         value_set_out(NULL);
+        g_running = 0;
         return g_buf ? g_buf : "";
     }
 
@@ -173,5 +219,6 @@ const char *cozy_eval(const char *line)
     }
     fclose(cap); g_cap = NULL; /* finalizes g_buf */
     value_set_out(NULL);
+    g_running = 0;
     return (g_buf ? g_buf + g_streamed : "");   /* page gets the unstreamed tail */
 }

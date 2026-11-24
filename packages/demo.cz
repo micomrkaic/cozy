@@ -1330,6 +1330,7 @@ let demo = fn -> (
   while going do
     demo_menu();
     let s = trim(input("  section (number; a = all; q or Enter quits): "));
+    let s = if startswith(s, "demo") then trim(strrep(strrep(s, "demo", ""), "()", "")) else s end;
     if s == "q" | s == "" then (going = false)
     elseif s == "a" then (demo_sec1(); demo_sec2(); demo_sec3(); demo_sec4(); demo_sec5(); demo_sec6(); demo_sec7(); demo_sec8(); demo_sec9(); demo_sec10(); demo_sec11(); demo_sec12(); demo_sec13(); demo_sec14(); demo_sec15(); print(""); print("  Tour complete — the book has the prose."); going = false)
     elseif s == "1" then demo_sec1()
@@ -1347,7 +1348,7 @@ let demo = fn -> (
     elseif s == "13" then demo_sec13()
     elseif s == "14" then demo_sec14()
     elseif s == "15" then demo_sec15()
-    else praw("  (unrecognized: " + s + ")") end
+    else praw("  (unrecognized: " + s + " — type a section number, a, or q)") end
   end; null)
 
 demo_menu()

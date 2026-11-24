@@ -237,6 +237,9 @@
   // Colour interpreter output: lines starting with "  error"/"  parse error" are errors.
   function writeResult(text) {
     if (!text) return;
+    /* the stepping tour (demo5, then Enter): a result that ends a problem
+       arms a bare Enter to run next; any other result disarms it */
+    window.__demoStep = text.indexOf('[ Enter for the next problem ]') !== -1;
     var lines = text.split('\n');
     // trailing empty element from final newline
     if (lines.length && lines[lines.length - 1] === '') lines.pop();
@@ -252,9 +255,10 @@
 
   // pause() support: the wasm side streams pending output here mid-eval,
   // then waits (Asyncify) until Enter releases the latch below.
-  window.__cozyStream = writeResult;
+  window.__cozyStream = function (t) { writeResult(t); window.__demoStep = false; };
+  window.__cozyInputSupported = 1;   /* input() asks here, in the terminal (wasm_api.c) */
   document.addEventListener('keydown', function (e) {
-    if (window.__cozyPauseWaiting && e.key === 'Enter') {
+    if (window.__cozyPauseWaiting && !window.__cozyInputWaiting && e.key === 'Enter') {
       window.__cozyPauseDone = 1;
       e.preventDefault(); e.stopPropagation();
     }
@@ -283,13 +287,16 @@
   }
 
   Cozy().then(function (M) {
+    /* async: an eval that waits at pause() or input() suspends (Asyncify)
+       and resolves only when it really ends — called plainly, _cozy_eval
+       returned "" at the first pause and the page ran its next command into
+       the middle of the waiting one (0.1.49, the demo menu that kept asking) */
     evalLine = function (s) {
       var n = M.lengthBytesUTF8(s) + 1;
       var p = M._malloc(n);
       M.stringToUTF8(s, p, n);
-      var r = M.UTF8ToString(M._cozy_eval(p));
-      M._free(p);
-      return r;
+      return Promise.resolve(M.ccall('cozy_eval', 'number', ['number'], [p], { async: true }))
+        .then(function (r) { var t = M.UTF8ToString(r); M._free(p); return t; });
     };
     M._cozy_init();
     window.COZY = M;
@@ -355,6 +362,14 @@
     if (e.key === 'Enter') {
       var line = input.value;
       input.value = '';
+      /* a running input() is waiting for this line: answer it, run nothing */
+      if (window.__cozyInputWaiting && !window.__cozyInputReady) {
+        var last = term.lastElementChild;
+        if (last) last.appendChild(el('echo', line)); else writeLine('echo', line);
+        scroll();
+        window.__cozyInputValue = line; window.__cozyInputReady = 1;
+        return;
+      }
       /* demo stepping: when a problem is waiting, a bare Enter advances —
        * same gesture as the REPL's pause (owner's ruling: just hit Enter) */
       if (line === '' && window.__demoStep) { window.__demoStep = false; run('next'); return; }
@@ -442,8 +457,13 @@
     if (NATIVE)
       return fetch('/eval', { method: 'POST', body: s }).then(function (r) { return r.text(); })
              .then(function (txt) { return txt.replace(/\n$/, ''); });
-    return Promise.resolve(window.evalWasm(s));
+    /* one at a time: a command (or the workspace refresh) typed while
+       another waits at pause/input runs after it, not into it */
+    var r = evalChain.then(function () { return window.evalWasm(s); });
+    evalChain = r.catch(function () {});
+    return r;
   }
+  var evalChain = Promise.resolve();
   function refreshWorkspace() {
     evalAny('who').then(function (txt) {
       document.getElementById('ws-pre').textContent = txt.trim() ? txt : '(empty workspace)';

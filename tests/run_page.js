@@ -15,6 +15,7 @@ window.Cozy = function () {
     lengthBytesUTF8: function(s){ return s.length; },
     stringToUTF8: function(s){ window.__lastEval = s; },
     _cozy_eval: function(){ window.__evals.push(window.__lastEval); return 0; },
+    ccall: function(){ window.__evals.push(window.__lastEval); return 0; },   /* evals run async since 0.1.49 */
     UTF8ToString: function(){ return "ok\\n"; },
     FS: { readdir: function(){ return []; },
           writeFile: function(n, d){ window.__fsWrites.push([n, String(d)]); },
