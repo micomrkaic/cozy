@@ -3184,8 +3184,8 @@ static Value bi_names(Interp *I, Value *args, uint32_t n)
 }
 
 /* input("prompt"): print the prompt, read one line from the keyboard,
- * return it as a string (newline stripped). In the browser this is
- * window.prompt. */
+ * return it as a string (newline stripped). In the browser the question is
+ * asked in the page's terminal (wasm_api.c). */
 bool cozy_stdin_ok = true;   /* the workbench server clears this: a one-shot
     HTTP eval must never block on the SERVER's stdin (owner's demo() hang) */
 
@@ -3199,16 +3199,9 @@ static Value bi_input(Interp *I, Value *args, uint32_t n)
     extern bool cozy_stdin_ok;
     if (!cozy_stdin_ok) return val_string("", 0);   /* workbench: never block */
 #ifdef __EMSCRIPTEN__
-    char cp[256];
-    snprintf(cp, sizeof cp, "%.*s", (int)plen, prompt);
-    char *ans = (char *)(intptr_t)EM_ASM_INT({
-        var r = window.prompt(UTF8ToString($0));
-        if (r === null) r = "";
-        var len = lengthBytesUTF8(r) + 1;
-        var b = _malloc(len);
-        stringToUTF8(r, b, len);
-        return b;
-    }, cp);
+    /* asked in the page's terminal (wasm_api.c nu_wasm_input) */
+    extern char *nu_wasm_input(const char *, uint32_t);
+    char *ans = nu_wasm_input(prompt, plen);
     Value v = val_string(ans, (uint32_t)strlen(ans));
     free(ans);
     return v;

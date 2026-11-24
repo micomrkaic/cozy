@@ -168,6 +168,7 @@ test: vmtest $(BIN)
 	@python3 tools/gen_reference.py --check
 	@python3 tools/gen_dsge_page.py --check
 	@node tests/run_nowcast_page.js
+	@node tests/run_playground_page.js
 	@python3 tools/gen_page_pkgs.py --check
 	@bash tests/run_emacs.sh
 
