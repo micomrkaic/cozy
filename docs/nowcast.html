@@ -1,0 +1,1251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nowcast — Cozy</title>
+<meta name="description" content="Nowcast GDP from monthly indicators in your browser: a mixed-frequency dynamic factor model estimated by EM, nowcasts with standard errors, and the news decomposition of each data release. Your data never leave your computer.">
+<meta property="og:title" content="Nowcast — Cozy">
+<meta property="og:image" content="og-card.png">
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, 0.10); --code-bg: #f1f0ec;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --band: rgba(42, 120, 214, 0.16);
+    --band-2: rgba(42, 120, 214, 0.09);
+    --pos: #1baf7a; --neg: #d6455d; --ref: #898781; --good: #006300; --warn-ink: #8a4b00; --warn-bg: #fff4e0;
+    --err-ink: #9b1c2e; --err-bg: #fdecee;
+    --accent: #2a78d6; --brand-a: #208bff; --brand-b: #00a7b8;
+    --have: #2a78d6; --miss: #ecebe6; --future: #f5f4f0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0b0e14; --surface: #11151f; --ink: #f0efec; --ink-2: #c3c7d0; --muted: #8a93a3;
+      --grid: #212838; --axis: #323b4f; --border: rgba(255, 255, 255, 0.10); --code-bg: #0b0e14;
+      --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --band: rgba(57, 135, 229, 0.22);
+      --band-2: rgba(57, 135, 229, 0.12);
+      --pos: #199e70; --neg: #e0566d; --ref: #8a93a3; --good: #0ca30c; --warn-ink: #fab219; --warn-bg: #2a2110;
+      --err-ink: #ff9aa8; --err-bg: #2b1217;
+      --accent: #3987e5; --brand-a: #208bff; --brand-b: #00c2d6;
+      --have: #3987e5; --miss: #1a2030; --future: #141926;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace; }
+  a { color: var(--accent); }
+  header.site { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .logo { font: 700 17px/1 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.5px;
+    background: linear-gradient(90deg, var(--brand-a), var(--brand-b)); -webkit-background-clip: text; background-clip: text;
+    color: transparent; text-decoration: none; }
+  header.site .where { color: var(--muted); font-size: 13px; }
+  header.site nav { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  header.site nav a { color: var(--ink-2); text-decoration: none; font-size: 13px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; }
+  header.site nav a:hover { color: var(--accent); border-color: var(--accent); }
+  #engine { font-size: 12px; color: var(--muted); }
+  #engine.ready::before { content: "● "; color: var(--good); }
+  #engine.busy::before { content: "● "; color: var(--warn-ink); }
+  html[data-standalone] .online-only { display: none; }
+  main { max-width: 1120px; margin: 0 auto; padding: 0 16px 64px; }
+  h1 { font-size: 26px; line-height: 1.2; margin: 28px 0 6px; }
+  .lede { color: var(--ink-2); margin: 0 0 8px; max-width: 760px; }
+  section.step { margin-top: 28px; padding-top: 4px; }
+  section.step > h2 { font-size: 18px; margin: 0 0 4px; display: flex; align-items: baseline; gap: 10px; }
+  section.step > h2 .n { font: 600 12px/1 ui-monospace, Menlo, monospace; color: var(--muted); border: 1px solid var(--border); border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  button, .btn { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); cursor: pointer; }
+  button:hover:not(:disabled), .btn:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.08); color: #fff; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  select, input[type=number], input[type=text] { font: inherit; font-size: 14px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--page); color: var(--ink); }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--ink-2); }
+  #drop { border: 2px dashed var(--axis); border-radius: 10px; padding: 22px 16px; text-align: center; color: var(--ink-2); transition: border-color .15s, background .15s; }
+  #drop.over { border-color: var(--accent); background: var(--band-2); }
+  #drop strong { color: var(--ink); }
+  #drop .row { justify-content: center; margin-top: 10px; }
+  .msg { margin-top: 12px; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+  .msg.info { background: var(--code-bg); color: var(--ink-2); }
+  .msg.warn { background: var(--warn-bg); color: var(--warn-ink); }
+  .msg.err { background: var(--err-bg); color: var(--err-ink); white-space: pre-wrap; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+  .tablewrap { overflow-x: auto; margin-top: 12px; max-height: 460px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  table.series { border-collapse: collapse; width: 100%; font-size: 13px; }
+  table.series th, table.series td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+  table.series th { position: sticky; top: 0; background: var(--surface); font-weight: 600; color: var(--ink-2); z-index: 1; }
+  table.series tr.off td:not(:first-child) { opacity: 0.45; }
+  table.series td.num { font-variant-numeric: tabular-nums; text-align: right; }
+  table.series select { font-size: 13px; padding: 3px 6px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--border); color: var(--ink-2); }
+  .tag.q { border-color: var(--series-2); color: var(--series-2); }
+  .tag.t { border-color: var(--accent); color: var(--accent); }
+  .grid-controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+  details.adv { margin-top: 12px; font-size: 13px; color: var(--ink-2); }
+  details.adv summary { cursor: pointer; }
+  .progress { height: 6px; background: var(--miss); border-radius: 3px; overflow: hidden; flex: 1 1 180px; min-width: 120px; }
+  .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  #fitstatus { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .nc { border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; background: var(--surface); }
+  .nc.main { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .nc .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+  .nc .q { font-weight: 600; margin-top: 2px; }
+  .nc .v { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; margin-top: 6px; }
+  .nc .ci { font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .nc .act { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .chart { width: 100%; position: relative; }
+  .chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+  .chart .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; line-height: 1.4; box-shadow: 0 2px 10px rgba(0,0,0,.12); display: none; white-space: nowrap; z-index: 2; font-variant-numeric: tabular-nums; }
+  .chart-title { font-weight: 600; font-size: 14px; margin: 18px 0 2px; }
+  .chart-sub { font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--ink-2); margin: 4px 0 0; }
+  .legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 5px; background: var(--c); border-radius: 2px; }
+  .legend span.dot::before { width: 8px; height: 8px; border-radius: 50%; }
+  .legend span.box::before { height: 10px; background: var(--c); opacity: 1; }
+  svg text { fill: var(--muted); font: 11px system-ui, sans-serif; }
+  svg .gridline { stroke: var(--grid); stroke-width: 1; }
+  svg .axisline { stroke: var(--axis); stroke-width: 1; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 800px) { .two { grid-template-columns: 1fr; } }
+  pre.code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; font-size: 12.5px; overflow-x: auto; margin: 10px 0 0; line-height: 1.45; }
+  table.news { border-collapse: collapse; width: 100%; font-size: 13px; margin-top: 10px; }
+  table.news th, table.news td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+  table.news th:first-child, table.news td:first-child { text-align: left; }
+  table.news th { color: var(--ink-2); font-weight: 600; }
+  .pos { color: var(--pos); } .neg { color: var(--neg); }
+  .hidden { display: none !important; }
+  footer { margin-top: 40px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); padding-top: 16px; }
+  footer p { max-width: 820px; }
+</style>
+</head>
+<body>
+<header class="site">
+  <a class="logo" href="index.html">cozy</a>
+  <span class="where">nowcast</span>
+  <nav>
+    <span id="engine" class="busy">loading engine…</span>
+    <a href="index.html" class="online-only" title="the Cozy playground">Playground</a>
+    <a href="dsge.html" class="online-only">DSGE demos</a>
+    <a href="https://github.com/micomrkaic/cozy/blob/main/PACKAGES.md#15-nowcastcz--nowcasting-with-a-mixed-frequency-factor-model">Package guide</a>
+    <a href="nowcast-standalone.html" class="online-only" download title="one file, works offline">Offline copy</a>
+  </nav>
+</header>
+<main>
+  <h1>Nowcast GDP from monthly data</h1>
+  <p class="lede">Drop in a spreadsheet of monthly indicators and a quarterly target such as GDP. The page estimates a
+    mixed-frequency dynamic factor model and tells you what the data say about the quarters not yet published,
+    with standard errors, and which releases moved the estimate. Everything runs in your browser; your data are
+    not uploaded anywhere.</p>
+
+  <section class="step" id="s-data">
+    <h2><span class="n">1</span>Data</h2>
+    <p class="hint">A table with dates in the first column (or a column called <code>date</code>) and one column per
+      series: CSV, TSV, or Excel. Monthly and quarterly series can share one file or come in several; dates like
+      <code>2024-03-31</code>, <code>2024-03</code>, <code>2024M03</code>, <code>2024Q1</code> or <code>Mar 2024</code>
+      all work. Leave a cell empty when there is no value.</p>
+    <div id="drop">
+      <div><strong>Drop files here</strong> or</div>
+      <div class="row">
+        <label class="btn" for="file">Choose files…</label>
+        <input id="file" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" multiple hidden>
+        <button id="example" type="button">Use example data</button>
+        <button id="clear" type="button" class="hidden">Clear</button>
+      </div>
+    </div>
+    <div id="datamsg"></div>
+    <div class="tablewrap hidden" id="serieswrap">
+      <table class="series" id="series">
+        <thead><tr><th><input type="checkbox" id="allon" checked title="use all"></th><th>Series</th><th>Frequency</th>
+          <th>Transform</th><th>First</th><th>Last</th><th class="num">Obs</th><th class="num">Last value</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="step hidden" id="s-model">
+    <h2><span class="n">2</span>Model</h2>
+    <p class="hint">A few common factors drive all series; a quarterly series loads on its quarter's months. The
+      defaults are the standard choices — estimate first, adjust later.</p>
+    <div class="card">
+      <div class="grid-controls">
+        <label class="f">Target to nowcast <select id="target"></select></label>
+        <label class="f">Number of factors <select id="r"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
+        <label class="f">Quarterly series are
+          <select id="agg">
+            <option value="mm">growth rates (Mariano–Murasawa)</option>
+            <option value="mean">averages of their months</option>
+          </select></label>
+      </div>
+      <details class="adv"><summary>Estimation settings</summary>
+        <div class="grid-controls" style="margin-top:10px">
+          <label class="f">Maximum EM iterations <input type="number" id="maxit" value="500" min="1" max="5000"></label>
+          <label class="f">Tolerance (relative change in log-likelihood) <input type="text" id="tol" value="1e-5"></label>
+        </div>
+      </details>
+      <div class="row" style="margin-top:16px">
+        <button id="run" class="primary" type="button" disabled>Estimate and nowcast</button>
+        <div class="progress hidden" id="prog"><div></div></div>
+        <span id="fitstatus"></span>
+      </div>
+    </div>
+    <div id="modelmsg"></div>
+  </section>
+
+  <section class="step hidden" id="s-results">
+    <h2><span class="n">3</span>Nowcast</h2>
+    <p class="hint" id="asof"></p>
+    <div class="cards" id="cards"></div>
+    <div class="chart-title" id="fan-title"></div>
+    <p class="chart-sub">Model estimate with 68% and 90% bands; dots are published values.</p>
+    <div class="chart" id="fan"></div>
+    <div class="legend" id="fan-legend"></div>
+    <div class="two">
+      <div>
+        <div class="chart-title">Common factor</div>
+        <p class="chart-sub">The first factor, smoothed, with its 90% band.</p>
+        <div class="chart" id="factor"></div>
+      </div>
+      <div>
+        <div class="chart-title">The ragged edge</div>
+        <p class="chart-sub">Which series have data in the last two years (filled) and which months are still out.</p>
+        <div class="chart" id="cover"></div>
+      </div>
+    </div>
+    <div class="chart-title">Estimation</div>
+    <p class="chart-sub" id="emsub"></p>
+    <div class="chart" id="llchart"></div>
+  </section>
+
+  <section class="step hidden" id="s-news">
+    <h2><span class="n">4</span>What moved the nowcast</h2>
+    <p class="hint">Compare with an earlier vintage of the data: the change in the nowcast splits exactly into the
+      effect of each series' new releases (judged against what the earlier data expected) and of revisions to
+      numbers already out. The model's parameters are held fixed.</p>
+    <div class="card">
+      <div class="row">
+        <label class="f">Earlier vintage
+          <select id="vintage">
+            <option value="hold">the same data, latest months held back</option>
+            <option value="file">upload an earlier file…</option>
+          </select></label>
+        <label class="f" id="holdwrap">Months held back <select id="hold"><option>1</option><option selected>2</option><option>3</option><option>6</option></select></label>
+        <label class="btn hidden" id="oldfilebtn" for="oldfile">Choose earlier file…</label>
+        <input id="oldfile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" multiple hidden>
+        <button id="newsrun" type="button" class="primary" style="align-self:flex-end">Decompose</button>
+      </div>
+    </div>
+    <div id="newsmsg"></div>
+    <div id="newsout" class="hidden">
+      <div class="chart-title" id="wf-title"></div>
+      <p class="chart-sub">From the earlier nowcast (top) to the current one (bottom): each bar is one series' contribution.</p>
+      <div class="chart" id="waterfall"></div>
+      <table class="news" id="newstable"></table>
+    </div>
+  </section>
+
+  <section class="step hidden" id="s-export">
+    <h2><span class="n">5</span>Reproduce</h2>
+    <p class="hint">The page runs the Cozy script below. Download it with the cleaned data and run it in Cozy
+      (<code>cozy nowcast_script.cz</code>) or in the <a href="index.html" class="online-only">playground</a> — it gives the
+      same numbers, and it is the starting point for anything the page does not do.</p>
+    <div class="row">
+      <button id="dl-script" type="button">Download script (nowcast_script.cz)</button>
+      <button id="dl-data" type="button">Download cleaned data (nowcast_data.csv)</button>
+      <button id="dl-results" type="button">Download results (nowcast_results.csv)</button>
+    </div>
+    <pre class="code" id="script"></pre>
+  </section>
+
+  <footer>
+    <p><strong>The model.</strong> On standardized data, r factors follow a VAR(1); each monthly series is a factor
+      loading times the factors plus its own noise; a quarterly series sits in its quarter's third month and loads on
+      the months of its quarter, with the weights 1, 2, 3, 2, 1 (Mariano and Murasawa, for growth rates) or 1, 1, 1
+      (for averages). Estimation is the EM algorithm of Bańbura and Modugno (2014) with independent idiosyncratic
+      errors, started from principal components; the news decomposition is theirs, computed exactly. The smoother
+      underneath solves for the whole factor path as one sparse linear system — Cozy's <code>ksmooth</code> — and the
+      model is Cozy's <code>nowcast</code> package, running here as WebAssembly.</p>
+    <p>Standard errors measure the uncertainty of the common component given the data and the estimated parameters;
+      they do not include parameter uncertainty or the series' own noise.</p>
+  </footer>
+</main>
+
+<script src="cozy.js"></script>
+<script>
+"use strict";
+/* ================================================================== */
+/* utilities                                                          */
+/* ================================================================== */
+const $ = id => document.getElementById(id);
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const ymOf = (y, m) => y * 12 + (m - 1);                 // month index; m is 1..12
+const yearOf = ym => Math.floor(ym / 12), monthOf = ym => (ym % 12) + 1;
+const ymLabel = ym => MONTHS[monthOf(ym) - 1] + " " + yearOf(ym);
+const qLabel = ym => yearOf(ym) + " Q" + Math.ceil(monthOf(ym) / 3);
+const ymISO = ym => yearOf(ym) + "-" + String(monthOf(ym)).padStart(2, "0") + "-01";
+const isQEnd = ym => monthOf(ym) % 3 === 0;
+const fin = v => typeof v === "number" && isFinite(v);
+function fmt(v, d = 3) {
+  if (!fin(v)) return "—";
+  const a = Math.abs(v);
+  if (a !== 0 && (a >= 1e6 || a < 1e-6)) return v.toExponential(2);
+  if (a !== 0 && a < 1e-3) return v.toFixed(Math.min(8, 1 - Math.floor(Math.log10(a))));
+  return v.toFixed(a >= 1000 ? 1 : d);
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in (attrs || {})) {
+    if (k === "class") e.className = attrs[k];
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), attrs[k]);
+    else e.setAttribute(k, attrs[k]);
+  }
+  for (const c of kids) if (c != null) e.append(c);
+  return e;
+}
+function download(name, text, type = "text/plain") {
+  const a = el("a", { href: URL.createObjectURL(new Blob([text], { type })), download: name });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function message(where, kind, text) {
+  const box = $(where); box.innerHTML = "";
+  if (text) box.append(el("div", { class: "msg " + kind }, text));
+}
+/* the readtable rule (eval.c csv_key): lowercase, [a-z0-9_], one underscore
+   between words, a leading digit prefixed with c — so the exported script's
+   readtable keeps every name exactly */
+function cozyName(raw, idx) {
+  let k = "";
+  for (const ch of String(raw).trim().replace(/^"+|"+$/g, "").toLowerCase()) {
+    if (/[a-z0-9]/.test(ch)) k += ch; else if (k && !k.endsWith("_")) k += "_";
+  }
+  k = k.replace(/_+$/, "");
+  if (!k) k = "c" + (idx + 1);
+  if (/^[0-9]/.test(k)) k = "c" + k;
+  return k;
+}
+
+/* ================================================================== */
+/* the engine: Cozy in a worker                                       */
+/* ================================================================== */
+const Engine = (() => {
+  const WORKER = `
+    self.window = self;
+    var M = null, queue = [];
+    function out(s) { return s; }
+    function boot() {
+      Cozy().then(function (m) {
+        M = m; M._cozy_init();
+        postMessage({ ready: true, version: M.UTF8ToString(M._cozy_version()) });
+        queue.forEach(handle); queue = [];
+      }, function (e) { postMessage({ fatal: String(e) }); });
+    }
+    function handle(msg) {
+      if (!M) { queue.push(msg); return; }
+      var r = { id: msg.id };
+      try {
+        if (msg.cmd === "eval") {
+          r.out = M.ccall("cozy_eval", "string", ["string"], [msg.src]);
+        } else if (msg.cmd === "set") {
+          var a = msg.data, p = M._malloc(8 * Math.max(1, a.length));
+          M.HEAPF64.set(a, p / 8);
+          M.ccall("cozy_set_matrix", "number", ["string", "number", "number", "number"], [msg.name, p, msg.rows, msg.cols]);
+          M._free(p);
+        } else if (msg.cmd === "get") {
+          r.mats = {};
+          msg.names.forEach(function (n) {
+            var p = M.ccall("cozy_get_matrix", "number", ["string"], [n]);
+            if (!p) { r.mats[n] = null; return; }
+            var d = M._cozy_get_dims() / 4, rows = M.HEAP32[d], cols = M.HEAP32[d + 1];
+            r.mats[n] = { rows: rows, cols: cols, data: Float64Array.from(M.HEAPF64.subarray(p / 8, p / 8 + rows * cols)) };
+          });
+        }
+      } catch (e) { r.error = String(e && e.message || e); }
+      postMessage(r);
+    }
+    onmessage = function (e) { handle(e.data); };
+  `;
+  let worker = null, nextId = 1, readyResolve, version = "";
+  const pending = new Map();
+  const ready = new Promise(res => { readyResolve = res; });
+  function start() {
+    let src;
+    const inline = document.querySelector("script[data-cozy-bundle]");
+    if (inline) src = inline.textContent + "\n" + WORKER + "\nboot();";
+    else src = "importScripts(" + JSON.stringify(new URL("cozy.js", location.href).href) + ");\n" + WORKER + "\nboot();";
+    worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
+    worker.onmessage = e => {
+      const m = e.data;
+      if (m.ready) { version = m.version; readyResolve(); return; }
+      if (m.fatal) { setEngine("engine failed to start", "busy"); return; }
+      const p = pending.get(m.id); pending.delete(m.id);
+      if (!p) return;
+      m.error ? p.reject(new Error(m.error)) : p.resolve(m);
+    };
+    worker.onerror = e => setEngine("engine error: " + (e.message || e), "busy");
+  }
+  function call(msg, transfer) {
+    return ready.then(() => new Promise((resolve, reject) => {
+      msg.id = nextId++; pending.set(msg.id, { resolve, reject });
+      worker.postMessage(msg, transfer || []);
+    }));
+  }
+  /* evaluate Cozy source; an error in the output becomes a rejection */
+  async function run(src) {
+    const r = await call({ cmd: "eval", src });
+    if (/(^|\n)\s*(parse )?error at \d+:\d+/.test(r.out)) throw new Error(r.out.trim());
+    return r.out;
+  }
+  async function set(name, data, rows, cols) {
+    const a = Float64Array.from(data);
+    await call({ cmd: "set", name, data: a, rows, cols }, [a.buffer]);
+  }
+  async function get(...names) { return (await call({ cmd: "get", names })).mats; }
+  return { start, ready, run, set, get, version: () => version };
+})();
+function setEngine(text, cls) { const e = $("engine"); e.textContent = text; e.className = cls || ""; }
+
+/* ================================================================== */
+/* reading files                                                      */
+/* ================================================================== */
+function parseDelimited(text) {
+  text = text.replace(/^﻿/, "");
+  const lines = text.split(/\r\n|\n|\r/).filter(l => l.trim() !== "");
+  if (!lines.length) return [];
+  const head = lines[0];
+  const count = ch => (head.match(new RegExp("\\" + ch, "g")) || []).length;
+  const delim = ["\t", ";", ","].sort((a, b) => count(b) - count(a))[0];
+  const rows = [];
+  for (const line of lines) {
+    const cells = []; let cur = "", q = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+      else if (ch === '"') q = true;
+      else if (ch === delim) { cells.push(cur); cur = ""; }
+      else cur += ch;
+    }
+    cells.push(cur);
+    rows.push(cells.map(c => c.trim()));
+  }
+  rows.decimalComma = delim === ";";
+  return rows;
+}
+let XLSXlib = null;
+function loadXLSX() {
+  if (XLSXlib) return Promise.resolve(XLSXlib);
+  return new Promise((res, rej) => {
+    const s = el("script", { src: "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" });
+    s.onload = () => { XLSXlib = window.XLSX; res(XLSXlib); };
+    s.onerror = () => rej(new Error("Excel files need an internet connection to load the reader; save the sheet as CSV instead."));
+    document.head.append(s);
+  });
+}
+async function readFile(file) {
+  if (/\.xlsx?$/i.test(file.name)) {
+    const X = await loadXLSX();
+    const wb = X.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = X.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+    return rows.filter(r => r.some(c => c !== "" && c != null))
+               .map(r => r.map(c => c instanceof Date ? c : (c == null ? "" : typeof c === "number" ? c : String(c).trim())));
+  }
+  return parseDelimited(await file.text());
+}
+
+/* dates -> {ym, q} (q: the label named a quarter) or null */
+function parseDate(v) {
+  if (v instanceof Date && !isNaN(v)) return { ym: ymOf(v.getFullYear(), v.getMonth() + 1), q: false };
+  if (typeof v === "number") {                               // an Excel serial day
+    if (v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return { ym: ymOf(d.getUTCFullYear(), d.getUTCMonth() + 1), q: false }; }
+    if (v >= 1800 && v <= 2200 && Number.isInteger(v)) return null;   // a bare year: annual, unsupported
+    return null;
+  }
+  const s = String(v).trim();
+  let m;
+  if ((m = s.match(/^(\d{4})\s*[-\/. ]?\s*[Qq]([1-4])$/))) return { ym: ymOf(+m[1], 3 * (+m[2]) - 2), q: true };
+  if ((m = s.match(/^[Qq]([1-4])\s*[-\/. ]?\s*(\d{4})$/))) return { ym: ymOf(+m[2], 3 * (+m[1]) - 2), q: true };
+  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?(?:[ T].*)?$/))) return +m[2] >= 1 && +m[2] <= 12 ? { ym: ymOf(+m[1], +m[2]), q: false } : null;
+  if ((m = s.match(/^(\d{4})[Mm](\d{1,2})$/))) return { ym: ymOf(+m[1], +m[2]), q: false };
+  if ((m = s.match(/^(\d{4})(\d{2})$/)) && +m[2] >= 1 && +m[2] <= 12) return { ym: ymOf(+m[1], +m[2]), q: false };
+  if ((m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/))) {          // 03/31/2024 or 31.03.2024
+    let a = +m[1], b = +m[2];
+    const month = s.includes(".") ? b : (a > 12 ? b : a);
+    return month >= 1 && month <= 12 ? { ym: ymOf(+m[3], month), q: false } : null;
+  }
+  let name = null, year = null;
+  if ((m = s.match(/^([A-Za-z]{3,9})\.?[-\/. ]+(\d{4})$/))) { name = m[1]; year = +m[2]; }
+  else if ((m = s.match(/^(\d{4})[-\/. ]+([A-Za-z]{3,9})$/))) { name = m[2]; year = +m[1]; }
+  if (name) {
+    const k = MONTHS.findIndex(x => name.slice(0, 3).toLowerCase() === x.toLowerCase());
+    return k >= 0 ? { ym: ymOf(year, k + 1), q: false } : null;
+  }
+  return null;
+}
+function parseNumber(v, decimalComma) {
+  if (typeof v === "number") return isFinite(v) ? v : NaN;
+  let s = String(v).trim();
+  if (s === "" || /^(\.|na|n\/a|#n\/a|nan|null|-|–)$/i.test(s)) return NaN;
+  s = s.replace(/[\s ]/g, "");
+  if (decimalComma) s = s.replace(/\./g, "").replace(",", ".");
+  else s = s.replace(/,(?=\d{3}(\D|$))/g, "");
+  const x = Number(s.replace(/%$/, ""));
+  return isFinite(x) ? x : NaN;
+}
+
+/* a table -> series {name, freq, obs: Map(ym -> value), notes} */
+function tableToSeries(rows, fileName) {
+  if (rows.length < 3) throw new Error(fileName + ": needs a header row and at least two rows of data");
+  const head = rows[0].map(String);
+  let dc = head.findIndex(h => /^(date|time|period|month|quarter|observation_date|dates)$/i.test(h.trim()));
+  if (dc < 0) dc = 0;
+  const dates = rows.slice(1).map(r => parseDate(r[dc]));
+  const good = dates.filter(Boolean).length;
+  if (good < 0.8 * (rows.length - 1)) {
+    const bad = rows.slice(1).find((r, i) => !dates[i]);
+    throw new Error(fileName + ": could not read the dates in column \"" + head[dc] + "\" (for example \"" + (bad ? bad[dc] : "") + "\"). Use 2024-03-31, 2024-03, 2024M03, 2024Q1 or Mar 2024.");
+  }
+  const out = [];
+  for (let j = 0; j < head.length; j++) {
+    if (j === dc) continue;
+    const sums = new Map(), counts = new Map(); let qLabels = 0, n = 0, nonnum = 0;
+    for (let i = 1; i < rows.length; i++) {
+      const d = dates[i - 1]; if (!d) continue;
+      const cell = rows[i][j];
+      const x = parseNumber(cell == null ? "" : cell, rows.decimalComma);
+      if (!fin(x)) { if (cell !== "" && cell != null) nonnum++; continue; }
+      n++; if (d.q) qLabels++;
+      sums.set(d.ym, (sums.get(d.ym) || 0) + x); counts.set(d.ym, (counts.get(d.ym) || 0) + 1);
+    }
+    if (n === 0) continue;                                // empty, or text: not a series
+    const obs = new Map(); let averaged = false;
+    for (const [ym, s] of sums) { const c = counts.get(ym); if (c > 1) averaged = true; obs.set(ym, s / c); }
+    const keys = [...obs.keys()].sort((a, b) => a - b);
+    let freq = "M", notes = [];
+    const gaps = keys.slice(1).map((k, i) => k - keys[i]);
+    const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : 1;
+    if (qLabels === n || (med === 3 && new Set(keys.map(k => k % 3)).size === 1)) freq = "Q";
+    else if (med >= 12) { notes.push("annual — not used"); freq = "A"; }
+    if (averaged) notes.push("averaged to monthly");
+    let aligned = obs;
+    if (freq === "Q") {                                   // to the quarter's third month
+      aligned = new Map();
+      for (const [ym, v] of obs) aligned.set(ym - (ym % 3) + 2, v);
+    }
+    out.push({ raw: head[j] || ("column " + (j + 1)), freq, obs: aligned, notes, file: fileName });
+  }
+  if (!out.length) throw new Error(fileName + ": no numeric columns found");
+  return out;
+}
+
+/* ================================================================== */
+/* state                                                              */
+/* ================================================================== */
+const S = { series: [], fit: null, panel: null, lastScript: "" };
+
+function suggestTransform(s) {
+  const v = [...s.obs.entries()].sort((a, b) => a[0] - b[0]).map(e => e[1]);
+  if (v.length < 8) return "level";
+  const mean = v.reduce((a, b) => a + b, 0) / v.length;
+  let c0 = 0, c1 = 0;
+  for (let i = 0; i < v.length; i++) { c0 += (v[i] - mean) ** 2; if (i) c1 += (v[i] - mean) * (v[i - 1] - mean); }
+  const rho = c0 > 0 ? c1 / c0 : 0;
+  const positive = v.every(x => x > 0);
+  if (rho > 0.95 && positive) return "pct";
+  if (rho > 0.95) return "diff";
+  return "level";
+}
+const TRANSFORMS = [["level", "as is"], ["pct", "% change"], ["logdiff", "log change ×100"], ["diff", "change"], ["yoy", "% change on a year ago"]];
+const TLABEL = { level: "", pct: "% change on the previous period", logdiff: "log change ×100", diff: "change on the previous period", yoy: "% change on a year ago" };
+
+function addSeries(list) {
+  const taken = new Set(["date", ...S.series.map(s => s.name)]);
+  for (const s of list) {
+    let base = cozyName(s.raw, S.series.length), name = base, k = 2;
+    while (taken.has(name)) name = base + "_" + k++;
+    taken.add(name);
+    s.name = name;
+    s.on = s.freq !== "A";
+    s.transform = suggestTransform(s);
+    S.series.push(s);
+  }
+}
+async function loadFiles(files) {
+  message("datamsg", "info", "Reading " + [...files].map(f => f.name).join(", ") + "…");
+  const notes = [];
+  try {
+    for (const f of files) {
+      const t = await readFile(f);
+      const list = tableToSeries(t, f.name);
+      addSeries(list);
+      notes.push(f.name + ": " + list.length + " series");
+    }
+    message("datamsg", "info", notes.join(" · "));
+  } catch (e) { message("datamsg", "err", e.message); }
+  renderSeries();
+}
+function loadExample() {
+  S.series = [];
+  addSeries(tableToSeries(parseDelimited(EXAMPLE_CSV), "example"));
+  $("agg").value = "mean";                                   // the example's GDP is the mean of its months
+  message("datamsg", "info", "Example: five monthly indicators and quarterly GDP growth, ten years, simulated from a " +
+    "one-factor model in which GDP is the average of its quarter's months (the nowcasting application of the " +
+    "Kalman-smoother teaching package). The last month of two indicators is not yet out, and the current " +
+    "quarter's GDP is not published.");
+  renderSeries();
+}
+
+function renderSeries() {
+  const body = $("series").tBodies[0]; body.innerHTML = "";
+  $("serieswrap").classList.toggle("hidden", !S.series.length);
+  $("clear").classList.toggle("hidden", !S.series.length);
+  $("s-model").classList.toggle("hidden", !S.series.length);
+  for (const s of S.series) {
+    const keys = [...s.obs.keys()].sort((a, b) => a - b);
+    const on = el("input", { type: "checkbox" }); on.checked = s.on; on.disabled = s.freq === "A";
+    on.onchange = () => { s.on = on.checked; tr.classList.toggle("off", !s.on); refreshTargets(); };
+    const fq = el("select", {}, el("option", { value: "M" }, "monthly"), el("option", { value: "Q" }, "quarterly"));
+    fq.value = s.freq === "A" ? "M" : s.freq; fq.disabled = s.freq === "A";
+    fq.onchange = () => {
+      if (fq.value === "Q") {
+        const m = new Map(); for (const [ym, v] of s.obs) m.set(ym - (ym % 3) + 2, v); s.obs = m;
+      }
+      s.freq = fq.value; renderSeries();
+    };
+    const tf = el("select", {}, ...TRANSFORMS.map(([v, l]) => el("option", { value: v }, l)));
+    tf.value = s.transform; tf.onchange = () => { s.transform = tf.value; };
+    const last = keys[keys.length - 1];
+    const tr = el("tr", { class: s.on ? "" : "off" },
+      el("td", {}, on),
+      el("td", { title: s.raw + (s.file ? " (" + s.file + ")" : "") }, s.name, " ",
+        s.freq === "Q" ? el("span", { class: "tag q" }, "Q") : null,
+        s.notes.length ? el("span", { class: "tag", title: s.notes.join("; ") }, s.notes[0]) : null),
+      el("td", {}, s.freq === "A" ? "annual" : fq),
+      el("td", {}, tf),
+      el("td", {}, s.freq === "Q" ? qLabel(keys[0]) : ymLabel(keys[0])),
+      el("td", {}, s.freq === "Q" ? qLabel(last) : ymLabel(last)),
+      el("td", { class: "num" }, String(keys.length)),
+      el("td", { class: "num" }, fmt(s.obs.get(last))));
+    body.append(tr);
+  }
+  refreshTargets();
+}
+function refreshTargets() {
+  const sel = $("target"), prev = sel.value;
+  sel.innerHTML = "";
+  const use = S.series.filter(s => s.on);
+  const q = use.filter(s => s.freq === "Q");
+  for (const s of [...q, ...use.filter(s => s.freq === "M")]) sel.append(el("option", { value: s.name }, s.name + (s.freq === "Q" ? " (quarterly)" : "")));
+  const gdp = q.find(s => /gdp|gnp|output|product/i.test(s.name));
+  sel.value = use.some(s => s.name === prev) ? prev : (gdp || q[0] || use[0] || {}).name || "";
+  const nm = use.filter(s => s.freq === "M").length;
+  if (!$("r").dataset.touched) $("r").value = nm >= 12 ? "2" : "1";
+  $("run").disabled = !use.length;
+}
+
+/* ================================================================== */
+/* the panel: series x months, with months to nowcast into            */
+/* ================================================================== */
+function buildPanel(list) {
+  let lo = Infinity, hi = -Infinity, lastM = -Infinity;
+  for (const s of list) for (const ym of s.obs.keys()) {
+    lo = Math.min(lo, ym); hi = Math.max(hi, ym); if (s.freq === "M") lastM = Math.max(lastM, ym);
+  }
+  if (!isFinite(lastM)) lastM = hi;
+  const endQ = lastM - (lastM % 3) + 2;                      // the current quarter's third month
+  const end = Math.max(hi - (hi % 3) + 2, endQ + 3);         // one more quarter: the forecast
+  const T = end - lo + 1, m = list.length;
+  const Y = new Float64Array(m * T).fill(NaN);
+  list.forEach((s, i) => { for (const [ym, v] of s.obs) Y[i * T + (ym - lo)] = v; });
+  return { lo, T, m, Y, names: list.map(s => s.name), q: list.map(s => s.freq === "Q" ? 1 : 0),
+           codes: list.map(s => s.transform), lastM, endQ, end };
+}
+function cozyStrings(a) { return "[" + a.map(x => JSON.stringify(x)).join("; ") + "]"; }
+function cozyCol(a) { return "[" + a.join("; ") + "]"; }
+
+function scriptText(P, o) {
+  const now = new Date().toISOString().slice(0, 10);
+  const ti = P.names.indexOf(o.target);
+  const tmonth = P.endQ - P.lo + 1;
+  return [
+    "% Nowcast script, written by Cozy's nowcast page on " + now + ".",
+    "% Data: nowcast_data.csv, saved by the page — one column per series, one row",
+    "% per month; a quarterly series in its quarter's third month.",
+    "load(\"nowcast\");",
+    "let t = readtable(\"nowcast_data.csv\");",
+    "let d = nowcast.panel(t);",
+    "let d = setfield(d, \"quarterly\", " + cozyCol(P.q) + ");",
+    "let d = setfield(d, \"Y\", nowcast.transform(d.Y, " + cozyStrings(P.codes) + ", d.quarterly));",
+    "let f = nowcast.fit(d, {r = " + o.r + ", agg = \"" + o.agg + "\", maxit = " + o.maxit + ", tol = " + o.tol + "});",
+    "% the target, " + o.target + ", in " + qLabel(P.endQ) + " (month " + tmonth + " of the panel, " + ymISO(P.endQ) + ")",
+    "let n = nowcast.nowcast(f, \"" + o.target + "\", " + tmonth + ")",
+    ""].join("\n");
+}
+function cleanCSV(P) {
+  const lines = ["date," + P.names.join(",")];
+  for (let t = 0; t < P.T; t++) {
+    const row = [ymISO(P.lo + t)];
+    for (let i = 0; i < P.m; i++) { const v = P.Y[i * P.T + t]; row.push(fin(v) ? String(v) : ""); }
+    lines.push(row.join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+/* ================================================================== */
+/* estimation                                                         */
+/* ================================================================== */
+function options() {
+  const tol = Number($("tol").value);
+  const maxit = Math.max(1, Math.round(Number($("maxit").value) || 500));
+  return { target: $("target").value, r: +$("r").value, agg: $("agg").value, maxit,
+           tol: fin(tol) && tol >= 0 ? tol : 1e-5 };
+}
+async function estimate() {
+  const list = S.series.filter(s => s.on && s.freq !== "A");
+  if (!list.length) return;
+  const o = options();
+  const P = buildPanel(list);
+  message("modelmsg", "", "");
+  $("run").disabled = true; $("prog").classList.remove("hidden");
+  const bar = $("prog").firstElementChild; bar.style.width = "0%";
+  setEngine("estimating…", "busy");
+  const t0 = performance.now();
+  try {
+    await Engine.set("nc_Yraw", P.Y, P.m, P.T);
+    await Engine.run("let nc_d = nowcast.data(nc_Yraw, {names = " + cozyStrings(P.names) + ", quarterly = " + cozyCol(P.q) + "});" +
+                     "let nc_d = setfield(nc_d, \"Y\", nowcast.transform(nc_d.Y, " + cozyStrings(P.codes) + ", nc_d.quarterly));");
+    const base = "{r = " + o.r + ", agg = \"" + o.agg + "\", tol = " + o.tol;
+    let done = 0, conv = false, ll = [];
+    const CH = 10;
+    while (done < o.maxit && !conv) {
+      const k = Math.min(CH, o.maxit - done);
+      const resume = done ? ", params = nc_f.params, P0 = nc_f.P0, last = " + ll[ll.length - 1].toPrecision(17) : "";
+      await Engine.run("let nc_f = nowcast.fit(nc_d, " + base + ", maxit = " + k + resume + "}); " +
+                       "let nc_ll = nc_f.loglik; let nc_cv = nc_f.converged;");
+      const g = await Engine.get("nc_ll", "nc_cv");
+      ll = ll.concat(Array.from(g.nc_ll.data)); conv = g.nc_cv.data[0] === 1; done += g.nc_ll.data.length;
+      bar.style.width = (conv ? 100 : Math.min(98, 100 * done / o.maxit)) + "%";
+      $("fitstatus").textContent = "EM iteration " + done + " · log-likelihood " + ll[ll.length - 1].toFixed(2);
+    }
+    await Engine.run("let nc_T = size(nc_f.Y)[2]; let nc_one = ones(1, nc_T);" +
+      "let nc_yv = nc_f.mu * nc_one + (nc_f.sd * nc_one) .* nc_f.state.yhat;" +
+      "let nc_ys = (nc_f.sd * nc_one) .* nc_f.state.ysd; let nc_yd = nc_f.Y;" +
+      "let nc_fx = nc_f.state.f; let nc_fs = nc_f.state.fsd;");
+    const R = await Engine.get("nc_yv", "nc_ys", "nc_yd", "nc_fx", "nc_fs");
+    const secs = (performance.now() - t0) / 1000;
+    S.fit = { P, o, ll, conv, iters: done, secs, yv: R.nc_yv, ys: R.nc_ys, yd: R.nc_yd, fx: R.nc_fx, fs: R.nc_fs };
+    S.lastScript = scriptText(P, o);
+    $("fitstatus").textContent = (conv ? "converged" : "stopped at the iteration limit") + " after " + done +
+      " iterations · " + (secs < 1 ? Math.round(secs * 1000) + " ms" : secs.toFixed(1) + " s");
+    bar.style.width = "100%";
+    renderResults();
+    if (!conv) message("modelmsg", "warn", "EM stopped at " + o.maxit + " iterations before reaching the tolerance; the estimates are usable, but raise the limit for a converged fit.");
+  } catch (e) {
+    message("modelmsg", "err", e.message);
+    $("fitstatus").textContent = "";
+  } finally {
+    $("run").disabled = false; setEngine("engine ready", "ready");
+    setTimeout(() => $("prog").classList.add("hidden"), 800);
+  }
+}
+
+/* ================================================================== */
+/* charts (inline SVG)                                                */
+/* ================================================================== */
+function niceTicks(lo, hi, n = 5) {
+  if (!(hi > lo)) { hi = lo + 1; lo = lo - 1; }
+  const span = hi - lo, step0 = span / n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map(x => x * mag).find(x => span / x <= n) || 10 * mag;
+  const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) t.push(+v.toFixed(10));
+  return t;
+}
+const NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+/* lines with bands over months; layers: {y, color, width, dash, dots, bands: [[lo, hi, fill]], name} */
+function timeChart(box, xs, layers, opt = {}) {
+  box.innerHTML = "";
+  const W = Math.max(340, Math.min(opt.width || 900, box.clientWidth || 900));
+  const H = Math.round((opt.height || 300) * (W < 600 ? 0.8 : 1)), L = 46, Rm = 14, Tm = 12, B = 26;
+  const vals = [];
+  for (const ly of layers) {
+    ly.y.forEach(v => fin(v) && vals.push(v));
+    (ly.bands || []).forEach(b => { b[0].forEach(v => fin(v) && vals.push(v)); b[1].forEach(v => fin(v) && vals.push(v)); });
+  }
+  if (opt.zero) vals.push(0);
+  let lo = Math.min(...vals), hi = Math.max(...vals); const pad = (hi - lo) * 0.06 || 1; lo -= pad; hi += pad;
+  const yt = niceTicks(lo, hi, 5); lo = Math.min(lo, yt[0]); hi = Math.max(hi, yt[yt.length - 1]);
+  const x0 = xs[0], x1 = xs[xs.length - 1];
+  const X = v => L + (W - L - Rm) * (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5);
+  const Y = v => Tm + (H - Tm - B) * (1 - (v - lo) / (hi - lo));
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": opt.label || "chart" });
+  if (opt.markFrom != null && opt.markFrom <= x1) {
+    const xa = X(Math.max(opt.markFrom - 0.5, x0));
+    svg.append(svgEl("rect", { x: xa, y: Tm, width: Math.max(0, W - Rm - xa), height: H - Tm - B, fill: cssVar("--future") }));
+    const room = W - Rm - xa > 110;                     // the label inside the shade, or just left of it
+    const t = svgEl("text", { x: room ? xa + 5 : xa - 5, y: Tm + 13, "text-anchor": room ? "start" : "end" });
+    t.textContent = opt.markText || ""; svg.append(t);
+  }
+  for (const v of yt) {
+    svg.append(svgEl("line", { x1: L, x2: W - Rm, y1: Y(v), y2: Y(v), class: "gridline" }));
+    const t = svgEl("text", { x: L - 6, y: Y(v) + 4, "text-anchor": "end" }); t.textContent = fmt(v, Math.abs(v) < 10 ? 2 : 1).replace(/\.?0+$/, "") || "0"; svg.append(t);
+  }
+  if (opt.zero && lo < 0 && hi > 0) svg.append(svgEl("line", { x1: L, x2: W - Rm, y1: Y(0), y2: Y(0), class: "axisline" }));
+  const ticks = [];
+  if (opt.index) niceTicks(x0, x1, 6).forEach(v => { if (Number.isInteger(v)) ticks.push([v, String(v)]); });
+  else {
+    const years = []; for (let ym = x0; ym <= x1; ym++) if (monthOf(ym) === 1) years.push(ym);
+    const every = Math.max(1, Math.ceil(years.length / (W < 700 ? 6 : 10)));
+    years.forEach((ym, k) => { if (!(k % every)) ticks.push([ym, String(yearOf(ym))]); });
+  }
+  for (const [v, lab] of ticks) {
+    svg.append(svgEl("line", { x1: X(v), x2: X(v), y1: H - B, y2: H - B + 4, class: "axisline" }));
+    const t = svgEl("text", { x: X(v), y: H - B + 16, "text-anchor": "middle" }); t.textContent = lab; svg.append(t);
+  }
+  svg.append(svgEl("line", { x1: L, x2: W - Rm, y1: H - B, y2: H - B, class: "axisline" }));
+  const path = (ys, keep) => {
+    let d = "", pen = false;
+    ys.forEach((v, i) => { if (!fin(v) || (keep && !keep(i))) { pen = false; return; } d += (pen ? "L" : "M") + X(xs[i]).toFixed(1) + "," + Y(v).toFixed(1); pen = true; });
+    return d;
+  };
+  for (const ly of layers) for (const [blo, bhi, fill] of (ly.bands || [])) {
+    let segs = [], cur = [];
+    xs.forEach((x, i) => { if (fin(blo[i]) && fin(bhi[i]) && (!ly.keep || ly.keep(i))) cur.push(i); else if (cur.length) { segs.push(cur); cur = []; } });
+    if (cur.length) segs.push(cur);
+    for (const sg of segs) {
+      const d = sg.map((i, k) => (k ? "L" : "M") + X(xs[i]).toFixed(1) + "," + Y(bhi[i]).toFixed(1)).join("") +
+        sg.slice().reverse().map(i => "L" + X(xs[i]).toFixed(1) + "," + Y(blo[i]).toFixed(1)).join("") + "Z";
+      svg.append(svgEl("path", { d, fill, stroke: "none" }));
+    }
+  }
+  for (const ly of layers) {
+    if (ly.dots) {
+      ly.y.forEach((v, i) => fin(v) && svg.append(svgEl("circle", { cx: X(xs[i]), cy: Y(v), r: ly.r || 3.2, fill: ly.color, stroke: cssVar("--surface"), "stroke-width": 1 })));
+    } else {
+      svg.append(svgEl("path", { d: path(ly.y, ly.keep), fill: "none", stroke: ly.color, "stroke-width": ly.width || 2,
+        "stroke-dasharray": ly.dash || "", "stroke-linejoin": "round", "stroke-linecap": "round" }));
+    }
+  }
+  const tip = el("div", { class: "tip" });
+  const guide = svgEl("line", { y1: Tm, y2: H - B, class: "axisline", visibility: "hidden" });
+  svg.append(guide);
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect(), px = (ev.clientX - r.left) * W / r.width;
+    let best = 0, bd = Infinity;
+    xs.forEach((x, i) => { const d = Math.abs(X(x) - px); if (d < bd) { bd = d; best = i; } });
+    const lines = layers.filter(l => l.name && fin(l.y[best])).map(l =>
+      `<span style="color:${l.color}">●</span> ${esc(l.name)}: <b>${fmt(l.y[best])}</b>` + (l.tipExtra ? l.tipExtra(best) : ""));
+    if (!lines.length) { tip.style.display = "none"; guide.setAttribute("visibility", "hidden"); return; }
+    guide.setAttribute("x1", X(xs[best])); guide.setAttribute("x2", X(xs[best])); guide.setAttribute("visibility", "visible");
+    const head = opt.index ? (opt.indexName || "") + " " + xs[best] : opt.quarterly ? qLabel(xs[best]) : ymLabel(xs[best]);
+    tip.innerHTML = `<div style="color:var(--muted)">${head}</div>` + lines.join("<br>");
+    tip.style.display = "block";
+    const left = (X(xs[best]) / W) * r.width;
+    tip.style.left = Math.min(left + 12, r.width - tip.offsetWidth - 4) + "px"; tip.style.top = "8px";
+  });
+  svg.addEventListener("mouseleave", () => { tip.style.display = "none"; guide.setAttribute("visibility", "hidden"); });
+  box.append(svg, tip);
+}
+
+function coverChart(box, P) {
+  box.innerHTML = "";
+  const show = Math.min(24, P.T), first = P.T - show;
+  const W = Math.max(340, Math.min(520, box.clientWidth || 520)), rows = P.m, nameW = Math.min(130, W * 0.3), cw = (W - nameW) / show, ch = Math.min(18, 320 / Math.max(rows, 1));
+  const H = rows * ch + 24;
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "data coverage" });
+  const stride = Math.max(1, Math.ceil(13 / ch)), inset = ch >= 6 ? 1 : 0;
+  for (let i = 0; i < rows; i++) {
+    const y = i * ch;
+    if (i % stride === 0) { const t = svgEl("text", { x: nameW - 6, y: y + Math.max(ch, 10) * 0.75, "text-anchor": "end" }); t.textContent = P.names[i]; svg.append(t); }
+    for (let k = 0; k < show; k++) {
+      const t = first + k, ym = P.lo + t, v = P.Y[i * P.T + t];
+      const due = P.q[i] ? isQEnd(ym) : true;
+      if (!due) continue;
+      const future = ym > S.fit.P.lastM;
+      svg.append(svgEl("rect", { x: nameW + k * cw + 1, y: y + inset, width: cw - 2, height: ch - 2 * inset, rx: inset ? 2 : 0,
+        fill: fin(v) ? cssVar("--have") : cssVar(future ? "--future" : "--miss"),
+        stroke: fin(v) || !inset ? "none" : cssVar("--grid") }));
+    }
+  }
+  for (let k = 0; k < show; k++) {
+    const ym = P.lo + first + k;
+    if (monthOf(ym) === 1 || k === 0) { const t = svgEl("text", { x: nameW + k * cw + 1, y: H - 6 }); t.textContent = MONTHS[monthOf(ym) - 1] + " " + String(yearOf(ym)).slice(2); svg.append(t); }
+  }
+  box.append(svg);
+}
+
+function waterfall(box, items, start, end) {
+  box.innerHTML = "";
+  const rows = [{ label: "earlier nowcast", kind: "total", a: 0, b: start }];
+  let cum = start;
+  for (const it of items) { rows.push({ label: it.label, kind: it.value >= 0 ? "pos" : "neg", a: cum, b: cum + it.value, v: it.value }); cum += it.value; }
+  rows.push({ label: "current nowcast", kind: "total", a: 0, b: end });
+  const vals = rows.flatMap(r => [r.a, r.b]);
+  let lo = Math.min(...vals, 0), hi = Math.max(...vals, 0);
+  const totalsSpan = Math.max(Math.abs(start), Math.abs(end));
+  // zoom on the changes when the totals dwarf them
+  const moves = rows.filter(r => r.kind !== "total").flatMap(r => [r.a, r.b]).concat([start, end]);
+  const mlo = Math.min(...moves), mhi = Math.max(...moves);
+  const zoom = (mhi - mlo) < 0.25 * totalsSpan;
+  if (zoom) { const pad = (mhi - mlo) * 0.5 || Math.abs(start) * 0.05 || 0.1; lo = mlo - pad; hi = mhi + pad; }
+  const W = Math.max(340, Math.min(900, box.clientWidth || 900)), rowH = 26, L = Math.min(210, W * 0.36), Rm = 64, H = rows.length * rowH + 28;
+  const xt = niceTicks(lo, hi, 6); lo = Math.min(lo, xt[0]); hi = Math.max(hi, xt[xt.length - 1]);
+  const X = v => L + (W - L - Rm) * (v - lo) / (hi - lo);
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "news waterfall" });
+  for (const v of xt) {
+    svg.append(svgEl("line", { x1: X(v), x2: X(v), y1: 0, y2: H - 24, class: "gridline" }));
+    const t = svgEl("text", { x: X(v), y: H - 8, "text-anchor": "middle" }); t.textContent = fmt(v, 3).replace(/\.?0+$/, "") || "0"; svg.append(t);
+  }
+  rows.forEach((r, i) => {
+    const y = i * rowH + 4;
+    const t = svgEl("text", { x: L - 8, y: y + rowH * 0.6, "text-anchor": "end", style: r.kind === "total" ? "font-weight:600;fill:var(--ink-2)" : "" });
+    t.textContent = r.label; svg.append(t);
+    const a = zoom && r.kind === "total" ? lo : r.a;
+    const x1 = X(Math.min(a, r.b)), x2 = X(Math.max(a, r.b));
+    const fill = r.kind === "total" ? cssVar("--ref") : cssVar(r.kind === "pos" ? "--pos" : "--neg");
+    svg.append(svgEl("rect", { x: x1, y: y + 3, width: Math.max(1.5, x2 - x1), height: rowH - 10, rx: 2, fill }));
+    if (i > 0) svg.append(svgEl("line", { x1: X(r.a), x2: X(r.a), y1: y - 6, y2: y + 3, stroke: cssVar("--axis"), "stroke-dasharray": "2 2" }));
+    const vt = svgEl("text", { x: x2 + 6, y: y + rowH * 0.6 });
+    vt.textContent = r.kind === "total" ? fmt(r.b) : (r.v >= 0 ? "+" : "") + fmt(r.v); svg.append(vt);
+  });
+  box.append(svg);
+}
+
+/* ================================================================== */
+/* results                                                            */
+/* ================================================================== */
+function row(M, i) { return Array.from(M.data.subarray(i * M.cols, (i + 1) * M.cols)); }
+function renderResults() {
+  const F = S.fit, P = F.P, o = F.o;
+  ["s-results", "s-news", "s-export"].forEach(id => $(id).classList.remove("hidden"));
+  const ti = P.names.indexOf(o.target), tq = P.q[ti] === 1;
+  const ser = S.series.find(s => s.name === o.target);
+  const unit = TLABEL[P.codes[ti]];
+  const yv = row(F.yv, ti), ys = row(F.ys, ti), yd = row(F.yd, ti);
+  const xs = Array.from({ length: P.T }, (_, t) => P.lo + t);
+  $("asof").textContent = "Data through " + ymLabel(P.lastM) + " · " + P.m + " series · " + o.r + " factor" + (o.r > 1 ? "s" : "") +
+    " · target " + o.target + (unit ? " (" + unit + ")" : "");
+  // the quarters (or months) not yet published, up to the forecast
+  let lastPub = -1; yd.forEach((v, t) => { if (fin(v)) lastPub = t; });
+  const step = tq ? 3 : 1;
+  let firstOut = lastPub >= 0 ? lastPub + step : 0;
+  while (tq && firstOut < P.T && !isQEnd(P.lo + firstOut)) firstOut++;
+  const cards = $("cards"); cards.innerHTML = "";
+  const z90 = 1.6449, z68 = 0.9945;
+  for (let t = firstOut; t < P.T; t += step) {
+    const ym = P.lo + t;
+    if (tq && !isQEnd(ym)) continue;
+    const kind = ym < P.endQ - (tq ? 2 : 0) ? "backcast" : (ym <= P.endQ ? "nowcast" : "forecast");
+    const kinds = { backcast: "Backcast — published soon", nowcast: "Nowcast — the current " + (tq ? "quarter" : "month"), forecast: "Forecast — next " + (tq ? "quarter" : "month") };
+    cards.append(el("div", { class: "nc" + (kind === "nowcast" ? " main" : "") },
+      el("div", { class: "k" }, kinds[kind]),
+      el("div", { class: "q" }, (tq ? qLabel(ym) : ymLabel(ym)) + " · " + o.target),
+      el("div", { class: "v" }, fmt(yv[t], 2)),
+      el("div", { class: "ci" }, "90% band " + fmt(yv[t] - z90 * ys[t], 2) + " to " + fmt(yv[t] + z90 * ys[t], 2) + " · sd " + fmt(ys[t], 2)),
+      unit ? el("div", { class: "act" }, unit) : null));
+  }
+  if (!cards.children.length) cards.append(el("div", { class: "msg info" }, "Every period of the target is already published; add months beyond the data to forecast."));
+  drawCharts();
+  $("script").textContent = S.lastScript;
+  S.news = null; $("newsout").classList.add("hidden"); message("newsmsg", "", "");
+}
+function drawCharts() {
+  const F = S.fit; if (!F) return;
+  const P = F.P, o = F.o;
+  const ti = P.names.indexOf(o.target), tq = P.q[ti] === 1;
+  const unit = TLABEL[P.codes[ti]];
+  const yv = row(F.yv, ti), ys = row(F.ys, ti), yd = row(F.yd, ti);
+  const xs = Array.from({ length: P.T }, (_, t) => P.lo + t);
+  const z90 = 1.6449, z68 = 0.9945;
+  // fan chart over the last eight years
+  const from = Math.max(0, P.T - 96);
+  const idx = []; for (let t = from; t < P.T; t++) if (!tq || isQEnd(xs[t])) idx.push(t);
+  const xsZ = idx.map(t => xs[t]);
+  const sl = a => idx.map(t => a[t]);
+  const est = sl(yv), sd = sl(ys);
+  const band = z => [est.map((v, i) => v - z * sd[i]), est.map((v, i) => v + z * sd[i])];
+  const b90 = band(z90), b68 = band(z68);
+  $("fan-title").textContent = o.target + (unit ? " — " + unit : "");
+  timeChart($("fan"), xsZ, [
+    { y: est, color: cssVar("--series-1"), width: 2, name: "model", bands: [[b90[0], b90[1], cssVar("--band-2")], [b68[0], b68[1], cssVar("--band")]],
+      tipExtra: i => ` <span style="color:var(--muted)">± ${fmt(z90 * sd[i], 2)}</span>` },
+    { y: sl(yd), color: cssVar("--series-2"), dots: true, name: "published" }
+  ], { zero: true, quarterly: tq, markFrom: P.lastM + 1, markText: "beyond the data", label: "nowcast fan chart" });
+  $("fan-legend").innerHTML = `<span style="--c:var(--series-1)">model estimate</span><span class="box" style="--c:var(--band)">68% / 90% bands</span><span class="dot" style="--c:var(--series-2)">published</span>`;
+  // the first factor
+  const f1 = row(F.fx, 0).slice(1), s1 = row(F.fs, 0).slice(1);
+  timeChart($("factor"), xs, [{ y: f1, color: cssVar("--series-3"), name: "factor 1",
+    bands: [[f1.map((v, i) => v - z90 * s1[i]), f1.map((v, i) => v + z90 * s1[i]), cssVar("--band-2")]] }],
+    { zero: true, width: 520, height: 260, markFrom: P.lastM + 1, label: "common factor" });
+  coverChart($("cover"), P);
+  timeChart($("llchart"), F.ll.map((_, i) => i + 1), [{ y: F.ll, color: cssVar("--series-1"), name: "log-likelihood" }],
+    { height: 150, label: "EM log-likelihood", index: true, indexName: "iteration" });
+  $("emsub").textContent = "Log-likelihood by EM iteration: " + F.iters + " iterations, " + (F.conv ? "converged" : "not converged") +
+    ", " + (F.secs < 1 ? Math.round(F.secs * 1000) + " ms" : F.secs.toFixed(1) + " s") + " in your browser.";
+}
+let lastW = 0;
+window.addEventListener("resize", () => {
+  clearTimeout(window.__rz);
+  window.__rz = setTimeout(() => { if (Math.abs(innerWidth - lastW) > 40) { lastW = innerWidth; drawCharts(); if (S.news) drawWaterfall(); } }, 150);
+});
+
+/* ================================================================== */
+/* news                                                               */
+/* ================================================================== */
+async function oldVintagePanel() {
+  const P = S.fit.P;
+  const Yo = Float64Array.from(P.Y);
+  if ($("vintage").value === "hold") {
+    const h = +$("hold").value;
+    for (let i = 0; i < P.m; i++) {                  // each series' edge moved back h months
+      let last = -1;
+      for (let t = 0; t < P.T; t++) if (fin(Yo[i * P.T + t])) last = t;
+      for (let t = Math.max(0, last - h + 1); t <= last; t++) Yo[i * P.T + t] = NaN;
+    }
+    return { Y: Yo, label: "the same data with each series' latest " + h + " month" + (h > 1 ? "s" : "") + " held back" };
+  }
+  const files = $("oldfile").files;
+  if (!files.length) throw new Error("Choose the earlier file first.");
+  const old = [];
+  for (const f of files) old.push(...tableToSeries(await readFile(f), f.name));
+  const byName = new Map();
+  old.forEach((s, j) => { s.name = cozyName(s.raw, j); byName.set(s.name, s); });
+  const Y = new Float64Array(P.m * P.T).fill(NaN);
+  let matched = 0;
+  P.names.forEach((n, i) => {
+    const s = byName.get(n); if (!s) return; matched++;
+    const obs = P.q[i] && s.freq !== "Q" ? new Map([...s.obs].map(([ym, v]) => [ym - (ym % 3) + 2, v])) : s.obs;
+    for (const [ym, v] of obs) { const t = ym - P.lo; if (t >= 0 && t < P.T) Y[i * P.T + t] = v; }
+  });
+  if (!matched) throw new Error("None of the earlier file's series match the current ones by name.");
+  // a value the earlier file had that the current one lacks cannot be a release: keep the current blank
+  for (let k = 0; k < Y.length; k++) if (fin(Y[k]) && !fin(P.Y[k])) Y[k] = NaN;
+  return { Y, label: files[0].name + (matched < P.m ? " (" + matched + " of " + P.m + " series matched)" : "") };
+}
+function drawWaterfall() { const N = S.news; if (N) waterfall($("waterfall"), N.bars, N.oldv, N.newv); }
+async function runNews() {
+  const F = S.fit; if (!F) return;
+  message("newsmsg", "info", "Decomposing…");
+  $("newsrun").disabled = true; setEngine("working…", "busy");
+  try {
+    const { Y, label } = await oldVintagePanel();
+    const P = F.P, o = F.o;
+    const tmonth = P.endQ - P.lo + 1;
+    await Engine.set("nc_Yold", Y, P.m, P.T);
+    await Engine.run("let nc_fo = nowcast.update(nc_f, nowcast.transform(nc_Yold, " + cozyStrings(P.codes) + ", nc_d.quarterly));" +
+      "let nc_n = nowcast.news(nc_fo, nc_d.Y, \"" + o.target + "\", " + tmonth + ");" +
+      "let nc_nn = nc_n.news; let nc_nr = nc_n.revisions; let nc_su = nc_n.surprise; let nc_on = [nc_n.old, nc_n.new];");
+    const R = await Engine.get("nc_nn", "nc_nr", "nc_su", "nc_on");
+    const news = Array.from(R.nc_nn.data), revs = Array.from(R.nc_nr.data), sur = Array.from(R.nc_su.data);
+    const [oldv, newv] = R.nc_on.data;
+    const items = P.names.map((n, i) => ({ label: n, value: news[i], rev: revs[i], sur: sur[i] }));
+    const moved = items.filter(it => it.value !== 0 || it.rev !== 0);
+    if (!moved.length) { message("newsmsg", "info", "The two vintages give the same data for every series — nothing to decompose."); $("newsout").classList.add("hidden"); return; }
+    moved.sort((a, b) => Math.abs(b.value + b.rev) - Math.abs(a.value + a.rev));
+    const top = moved.slice(0, 12), rest = moved.slice(12);
+    const bars = top.map(it => ({ label: it.label, value: it.value + it.rev }));
+    if (rest.length) bars.push({ label: rest.length + " other series", value: rest.reduce((a, it) => a + it.value + it.rev, 0) });
+    $("newsout").classList.remove("hidden");
+    message("newsmsg", "info", "Earlier vintage: " + label + ".");
+    $("wf-title").textContent = o.target + ", " + qLabel(P.endQ) + ": " + fmt(oldv) + " → " + fmt(newv) +
+      " (" + (newv - oldv >= 0 ? "+" : "") + fmt(newv - oldv) + ")";
+    S.news = { oldv, newv, items, bars };
+    drawWaterfall();
+    const tb = $("newstable"); tb.innerHTML = "";
+    tb.append(el("tr", {}, el("th", {}, "Series"), el("th", {}, "News"), el("th", {}, "Revisions"), el("th", {}, "Total"),
+      el("th", { title: "the series' new releases minus what the earlier data expected, on average, in its units" }, "Surprise")));
+    const cls = v => v > 0 ? "pos" : v < 0 ? "neg" : "";
+    const sign = v => (v > 0 ? "+" : "") + fmt(v);
+    const SHOW = 15;
+    moved.forEach((it, k) => tb.append(el("tr", { class: k >= SHOW ? "more hidden" : "" }, el("td", {}, it.label),
+      el("td", { class: cls(it.value) }, it.value ? sign(it.value) : "·"), el("td", { class: cls(it.rev) }, it.rev ? sign(it.rev) : "·"),
+      el("td", { class: cls(it.value + it.rev) }, sign(it.value + it.rev)), el("td", {}, fin(it.sur) ? sign(it.sur) : "·"))));
+    if (moved.length > SHOW) {
+      const btn = el("button", { type: "button" }, "Show all " + moved.length + " series");
+      btn.onclick = () => { tb.querySelectorAll("tr.more").forEach(r => r.classList.remove("hidden")); btn.parentNode.parentNode.remove(); };
+      tb.append(el("tr", {}, el("td", { colspan: "5", style: "text-align:left" }, btn)));
+    }
+    const sn = news.reduce((a, b) => a + b, 0), sr = revs.reduce((a, b) => a + b, 0);
+    tb.append(el("tr", {}, el("th", {}, "All series"), el("th", {}, sign(sn)), el("th", {}, sign(sr)), el("th", {}, sign(sn + sr)), el("th", {}, "")));
+  } catch (e) { message("newsmsg", "err", e.message); }
+  finally { $("newsrun").disabled = false; setEngine("engine ready", "ready"); }
+}
+
+/* ================================================================== */
+/* exports                                                            */
+/* ================================================================== */
+function resultsCSV() {
+  const F = S.fit, P = F.P;
+  const head = ["date"];
+  P.names.forEach(n => head.push(n, n + "_model", n + "_sd"));
+  const lines = [head.join(",")];
+  for (let t = 0; t < P.T; t++) {
+    const r = [ymISO(P.lo + t)];
+    for (let i = 0; i < P.m; i++) {
+      const g = M => { const v = M.data[i * M.cols + t]; return fin(v) ? String(v) : ""; };
+      r.push(g(F.yd), g(F.yv), g(F.ys));
+    }
+    lines.push(r.join(","));
+  }
+  return lines.join("\n") + "\n";
+}
+
+/* ================================================================== */
+/* wiring                                                             */
+/* ================================================================== */
+const EXAMPLE_CSV = `date,industrial_production,retail_sales,employment,hours_worked,pmi,gdp
+2015-01-01,0.1869,0.4829,1.5992,0.3669,-1.5252,
+2015-02-01,0.7724,-0.0473,0.5313,1.0143,-0.8953,
+2015-03-01,1.0199,0.6298,-0.6927,0.8851,3.2054,0.0827
+2015-04-01,1.1032,0.4002,1.7888,1.7940,-0.9514,
+2015-05-01,0.3998,0.8575,0.1861,0.8337,0.9911,
+2015-06-01,-0.0287,0.7736,-0.6081,-0.2111,0.5754,0.3421
+2015-07-01,0.3842,0.0856,1.4889,0.4213,1.8936,
+2015-08-01,0.2789,0.2547,1.2845,0.8253,1.3122,
+2015-09-01,0.7448,0.5577,-1.2342,0.7007,1.6960,1.2155
+2015-10-01,-0.0408,-0.5624,0.2503,-0.4886,-0.1703,
+2015-11-01,-0.0571,0.4337,1.3291,-0.0693,-1.1085,
+2015-12-01,-0.4343,0.2220,-0.2732,0.0263,1.0406,-0.3452
+2016-01-01,-0.1183,-0.5511,-0.5547,-0.7601,1.9511,
+2016-02-01,-0.5724,-0.6074,-1.8404,-1.0648,0.1219,
+2016-03-01,-0.1692,-1.3677,-1.1992,-1.7202,0.7689,-0.2855
+2016-04-01,-1.0462,-0.4552,-0.7112,-1.3415,-1.0835,
+2016-05-01,-1.5672,-1.2919,-1.5050,-1.3895,-0.6832,
+2016-06-01,-1.1505,-0.2796,-0.0676,-2.3241,-3.3951,-1.0730
+2016-07-01,-0.7374,-0.5842,-1.3891,-1.2350,1.0582,
+2016-08-01,0.5546,0.3334,0.2325,0.1266,-1.3728,
+2016-09-01,0.7314,0.0924,-0.1080,0.2611,0.9976,-0.3801
+2016-10-01,1.3762,1.4896,1.4550,0.9648,-0.1156,
+2016-11-01,1.5223,0.3508,-0.4610,1.0899,1.9250,
+2016-12-01,0.3413,0.1085,-0.2764,0.0702,-1.6224,0.2476
+2017-01-01,0.6150,1.0422,0.9912,0.5744,-0.3122,
+2017-02-01,-0.1792,0.2955,-1.1094,0.1638,-0.9165,
+2017-03-01,-0.1755,-0.6901,0.1891,0.0229,-1.4680,-0.0003
+2017-04-01,-0.7745,-0.7235,-1.4433,-0.9314,-1.8543,
+2017-05-01,-0.6607,-0.6473,-0.2299,-1.8394,-3.5708,
+2017-06-01,0.5172,-0.1798,-0.0858,0.6916,-0.3297,-0.7347
+2017-07-01,0.1805,-0.0334,0.8292,-0.2700,3.6770,
+2017-08-01,-0.4641,-0.0568,-0.9130,0.0861,-2.5163,
+2017-09-01,0.3352,0.7014,0.2989,-0.4983,1.8777,-0.2117
+2017-10-01,0.3776,-0.3671,0.8115,0.2199,2.6334,
+2017-11-01,0.2070,0.6926,-0.2705,1.0712,0.0300,
+2017-12-01,0.1393,-0.8039,0.3613,0.2670,0.8052,0.3350
+2018-01-01,-0.2293,-0.1677,0.3912,-0.7934,1.1034,
+2018-02-01,0.1112,0.3888,-0.1240,-0.2366,2.1015,
+2018-03-01,-0.0469,-0.0141,0.2091,-0.3581,-0.7815,0.0367
+2018-04-01,0.1183,-0.3057,-0.6376,-0.2008,0.6922,
+2018-05-01,0.5680,0.1443,1.1757,0.3434,1.5824,
+2018-06-01,1.1935,0.7324,0.2213,0.9937,2.1260,0.7255
+2018-07-01,1.1981,1.1961,0.0923,0.9268,1.5597,
+2018-08-01,0.8031,0.8850,-1.1837,0.6625,0.1282,
+2018-09-01,0.0216,0.2598,0.2942,-0.5261,-0.9805,0.5956
+2018-10-01,0.0840,1.0027,0.2756,0.7826,-0.7729,
+2018-11-01,0.4329,0.6300,-0.2923,-0.0497,-1.1386,
+2018-12-01,0.4838,0.1454,-0.1119,0.6892,0.8088,1.0715
+2019-01-01,0.9434,0.2889,0.9150,0.8046,0.2390,
+2019-02-01,0.3368,0.6598,0.2012,-0.4853,1.8395,
+2019-03-01,0.6643,0.2757,1.7171,0.0036,-0.5422,0.2381
+2019-04-01,-0.2162,0.0440,-0.3403,-0.1880,-0.8085,
+2019-05-01,-0.3960,-0.2150,-0.5681,-0.2145,0.4178,
+2019-06-01,0.6190,0.1744,0.2431,0.6265,1.3141,-0.0250
+2019-07-01,0.3949,0.0604,-0.3391,0.9365,2.1245,
+2019-08-01,1.5656,1.2596,0.8423,1.2856,2.3817,
+2019-09-01,0.0811,0.7991,0.9083,0.2634,-0.9596,0.1801
+2019-10-01,-0.5206,-0.5361,-0.7799,0.5616,-2.1090,
+2019-11-01,0.0604,0.7602,1.2899,0.1841,0.1194,
+2019-12-01,0.7862,0.7096,0.3609,0.6144,1.6972,0.0064
+2020-01-01,-0.0850,-0.2897,-0.7975,-0.2826,-0.9921,
+2020-02-01,-1.1374,-1.2946,-0.0907,-0.5002,1.2779,
+2020-03-01,-1.0896,0.0560,-0.1681,-0.9418,-0.6300,-0.6751
+2020-04-01,-0.8566,-2.0274,0.4119,-0.8717,1.9354,
+2020-05-01,-1.1923,-1.8121,-1.4498,-1.7548,0.6207,
+2020-06-01,-1.7429,-0.9869,-2.0223,-2.2839,-1.6192,-1.7866
+2020-07-01,-1.5526,-0.4742,-1.5720,-1.7619,-1.8840,
+2020-08-01,-1.3058,-1.4238,-1.9722,-2.0680,-1.6430,
+2020-09-01,-0.7192,-0.1756,-2.1585,-0.4746,-2.3717,-0.7377
+2020-10-01,-0.2876,-1.2795,-1.7897,-1.2019,1.2931,
+2020-11-01,-0.2748,-0.8886,-0.5144,0.3647,-1.5021,
+2020-12-01,-0.3528,-0.4573,-1.8403,-0.3178,2.6977,-0.4339
+2021-01-01,0.4595,0.4514,-1.1267,1.1857,-0.3871,
+2021-02-01,0.6269,0.9052,0.8878,0.9345,-0.8560,
+2021-03-01,1.3317,1.3506,0.4407,0.6105,-0.4445,0.7359
+2021-04-01,0.6316,0.4514,-0.3950,0.5716,-2.7137,
+2021-05-01,0.3532,-0.4060,-0.6119,-0.0024,0.1593,
+2021-06-01,0.1331,-0.5348,-0.3103,0.7242,-0.3600,-0.0780
+2021-07-01,-0.1382,-1.0087,-0.0460,0.1786,1.8051,
+2021-08-01,1.2225,-0.6710,1.4076,1.4936,0.0563,
+2021-09-01,-0.1441,0.0080,-1.3572,0.1429,2.5087,0.8347
+2021-10-01,-0.3147,-0.2730,-0.0426,0.0729,0.9231,
+2021-11-01,-0.0599,-0.1843,0.4347,0.0864,-1.2606,
+2021-12-01,-0.2519,-0.2207,0.1869,-0.4834,-0.3515,-0.1171
+2022-01-01,-0.1632,0.3822,-0.9666,-0.1851,-1.0472,
+2022-02-01,-0.3708,0.0612,0.0954,0.7409,-0.9794,
+2022-03-01,0.4764,0.1288,-0.4111,-0.2707,-1.3835,0.2824
+2022-04-01,0.2856,0.3978,0.5755,0.2567,1.0907,
+2022-05-01,-0.5943,-0.7400,0.0163,-0.2231,-0.8714,
+2022-06-01,-0.4003,-0.6264,-0.2178,-0.7804,0.9372,-0.4199
+2022-07-01,0.8049,0.7425,-0.7640,1.6730,-0.0320,
+2022-08-01,0.0391,0.3239,0.8097,1.0350,1.5673,
+2022-09-01,0.3832,-0.5425,-1.0465,0.6705,0.9398,0.4095
+2022-10-01,0.3783,-0.8059,1.3119,-0.1430,3.7882,
+2022-11-01,0.3056,-0.1351,0.0868,-0.5285,0.7728,
+2022-12-01,-0.3704,0.2080,-0.2042,0.0311,1.6326,-0.0528
+2023-01-01,-0.8420,-0.9719,-0.9579,-1.8897,-0.8688,
+2023-02-01,-2.1600,-1.7687,-1.7754,-2.1511,-1.8264,
+2023-03-01,-1.2732,-0.7022,-0.8003,-1.6860,0.4867,-1.0620
+2023-04-01,-1.8299,-2.0479,0.1363,-1.5184,-1.2556,
+2023-05-01,-1.4687,-1.1763,-1.1431,-2.3547,-0.0259,
+2023-06-01,-1.1707,-1.3229,-0.2887,-1.0988,2.0516,-1.8459
+2023-07-01,-0.8862,-0.2604,-2.2897,-1.3020,0.6802,
+2023-08-01,-0.8633,-0.6158,-0.9850,-0.4744,1.0229,
+2023-09-01,-0.4697,-1.2985,-0.9018,-0.3778,1.1259,-0.7347
+2023-10-01,-0.4356,0.2765,0.2929,-0.8270,1.8287,
+2023-11-01,0.2816,0.8172,1.0434,0.1767,-0.1556,
+2023-12-01,0.7704,0.0068,-0.6568,0.1688,0.2406,0.0038
+2024-01-01,-1.0895,-0.6444,-1.0684,-0.2731,0.8662,
+2024-02-01,-0.6995,-0.7078,0.0093,-0.2971,0.8161,
+2024-03-01,0.1516,0.0133,1.0763,1.5761,-0.4583,-0.1815
+2024-04-01,-0.0838,0.2462,-0.5411,-0.4848,2.2109,
+2024-05-01,0.1079,0.3468,-1.2033,0.2163,-0.4028,
+2024-06-01,-0.2608,0.2745,0.3909,-0.0372,-0.7649,0.2135
+2024-07-01,0.3862,0.4062,-0.1677,0.9988,-1.7369,
+2024-08-01,0.5332,0.8895,0.1044,0.2768,0.8729,
+2024-09-01,-0.4900,0.2980,0.3253,-0.5772,0.9404,-0.0121
+2024-10-01,-0.4669,-0.0500,-1.2760,-0.6831,-2.6606,
+2024-11-01,-0.2132,-1.2350,0.5870,-0.6829,1.2693,
+2024-12-01,-0.2108,,,0.1731,-0.0676,`;
+function wire() {
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", e => { const f = [...e.dataTransfer.files]; if (f.length) loadFiles(f); });
+  $("file").onchange = e => { const f = [...e.target.files]; e.target.value = ""; if (f.length) loadFiles(f); };
+  $("example").onclick = loadExample;
+  $("clear").onclick = () => { S.series = []; S.fit = null; S.news = null; message("datamsg", "", ""); renderSeries();
+    ["s-results", "s-news", "s-export"].forEach(id => $(id).classList.add("hidden")); };
+  $("allon").onchange = e => { S.series.forEach(s => { if (s.freq !== "A") s.on = e.target.checked; }); renderSeries(); };
+  $("r").onchange = () => { $("r").dataset.touched = "1"; };
+  $("run").onclick = estimate;
+  $("vintage").onchange = () => {
+    const f = $("vintage").value === "file";
+    $("oldfilebtn").classList.toggle("hidden", !f); $("holdwrap").classList.toggle("hidden", f);
+  };
+  $("oldfile").onchange = () => { const f = $("oldfile").files; $("oldfilebtn").textContent = f.length ? f[0].name : "Choose earlier file…"; };
+  $("newsrun").onclick = runNews;
+  $("dl-script").onclick = () => download("nowcast_script.cz", S.lastScript);
+  $("dl-data").onclick = () => download("nowcast_data.csv", cleanCSV(S.fit.P), "text/csv");
+  $("dl-results").onclick = () => download("nowcast_results.csv", resultsCSV(), "text/csv");
+  Engine.start();
+  Engine.ready.then(() => Engine.run('load("nowcast");')).then(() => {
+    setEngine("engine ready", "ready"); $("run").disabled = !S.series.some(s => s.on);
+  }).catch(e => { setEngine("engine failed", "busy"); message("datamsg", "err", "The Cozy engine did not start: " + e.message); });
+}
+window.NowcastApp = { S, Engine, estimate, runNews, loadExample, cleanCSV, scriptText, parseDate, tableToSeries, parseDelimited, cozyName };
+wire();
+</script>
+</body>
+</html>

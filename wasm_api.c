@@ -48,15 +48,66 @@ void nu_wasm_pause(const char *msg, uint32_t mlen)
     fflush(g_cap);             /* POSIX: buffer and size now current */
     EM_ASM({
         var t = UTF8ToString($0);
-        if (window.__cozyStream) { window.__cozyStream(t);
-                                 window.__cozyPauseWaiting = 1; window.__cozyPauseDone = 0; }
-        else                   { window.__cozyPauseDone = 1; }
+        if (globalThis.__cozyStream) { globalThis.__cozyStream(t);
+                                 globalThis.__cozyPauseWaiting = 1; globalThis.__cozyPauseDone = 0; }
+        else                   { globalThis.__cozyPauseDone = 1; }
     }, g_buf + g_streamed);
     g_streamed = g_cap_len;
-    while (!EM_ASM_INT({ return (window.__cozyPauseDone | 0); }))
+    while (!EM_ASM_INT({ return (globalThis.__cozyPauseDone | 0); }))
         emscripten_sleep(60);
-    EM_ASM({ window.__cozyPauseWaiting = 0; });
+    EM_ASM({ globalThis.__cozyPauseWaiting = 0; });
 }
+
+/* Numbers in and out without text (the nowcasting page's data path,
+ * 0.1.47): bind the global `name` to a rows x cols Float matrix copied from
+ * row-major doubles, and read a real numeric global back as doubles. A
+ * dataset of 200 series x 360 months is 72,000 numbers — as source text,
+ * a megabyte to format and parse. */
+EMSCRIPTEN_KEEPALIVE
+int cozy_set_matrix(const char *name, const double *data, int rows, int cols)
+{
+    if (!name || rows < 0 || cols < 0) return -1;
+    Value v = val_array(ELT_FLOAT, (uint32_t)rows, (uint32_t)cols);
+    size_t cnt = (size_t)rows * (size_t)cols;
+    if (cnt) memcpy(as_arr(v)->data, data, cnt * sizeof(double));
+    uint32_t len = (uint32_t)strlen(name);
+    if (!env_assign(globals, name, len, v)) env_define(globals, name, len, v);
+    value_release(v);
+    return 0;
+}
+
+static double *g_mat;      /* cozy_get_matrix's buffer, valid until the next call */
+static int     g_dims[2];
+/* The global `name` as row-major doubles (Int and Bool convert; a real
+ * scalar is 1 x 1), with its shape at cozy_get_dims(); NULL if absent or
+ * not real numeric. */
+EMSCRIPTEN_KEEPALIVE
+const double *cozy_get_matrix(const char *name)
+{
+    free(g_mat); g_mat = NULL; g_dims[0] = g_dims[1] = 0;
+    Value v;
+    if (!name || !env_lookup(globals, name, (uint32_t)strlen(name), &v)) return NULL;
+    if (v.kind == VAL_INT || v.kind == VAL_FLOAT || v.kind == VAL_BOOL) {
+        g_mat = malloc(sizeof *g_mat);
+        g_mat[0] = v.kind == VAL_INT ? (double)v.as.i : v.kind == VAL_FLOAT ? v.as.f : (v.as.b ? 1.0 : 0.0);
+        g_dims[0] = g_dims[1] = 1;
+    } else if (v.kind == VAL_ARRAY) {
+        ArrObj *a = as_arr(v);
+        if (a->elt == ELT_FLOAT || a->elt == ELT_INT || a->elt == ELT_BOOL) {
+            size_t cnt = (size_t)a->rows * a->cols;
+            g_mat = malloc((cnt ? cnt : 1) * sizeof *g_mat);
+            for (size_t k = 0; k < cnt; k++) {
+                Value e = arr_get(a, k);
+                g_mat[k] = e.kind == VAL_INT ? (double)e.as.i : e.kind == VAL_FLOAT ? e.as.f : (e.as.b ? 1.0 : 0.0);
+            }
+            g_dims[0] = (int)a->rows; g_dims[1] = (int)a->cols;
+        }
+    }
+    value_release(v);
+    return g_mat;
+}
+EMSCRIPTEN_KEEPALIVE
+const int *cozy_get_dims(void) { return g_dims; }
 
 EMSCRIPTEN_KEEPALIVE
 const char *cozy_version(void) { return COZY_VERSION " (wasm, built " COZY_BUILT ")"; }

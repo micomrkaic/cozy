@@ -1,23 +1,28 @@
 #!/usr/bin/env python3
-"""Generate or verify docs/dsge-standalone.html, the DSGE demo page as ONE
-file: docs/dsge.html with the interpreter bundle (docs/cozy.js, which
-already embeds the WebAssembly binary and the packages) written inline, so
-the page can be saved, mailed, or opened from a disk with no network.
+"""Generate or verify the standalone pages: docs/dsge-standalone.html and
+docs/nowcast-standalone.html, each its page (docs/dsge.html,
+docs/nowcast.html) as ONE file, with the interpreter bundle (docs/cozy.js,
+which already embeds the WebAssembly binary and the packages) written
+inline, so the page can be saved, mailed, or opened from a disk with no
+network. The nowcast page runs Cozy in a Web Worker: its inline bundle
+carries data-cozy-bundle, and the page builds the worker from that text.
 
     python3 tools/gen_dsge_page.py           # regenerate
     python3 tools/gen_dsge_page.py --check   # fail if it is out of date
 
-The standalone page is a function of two files and nothing else; `make wasm`
+Each standalone page is a function of two files and nothing else; `make wasm`
 regenerates it after rebuilding the bundle, and --check (wired into
 `make test`) refuses a tree where either source changed without it. The
 verdict is the exit code."""
 import sys
 
-SRC, BUNDLE, OUT = "docs/dsge.html", "docs/cozy.js", "docs/dsge-standalone.html"
+BUNDLE = "docs/cozy.js"
+PAGES = [("dsge", "docs/dsge.html", "docs/dsge-standalone.html", "<script>"),
+         ("nowcast", "docs/nowcast.html", "docs/nowcast-standalone.html", "<script data-cozy-bundle>")]
 TAG = '<script src="cozy.js"></script>'
 
 
-def build():
+def build(SRC, opener):
     page = open(SRC, encoding="utf-8").read()
     js = open(BUNDLE, encoding="utf-8").read()
     if page.count(TAG) != 1:
@@ -27,23 +32,27 @@ def build():
     # inline script text must not contain a closing tag or an HTML comment opener
     js = js.replace("</script", "<\\/script").replace("<!--", "<\\!--")
     page = page.replace('<html lang="en">', '<html lang="en" data-standalone>')
-    return page.replace(TAG, "<script>\n" + js + "\n</script>")
+    return page.replace(TAG, opener + "\n" + js + "\n</script>")
 
 
 def main():
-    want = build()
-    if "--check" in sys.argv:
-        try:
-            have = open(OUT, encoding="utf-8").read()
-        except FileNotFoundError:
-            have = None
-        if have != want:
-            print(f"dsge page: {OUT} is out of date — run python3 tools/gen_dsge_page.py")
-            sys.exit(1)
-        print(f"dsge page: standalone copy current ({len(want)} bytes)")
-        return
-    open(OUT, "w", encoding="utf-8").write(want)
-    print(f"dsge page: wrote {OUT} ({len(want)} bytes)")
+    bad = 0
+    for name, SRC, OUT, opener in PAGES:
+        want = build(SRC, opener)
+        if "--check" in sys.argv:
+            try:
+                have = open(OUT, encoding="utf-8").read()
+            except FileNotFoundError:
+                have = None
+            if have != want:
+                print(f"{name} page: {OUT} is out of date — run python3 tools/gen_dsge_page.py")
+                bad = 1
+            else:
+                print(f"{name} page: standalone copy current ({len(want)} bytes)")
+            continue
+        open(OUT, "w", encoding="utf-8").write(want)
+        print(f"{name} page: wrote {OUT} ({len(want)} bytes)")
+    sys.exit(bad)
 
 
 if __name__ == "__main__":

@@ -239,7 +239,10 @@ let nowcast_model = fn d, opts = {} -> (
 
 % fit(d, opts): estimate the factor model by EM from a principal-components
 % start (or opts.params). opts: r (1), agg ("mm"), maxit (500), tol (1e-5,
-% the relative change of the log-likelihood), standardize (true). The
+% the relative change of the log-likelihood), standardize (true). To run
+% EM in pieces — a page showing progress — pass the previous piece's
+% params, P0 and its last log-likelihood as last: the pieces then stop,
+% and end, exactly where one long run would. The
 % result carries params {A, Q, Lam, R}, the log-likelihood path loglik,
 % iterations, converged, and state {f, fsd, yhat, ysd, loglik}.
 % e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); f.loglik[f.iterations] >= f.loglik[1] %= true
@@ -250,12 +253,14 @@ let nowcast_fit = fn d, opts = {} -> (
   let T = size(sp.Z)[2];
   let hist = zeros(maxit, 1);
   let p = sp.params; let it = 0; let conv = false;
+  let last = nc_opt(opts, "last", 0 / 0);
   while (it < maxit) && !conv do (
     it = it + 1;
     let s = ksmooth(sp.Z, nc_ssm(sp, p), {cov = false, stats = true});
     hist[it] = s.loglik;
-    if it > 1 then (
-      let a = hist[it]; let b = hist[it - 1];
+    let b = if it > 1 then hist[it - 1] else last end;
+    if !isnan(b) then (
+      let a = hist[it];
       if abs(a - b) / ((abs(a) + abs(b)) / 2) < tol then (conv = true) end
     ) end;
     if !conv then (p = nc_mstep(sp, p, s.stats, T)) end
@@ -276,6 +281,39 @@ let nowcast_update = fn f, Ynew -> (
   let g = setfield(f, "Y", Ynew);
   let g = setfield(g, "Z", (Ynew - f.mu * ones(1, T)) ./ (f.sd * ones(1, T)));
   setfield(g, "state", nc_smooth(g, f.params))
+)
+
+% transform(Y, codes, quarterly): each series (row of Y, months as columns)
+% transformed by its code — "level" (as is), "diff" (change on the previous
+% period), "pct" (percent change on the previous period), "logdiff" (100
+% times the change in logs), "yoy" (percent change on a year before). The
+% previous period of a quarterly series (quarterly[i] = 1) is three months
+% back, its previous observation. Heads come out NaN, the length unchanged.
+% e.g. nowcast.transform([100, 102, 104.04], ["pct"], [0]) %= [nan, 2, 2]
+% e.g. nowcast.transform([0/0, 0/0, 100, 0/0, 0/0, 110], ["pct"], [1]) %= [nan, nan, nan, nan, nan, 10]
+let nowcast_transform = fn Y, codes, quarterly -> (
+  let m = size(Y)[1]; let T = size(Y)[2];
+  if (numel(codes) != m) || (numel(quarterly) != m) then
+    error("nowcast.transform: {} series need {} codes and {} quarterly flags (got {} and {})", m, m, m, numel(codes), numel(quarterly))
+  end;
+  let out = Y;
+  for i = 1 : m do (
+    let c = codes[i];
+    let k = if quarterly[i] > 0 then 3 else 1 end;
+    let k = if c == "yoy" then 12 else k end;
+    let y = Y[i, :];
+    let lagged = if T > k then [(0 / 0) * ones(1, k), y[1 : T - k]] else (0 / 0) * ones(1, T) end;
+    if c == "level" then (out[i, :] = y)
+    elseif c == "diff" then (out[i, :] = y - lagged)
+    elseif (c == "pct") || (c == "yoy") then (out[i, :] = 100 * (y ./ lagged - 1))
+    elseif c == "logdiff" then (
+      let ok = find(!isnan(y));
+      if any(y[ok] <= 0) then error("nowcast.transform: series {} has values <= 0; logdiff needs positive data", i) end;
+      out[i, :] = 100 * (log(y) - log(lagged))
+    )
+    else error("nowcast.transform: unknown code \"{}\" (level, diff, pct, logdiff, yoy)", c) end
+  ) end;
+  out
 )
 
 % extend(Y, h): Y with h months of NaN appended — the months to nowcast
@@ -350,5 +388,6 @@ let nowcast_news = fn f, Ynew, name, t = 0 -> (
 )
 
 let nowcast = {panel = nowcast_panel, data = nowcast_data, model = nowcast_model, fit = nowcast_fit,
-               update = nowcast_update, extend = nowcast_extend, nowcast = nowcast_nowcast,
+               update = nowcast_update, extend = nowcast_extend, transform = nowcast_transform,
+               nowcast = nowcast_nowcast,
                news = nowcast_news}

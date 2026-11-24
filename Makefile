@@ -167,6 +167,7 @@ test: vmtest $(BIN)
 	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
 	@python3 tools/gen_dsge_page.py --check
+	@node tests/run_nowcast_page.js
 	@python3 tools/gen_page_pkgs.py --check
 	@bash tests/run_emacs.sh
 
@@ -280,9 +281,9 @@ EMCC       ?= emcc
 EMCC_C23   ?=
 WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c kalman.c linalg_tier0.c
 WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Cozy -sALLOW_MEMORY_GROWTH=1 \
-              -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web -sSINGLE_FILE=1 -sASYNCIFY=1 \
-              -sEXPORTED_FUNCTIONS=_cozy_init,_cozy_eval,_cozy_version,_malloc,_free \
-              -sEXPORTED_RUNTIME_METHODS=cwrap,ccall,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS
+              -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web,worker -sSINGLE_FILE=1 -sASYNCIFY=1 \
+              -sEXPORTED_FUNCTIONS=_cozy_init,_cozy_eval,_cozy_version,_cozy_set_matrix,_cozy_get_matrix,_cozy_get_dims,_malloc,_free \
+              -sEXPORTED_RUNTIME_METHODS=cwrap,ccall,UTF8ToString,stringToUTF8,lengthBytesUTF8,FS,HEAPF64,HEAP32
 wasm: $(WASM_SRCS) $(HDRS) wasm_api.c version.h
 	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_FLAGS) $(WASM_OPTIM_FLAGS) \
 	  --embed-file packages --embed-file data --embed-file MANUAL.md --embed-file PACKAGES.md --embed-file BOOK.md \

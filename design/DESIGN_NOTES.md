@@ -1066,3 +1066,27 @@ errors; VAR(p) factors (a positive-definite Q cannot hold the companion
 block; transition lags in the kernel would); block-restricted loadings
 (global / real / nominal factors); news per release date rather than
 per series. TRIGGER: the app's users.
+
+## 33. The nowcasting page — SHIPPED 0.1.47 (owner's request: phase 3).
+CONSIDERED: a separate repository pinning a Cozy build (a second release
+train for one page); the playground's main-thread module (EM blocks the
+page for seconds at scale); data as matrix literals through cozy_eval (a
+megabyte of text to format and parse for 200 series); a chart library
+(the standalone file would carry it). DECIDED: docs/nowcast.html beside
+dsge.html, standalone by the same generator. Cozy in a Web Worker made
+from a Blob — importScripts(cozy.js) when served, the inline bundle's own
+text (data-cozy-bundle) when standalone — and the bundle built for
+web,worker. Numbers cross by cozy_set_matrix / cozy_get_matrix. DECIDED:
+the page's arithmetic is the package's: the page builds the panel and
+names in JavaScript (readtable's csv_key rule, so the exported script's
+readtable keeps every name), and everything after — transform, fit,
+nowcast, news — is Cozy source the page also shows; the exported script
+is that source with readtable in front, and the test holds it to the
+page's numbers natively. EM runs in pieces of ten for a progress bar;
+`last` makes the pieces identical to one run. DECIDED: hold-back vintages
+move each series' own edge back h months (the release calendar is not in
+the data). FOUND ON THE WAY: a script saved as nowcast.cz shadows the
+package for load("nowcast") from its directory — the download is
+nowcast_script.cz; a live FileList emptied by resetting its input
+mid-import. RESIDUE: a release calendar (news by date); saved projects;
+annual series; Excel offline (SheetJS from cdnjs). TRIGGER: the users.
