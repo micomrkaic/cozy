@@ -110,6 +110,19 @@ struct EnvObj {
 };
 
 /* --- refcounting --- */
+/* Does a value of this kind hold a reference-counted object? The one place
+ * that says so (value.c's retain and release, and the VM's inline copies of
+ * their first test). */
+static inline bool kind_is_heap(ValueKind k)
+{
+    switch (k) {
+    case VAL_STRING: case VAL_ARRAY: case VAL_RECORD:
+    case VAL_CLOSURE: case VAL_BUILTIN: case VAL_SPARSE:
+        return true;
+    default:
+        return false;                 /* null, bool, int, float, complex, dual */
+    }
+}
 Value value_retain(Value v);
 void  value_release(Value v);
 void  env_pool_drain(void);        /* free the recycled scopes (at exit) */

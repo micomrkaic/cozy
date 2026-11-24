@@ -1,0 +1,207 @@
+# Locals are frame slots (0.1.39).
+#
+# Loop variables, lets inside loops, blocks and functions, and the @ of a
+# pipe used to be names in a chain of run-time scopes: an environment made
+# for every pass of a loop and every block, and searched by name. They are
+# slots of the frame now, resolved when the code is compiled. This file
+# pins what a scope means, which did not change: every case in the first
+# sections has the answer 0.1.38 gave (they were generated from it, and
+# ten thousand random programs were run through both). The last sections
+# are the corners that did change, and say so.
+
+
+# --- a loop variable and a loop's lets are the loop's own ---
+let h = fn n -> (let s = 0; for i = 1:n do s = s + i * i end; s); h(1000)
+=> 333833500
+let i = 7; let o = ""; for i = 1:2 do o = o + str(i) end; [o, str(i)]
+=> ["12", "7"]
+let o = 0; for i = 1:3 do i = i + 10; o = o * 100 + i end; o
+=> 111213
+let n = 0; for i = 1:3 do for i = 1:2 do n = n + i end end; n
+=> 9
+let s = 0; for i = 1:3 do (let i = i * 2; s = s + i) end; s
+=> 12
+let o = ""; for s = ["ab", "cd"] do o = o + s + "!" end; o
+=> "ab!cd!"
+let o = 0; for x = [1, 2; 3, 4] do o = o * 10 + x end; o
+=> 1234
+let o = 0; for x = 5 do o = o + x end; o
+=> 5
+let o = 0; for x = 3:-1:1 do let y = x * x; o = o * 10 + y end; o
+=> 941
+let s = 0; for k = 1:3 do let q = k * 2; s = s + q end; q
+=> !undefined name 'q'
+for k = 1:3 do let q = k end; k
+=> !undefined name 'k'
+
+# --- shadowing, and a let said twice in one scope ---
+let x = 5; let o = 0; for i = 1:2 do x = x + i; let x = 100; x = x + 1; o = o + x end; [o, x]
+=> [202, 8]
+let o = 0; for i = 1:2 do let x = 1; let x = x + 1; let x = x * 10; o = o + x end; o
+=> 40
+let x = 5; let o = 0; for i = 1:2 do let x = x + i; o = o * 10 + x end; [o, x]
+=> [67, 5]
+let r = 0; for i = 1:3 do r = r + (let t = i * 2 in t + (let u = t in u * u)) end; r
+=> 68
+(let a = 1; a) + (let a = 10; let b = a; b)
+=> 11
+let f = fn x -> (let a = 1; (let a = 2; a = a + 1); a); f(0)
+=> 1
+let f = fn x -> (x = x + 1; let x = x * 2; x); f(1)
+=> 4
+let f = fn x -> (let x = x + 1; let x = x * 2; (let x = x + 100; x) + x); f(1)
+=> 108
+let a = 1; (let a = a + 1; (let a = a * 10; a) + a) + a
+=> 23
+
+# --- a let that may be skipped looks outward when it was ---
+let q = 99; let o = ""; for i = 1:3 do if i > 1 then (let q = i) end; o = o + str(q) + " " end; o
+=> "99 2 3 "
+for i = 1:3 do if i > 1 then (let q = i) end; q end
+=> !undefined name 'q'
+let q = 99; let o = ""; for i = 1:3 do if i > 1 then (let q = i) end; q = q + 100; o = o + str(q) + " " end; [o, str(q)]
+=> ["199 102 103 ", "199"]
+let o = 0; for i = 1:2 do let q = 1; for j = 1:2 do if j == 2 then (let q = 5) end; o = o * 10 + q end end; o
+=> 1515
+let u = 0; for i = 1:2 do if i == 1 then (let u = 5) end; if i == 2 then (u = 1) end end; u
+=> 1
+for i = 1:2 do if i == 2 then (let g = fn u -> u + i) end; g(1) end
+=> !undefined name 'g'
+let q = 9; let f = fn x -> (if x then (let q = 1) end; fn u -> u + q); [f(true)(1), f(false)(1)]
+=> [2, 10]
+let q = 9; let f = fn x -> (let o = 0; for i = 1:3 do (i == 2) && (let q = 100) == 100; o = o + q end; o); f(0)
+=> 118
+let o = 0; for i = 1:3 do (if i == 2 then (let w = 7) end); (if i == 3 then (w = 1) end) end
+=> !assignment to undefined name 'w' (declare it with 'let' firs
+
+# --- break, continue and return leave their scopes clean ---
+let k = 0; let o = 0; while k < 3 do let t = k * 2; k = k + 1; if t == 2 then continue end; o = o * 10 + t end; o
+=> 4
+let o = 0; for i = 1:3 do for j = 1:2 do if j == 2 then break end; let m = i * j; o = o * 10 + m end end; o
+=> 123
+let t = 0; for i = 1:4 do let a = i; if i == 2 then continue end; let b = a * 10; if i == 4 then break end; t = t + b end; t
+=> 40
+let f = fn x -> (for i = 1:x do (let y = i * 100; if i == 3 then return y end) end; 0); [f(5), f(2)]
+=> [300, 0]
+let f = fn n -> (let t = 0; for i = 1:n do for j = 1:i do if j > 2 then continue end; t = t + j end end; t); f(4)
+=> 10
+let o = 0; for i = 1:3 do let a = [i, i]; (let b = a * 2; if i == 2 then continue end; o = o + sum(b)) end; o
+=> 16
+let o = 0; for i = 1:3 do o = o + (let z = i in (if z == 2 then break else z end)) end; o
+=> 1
+let f = fn n -> (let k = 0; while true do (let j = k * 2; k = k + 1; if j > n then return j end) end); f(7)
+=> 8
+let o = 0; let k = 0; while k < 4 do k = k + 1; for j = 1:3 do let p = k * j; if p > 4 then break end; o = o + p end end; o
+=> 19
+
+# --- closures take the value a local has when they are made ---
+let acc = 0; for i = 1:3 do let h = fn u -> i * 10 + u; acc = acc + h(0) end; acc
+=> 60
+let o = 0; for i = 1:2 do let q = i; let h = fn u -> q + u; let q = 100; o = o * 10 + h(1) end; o
+=> 23
+let f = fn x -> (let c = 1; let g = fn u -> (c = c + u; c); [g(1), g(1), c]); f(0)
+=> [2, 3, 1]
+let fs = (let k = 3 in fn x -> x + k); fs(1)
+=> 4
+let o = 0; for i = 1:2 do let f = fn n -> if n <= 1 then 1 else n * f(n - 1) end; o = o + f(4) end; o
+=> 48
+let mk = fn n -> (let t = n * 2; fn x -> (let u = x + t; fn y -> u + y + n)); mk(1)(10)(100)
+=> 113
+let fs = map(fn k -> (let w = k * 2 in sum[j = 1:3] (j + w)), [1, 2, 3]); fs
+=> [12, 18, 24]
+let f = fn n -> (let t = n * 2; if n == 0 then 0 else t + f(n - 1) end); f(1000)
+=> 1001000
+
+# --- the pipe's @ is a local of the pipe ---
+3 |> @ + (4 |> @ * @) + @
+=> 22
+5 |> (fn y -> y + @)(1)
+=> !'@' is only meaningful on the right-hand side of '|>'
+[3, 4] |> {total = sum, biggest = max}
+=> {total = 7, biggest = 4}
+let f = fn v -> v |> (@ |> sum(@) + 1) * 2; f([1, 2])
+=> 8
+let o = 0; for i = 1:2 do o = o * 10 + (i |> @ * (i |> @ + 1)) end; o
+=> 26
+@ + 1
+=> !'@' is only meaningful on the right-hand side of '|>'
+let o = 0; for i = 1:3 do o = o + (i |> (if @ == 2 then 0 else @ end)) end; o
+=> 4
+
+# --- eval works on the session, never on the locals around it ---
+let o = 0; for i = 1:2 do let q = 1; o = o * 100 + eval("let q = 50; q") + q end; [o, q]
+=> [5151, 50]
+for i = 1:2 do eval("i") end
+=> !eval: undefined name 'i' — it lives in packages/dist.cz; loa
+let f = fn x -> eval("x"); f(3)
+=> !eval: undefined name 'x'
+let z = 1 in eval("z")
+=> !eval: undefined name 'z'
+
+# --- an error inside loops and blocks unwinds every frame's locals ---
+# (the sanitizer run of this file is what shows nothing is leaked)
+let f = fn n -> (let big = zeros(50, 50); for i = 1:n do let w = big + i; if i == 3 then error("stop at " + str(sum(w[1, :]))) end end; 0); f(2)
+=> 0
+.. let o = 0; for i = 1:3 do let w = i; o = o + w end; o
+=> 6
+.. f(5)
+=> !stop at 150
+let g = fn n -> (let a = ones(20, 20); (let b = a * 2 in (for i = 1:n do let c = b + i; undefined_name_here end; 0))); g(3)
+=> !undefined name 'undefined_name_here'
+let h = fn n -> (let a = [1, 2, 3]; if n == 0 then a[9] else h(n - 1) + sum(a) end); h(40)
+=> !index 9 out of bounds (1..3)
+
+# --- the corners 0.1.39 changes (changelog) ---
+# A let in bare parentheses as a function's whole body used to define a
+# GLOBAL; it is the function's local now, like every other let in one.
+let f = fn x -> (let w = x); [f(3), w]
+=> !undefined name 'w'
+let f = fn x -> (let w = x); f(3)
+=> 3
+let f = fn x -> if x > 0 then (let w = x * 2) else 0 end; [f(3), f(-1)]
+=> [6, 0]
+
+# A skipped let looked for its name in the session, passing over a
+# parameter or a captured variable of that name. It finds those first now.
+let f = fn q -> (if q > 5 then (let q = 0) end; q); [f(1), f(9)]
+=> [1, 0]
+let q = 50; let f = fn q -> ((if q > 5 then (let q = 0) end); q); [f(1), f(9)]
+=> [1, 0]
+let q = 50; let f = fn n -> (let q = n; fn x -> (if x then (let q = 0) end; q)); [f(7)(false), f(7)(true)]
+=> [7, 0]
+
+# --- the frame has room for 255 locals at once; scopes give theirs back ---
+let s = "("; for k = 1:250 do s = s + "let v" + str(k) + " = " + str(k) + "; " end; eval(s + "v1 + v250)")
+=> 251
+let s = "("; for k = 1:300 do s = s + "let v" + str(k) + " = " + str(k) + "; " end; eval(s + "v1 + v250)")
+=> !too many local variables in one function
+let s = "("; for k = 1:300 do s = s + "let v = " + str(k) + "; " end; eval(s + "v)")
+=> 300
+let s = "(0"; for k = 1:300 do s = s + " + (let v" + str(k) + " = " + str(k) + "; v" + str(k) + ")" end; eval(s + ")")
+=> 45150
+let s = "let g = fn x -> (let t = 0; "; for k = 1:120 do s = s + "for i" + str(k) + " = 1:1 do t = t + x end; " end; eval(s + "t); g(2)")
+=> 240
+
+# --- map holds what an array can hold (found while testing the above) ---
+# An Array, a Record or a function returned for an element used to be
+# packed as if it were a number, and printed as noise.
+map(fn k -> [k, 2], 1:3)
+=> !map: the function must return a number or a string for each element, got Array
+sum[k = 1:3] [k, 2 * k]
+=> !must return a number or a string for each element, got Array
+map(fn k -> {a = k}, 1:2)
+=> !for each element, got Record
+[1, 2] ~> (fn t -> fn u -> u)
+=> !for each element, got Closure
+map(fn k -> if k > 1 then "s" else 1 end, 1:3)
+=> !strings for some elements and numbers for others
+map(fn k -> "s" + str(k), 1:2)
+=> ["s1", "s2"]
+map(fn k -> k > 1, 1:3)
+=> [false, true, true]
+map(fn k -> k + 0.5, 1:2)
+=> [1.5, 2.5]
+map(fn k -> null, 1:2)
+=> [0+0i, 0+0i]
+sum[k = 1:3] (k + 1i)
+=> 6+3i

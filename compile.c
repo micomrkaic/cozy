@@ -1,15 +1,34 @@
 /* compile.c — Cozy AST -> bytecode, with lexical addressing.
  *
  * A resolver pass (the Compiler stack) classifies every identifier as a frame
- * slot (a function's self or parameters), an upvalue (a free variable captured
- * from an enclosing function by value-snapshot), or a name (a loop-body `let`
- * or a global, resolved through the runtime env at execution time). Function
- * calls thus need no per-call environment — parameters live in stack slots —
- * and closures capture only the values they use, so a closure never holds a
- * reference back to the scope that made it (the env/closure cycle is gone).
- * Globals stay late-bound by name, which is what keeps recursion and mutual
- * recursion working. A function's own bound name resolves to slot 0 (the
- * self-slot), so direct recursion is a slot read, not a global lookup. */
+ * slot (a local), an upvalue (a free variable captured from an enclosing
+ * function by value-snapshot), or a name (a global, found in the session's
+ * environment when the instruction runs). Function calls thus need no
+ * per-call environment, and closures capture only the values they use, so a
+ * closure never holds a reference back to the scope that made it (the
+ * env/closure cycle is gone). Globals stay late-bound by name, which is
+ * what keeps recursion and mutual recursion working. A function's own bound
+ * name resolves to slot 0 (the self-slot), so direct recursion is a slot
+ * read, not a global lookup.
+ *
+ * Since 0.1.39 every local is a slot: self and the parameters as before,
+ * and now loop variables, `let`s inside loops, blocks and functions, and
+ * the '@' of a pipe. Until then those were names in a chain of run-time
+ * scopes (one environment made and dropped per pass of a loop). What a
+ * scope meant is kept exactly:
+ *   - a scope's slots are emptied when it ends (OP_CLEAR_LOCALS), at the
+ *     end of every pass of a loop, and on `break` and `continue` — so a
+ *     value is released when its scope would have been dropped, and a
+ *     `let` of one pass is not there in the next;
+ *   - a `let` that is a statement of a block or a loop body has always run
+ *     by the time anything after it in that scope does, so it is read with
+ *     OP_GET_LOCAL. A `let` written where it may be skipped — in
+ *     parentheses, as in `if c then (let q = 1) end` — is read with
+ *     OP_GET_LOCAL_OR: when the slot is empty the code that follows looks
+ *     outward (an outer local of the name, an upvalue, the global), which
+ *     is what the chain of scopes did.
+ * A top-level `let` is a global, as it must be: every statement typed at
+ * the prompt is its own chunk. */
 #include "compile.h"
 #include "nrt.h"
 #include "lexer.h"
@@ -33,19 +52,21 @@
 
 /* ---- resolver state ------------------------------------------------------ */
 
-typedef enum { LK_SLOT, LK_ENV } LKind;
+typedef enum {
+    LK_SLOT,                      /* holds a value wherever it can be referred to      */
+    LK_MAYBE                      /* a `let` that may not have run: read with a check  */
+} LKind;
 
 typedef struct {
     const char *name; uint32_t len;
-    LKind   kind;                 /* SLOT: self/params; ENV: loop var / loop-body let */
-    uint8_t slot;                 /* if SLOT                                           */
+    LKind   kind;
+    uint8_t slot;                 /* frame slot                                        */
     int     depth;                /* lexical depth where declared                      */
 } CLocal;
 
 typedef struct {
     bool    from_local;           /* captured from the enclosing function's local ...  */
-    bool    is_slot;              /*   ... which is a SLOT (else an ENV local, by name) */
-    uint8_t slot;                 /* if from_local && is_slot                          */
+    int     local;                /*   ... this one (index in its locals[])            */
     uint8_t up_index;             /* if !from_local: enclosing upvalue index           */
     const char *name; uint32_t len;
 } CUpval;
@@ -53,13 +74,18 @@ typedef struct {
 typedef struct Compiler {
     struct Compiler *enclosing;
     Chunk  *chunk;
-    CLocal  locals[256];  int nlocals; int nslots;
+    CLocal  locals[256];  int nlocals;
+    int     nslots;              /* slots in use here; a scope's are given back at its end */
+    int     max_slots;           /* the most in use at once: the frame's size            */
     CUpval  upvals[256];  int nupvals;
     int     depth;                /* 0 = global (top-level); >0 = inside a scope        */
     int     index_dim;           /* dimension being compiled inside an index, else -1   */
-    int     scope_count;         /* live runtime scopes (SCOPE_PUSH / FOR_NEXT), for break */
     bool    in_function;         /* compiling a lambda body? (enables 'return')         */
-    struct { int scope_base; uint32_t cont_target; bool is_for;
+    AstNode *direct_let;         /* the `let` statement now being compiled as an item
+                                    of a block or loop body (it cannot be skipped)      */
+    struct { int break_base;     /* `break` empties the slots from here up              */
+             int cont_base;      /* `continue` from here up (a for keeps its variable)  */
+             uint32_t cont_target; bool is_for;
              uint32_t breaks[32]; int nbreaks; } loops[8];
     int     nloops;
 } Compiler;
@@ -81,8 +107,8 @@ static int add_upval(Compiler *cc, CUpval uv)
 {
     for (int i = 0; i < cc->nupvals; i++) {           /* dedup */
         CUpval *e = &cc->upvals[i];
-        if (e->from_local == uv.from_local && e->is_slot == uv.is_slot &&
-            e->slot == uv.slot && e->up_index == uv.up_index &&
+        if (e->from_local == uv.from_local && e->local == uv.local &&
+            e->up_index == uv.up_index &&
             e->len == uv.len && (uv.len == 0 || memcmp(e->name, uv.name, uv.len) == 0))
             return i;
     }
@@ -97,64 +123,131 @@ static int resolve_upvalue(Compiler *cc, const char *name, uint32_t len)
     if (!cc->enclosing) return -1;
     int li = resolve_local(cc->enclosing, name, len);
     if (li >= 0) {
-        CLocal *l = &cc->enclosing->locals[li];
-        CUpval uv = { .from_local = true, .is_slot = (l->kind == LK_SLOT),
-                      .slot = l->slot, .up_index = 0, .name = name, .len = len };
+        CUpval uv = { .from_local = true, .local = li,
+                      .up_index = 0, .name = name, .len = len };
         return add_upval(cc, uv);
     }
     int ui = resolve_upvalue(cc->enclosing, name, len);
     if (ui >= 0) {
-        CUpval uv = { .from_local = false, .is_slot = false, .slot = 0,
+        CUpval uv = { .from_local = false, .local = 0,
                       .up_index = (uint8_t)ui, .name = name, .len = len };
         return add_upval(cc, uv);
     }
     return -1;
 }
 
-static void emit_get_named(Compiler *cc, const char *name, uint32_t len, uint32_t L)
+static void emit_get_below(Compiler *cc, int top, const char *name, uint32_t len, uint32_t L);
+static void emit_set_below(Compiler *cc, int top, const char *name, uint32_t len, uint32_t L);
+
+/* an OR instruction's skip distance: the fallback code is a handful of bytes */
+static uint32_t emit_or(Chunk *c, uint8_t op, uint8_t slot, uint32_t L)
 {
-    int li = resolve_local(cc, name, len);
-    if (li >= 0) {
-        if (cc->locals[li].kind == LK_SLOT) {
-            chunk_emit(cc->chunk, OP_GET_LOCAL, L);
-            chunk_emit(cc->chunk, cc->locals[li].slot, L);
-        } else emit_name_op_g(cc->chunk, OP_GET_VAR, name, len, L);
-        return;
-    }
+    chunk_emit(c, op, L); chunk_emit(c, slot, L);
+    chunk_emit_u16(c, 0xffff, L);
+    return c->code_len - 2;
+}
+static void patch_or(Chunk *c, uint32_t at)
+{
+    uint32_t off = c->code_len - (at + 2);
+    c->code[at] = (uint8_t)(off & 0xff); c->code[at + 1] = (uint8_t)(off >> 8);
+}
+
+/* Read the local locals[li]. One that may not have run falls back to
+ * whatever the name means outside it. */
+static void emit_get_local(Compiler *cc, int li, uint32_t L)
+{
+    Chunk *c = cc->chunk;
+    CLocal l = cc->locals[li];
+    if (l.kind == LK_SLOT) { chunk_emit(c, OP_GET_LOCAL, L); chunk_emit(c, l.slot, L); return; }
+    uint32_t at = emit_or(c, OP_GET_LOCAL_OR, l.slot, L);
+    emit_get_below(cc, li, l.name, l.len, L);
+    patch_or(c, at);
+}
+static void emit_set_local(Compiler *cc, int li, uint32_t L)
+{
+    Chunk *c = cc->chunk;
+    CLocal l = cc->locals[li];
+    if (l.kind == LK_SLOT) { chunk_emit(c, OP_SET_LOCAL, L); chunk_emit(c, l.slot, L); return; }
+    uint32_t at = emit_or(c, OP_SET_LOCAL_OR, l.slot, L);
+    emit_set_below(cc, li, l.name, l.len, L);
+    patch_or(c, at);
+}
+
+/* Resolve `name` among the locals below index `top`, then the upvalues,
+ * then the globals. */
+static void emit_get_below(Compiler *cc, int top, const char *name, uint32_t len, uint32_t L)
+{
+    for (int i = top - 1; i >= 0; i--)
+        if (cc->locals[i].len == len && memcmp(cc->locals[i].name, name, len) == 0) {
+            emit_get_local(cc, i, L);
+            return;
+        }
     int ui = resolve_upvalue(cc, name, len);
     if (ui >= 0) { chunk_emit(cc->chunk, OP_GET_UPVALUE, L); chunk_emit(cc->chunk, (uint8_t)ui, L); return; }
     emit_name_op_g(cc->chunk, OP_GET_VAR, name, len, L);     /* global */
 }
-
-static void emit_set_named(Compiler *cc, const char *name, uint32_t len, uint32_t L)
+static void emit_set_below(Compiler *cc, int top, const char *name, uint32_t len, uint32_t L)
 {
-    int li = resolve_local(cc, name, len);
-    if (li >= 0) {
-        if (cc->locals[li].kind == LK_SLOT) {
-            chunk_emit(cc->chunk, OP_SET_LOCAL, L);
-            chunk_emit(cc->chunk, cc->locals[li].slot, L);
-        } else emit_name_op_g(cc->chunk, OP_SET_VAR, name, len, L);
-        return;
-    }
+    for (int i = top - 1; i >= 0; i--)
+        if (cc->locals[i].len == len && memcmp(cc->locals[i].name, name, len) == 0) {
+            emit_set_local(cc, i, L);
+            return;
+        }
     int ui = resolve_upvalue(cc, name, len);
     if (ui >= 0) { chunk_emit(cc->chunk, OP_SET_UPVALUE, L); chunk_emit(cc->chunk, (uint8_t)ui, L); return; }
     emit_name_op_g(cc->chunk, OP_SET_VAR, name, len, L);     /* global */
 }
 
-static void declare_slot(Compiler *cc, const char *name, uint32_t len)
+static void emit_get_named(Compiler *cc, const char *name, uint32_t len, uint32_t L)
+{ emit_get_below(cc, cc->nlocals, name, len, L); }
+static void emit_set_named(Compiler *cc, const char *name, uint32_t len, uint32_t L)
+{ emit_set_below(cc, cc->nlocals, name, len, L); }
+
+/* Declare a local in the current scope and give it a slot; returns its
+ * index in locals[]. `rebind`: a `let` of a name this very scope already
+ * has takes that local over (as defining a name twice in one environment
+ * did), so a loop that says `let x = ...` twice does not use two slots. */
+static int declare_local(Interp *I, Compiler *cc, AstNode *at, const char *name, uint32_t len,
+                         LKind kind, bool rebind)
 {
-    cc->locals[cc->nlocals++] = (CLocal){ name, len, LK_SLOT, (uint8_t)cc->nslots, cc->depth };
+    if (rebind)
+        for (int i = cc->nlocals - 1; i >= 0 && cc->locals[i].depth == cc->depth; i--)
+            if (cc->locals[i].len == len && memcmp(cc->locals[i].name, name, len) == 0)
+                return i;
+    if (cc->nslots >= 256 || cc->nlocals >= 256)
+        compile_error(I, at, "too many local variables in one function (at most 255 at once)");
+    cc->locals[cc->nlocals] = (CLocal){ name, len, kind, (uint8_t)cc->nslots, cc->depth };
     cc->nslots++;
-}
-static void declare_env_local(Compiler *cc, const char *name, uint32_t len)
-{
-    cc->locals[cc->nlocals++] = (CLocal){ name, len, LK_ENV, 0, cc->depth };
+    if (cc->nslots > cc->max_slots) cc->max_slots = cc->nslots;
+    return cc->nlocals++;
 }
 static void begin_scope(Compiler *cc) { cc->depth++; }
-static void end_scope(Compiler *cc)
+/* Leave a scope: forget its locals and give back their slots. `clear`
+ * emits the instruction that empties them at run time; a for loop's
+ * variable is emptied by OP_FOR_NEXT itself when the loop runs out. */
+static void end_scope(Compiler *cc, bool clear, uint32_t L)
 {
     cc->depth--;
-    while (cc->nlocals > 0 && cc->locals[cc->nlocals - 1].depth > cc->depth) cc->nlocals--;
+    int first = cc->nslots;
+    while (cc->nlocals > 0 && cc->locals[cc->nlocals - 1].depth > cc->depth) {
+        cc->nlocals--;
+        if (cc->locals[cc->nlocals].slot < first) first = cc->locals[cc->nlocals].slot;
+    }
+    if (clear && first < cc->nslots) {
+        chunk_emit(cc->chunk, OP_CLEAR_LOCALS, L);
+        chunk_emit(cc->chunk, (uint8_t)first, L);
+        chunk_emit(cc->chunk, (uint8_t)(cc->nslots - first), L);
+    }
+    cc->nslots = first;
+}
+/* break / continue: empty the slots of the scopes being left, without
+ * forgetting them (the code after the jump is still compiled in them). */
+static void emit_clear_from(Compiler *cc, int base, uint32_t L)
+{
+    if (base >= cc->nslots) return;
+    chunk_emit(cc->chunk, OP_CLEAR_LOCALS, L);
+    chunk_emit(cc->chunk, (uint8_t)base, L);
+    chunk_emit(cc->chunk, (uint8_t)(cc->nslots - base), L);
 }
 
 /* ---- emit helpers -------------------------------------------------------- */
@@ -249,7 +342,12 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
     case AST_NULL:   chunk_emit(c, OP_NULL, L); break;
 
     case AST_IDENT:  emit_get_named(cc, n->as.lit.text, n->as.lit.len, L); break;
-    case AST_AT:     chunk_emit(c, OP_GET_AT, L); break;
+    case AST_AT: {                                  /* the pipe's local; outside one, the error */
+        int li = resolve_local(cc, "@", 1);
+        if (li >= 0) emit_get_local(cc, li, L);
+        else chunk_emit(c, OP_GET_AT, L);
+        break;
+    }
 
     case AST_UNARY:
         compile_node(I, cc, n->as.unary.operand);
@@ -280,12 +378,13 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
                 uint32_t cnt = rhs->as.list.count;
                 compile_node(I, cc, n->as.binary.lhs);
                 if (tee) chunk_emit(c, OP_TEE, L);
-                chunk_emit(c, OP_SCOPE_PUSH, L); cc->scope_count++;
-                emit_name_op_g(c, OP_DEFINE, "@", 1, L);
+                begin_scope(cc);
+                int at = declare_local(I, cc, n, "@", 1, LK_SLOT, false);
+                emit_set_local(cc, at, L);
                 chunk_emit(c, OP_POP, L);
                 for (uint32_t k = 0; k < cnt; k++) {
                     compile_node(I, cc, rhs->as.list.items[k]->as.recfield.value);
-                    chunk_emit(c, OP_GET_AT, L);
+                    emit_get_local(cc, at, L);
                     chunk_emit(c, OP_CALL, L); chunk_emit(c, 1, L);
                 }
                 I->line_borrows_src = true;   /* fan-out records borrow keys too */
@@ -295,7 +394,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
                     uint32_t ni = chunk_add_name(c, f->as.recfield.name, f->as.recfield.namelen);
                     chunk_emit_u16(c, (uint16_t)ni, L);
                 }
-                chunk_emit(c, OP_SCOPE_POP, L); cc->scope_count--;
+                end_scope(cc, true, L);
             } else if (!contains_at(rhs)) {             /* bare callable: x |> f  ==>  f(x) */
                 compile_node(I, cc, rhs);
                 compile_node(I, cc, n->as.binary.lhs);
@@ -304,11 +403,12 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
             } else {
                 compile_node(I, cc, n->as.binary.lhs);
                 if (tee) chunk_emit(c, OP_TEE, L);
-                chunk_emit(c, OP_SCOPE_PUSH, L); cc->scope_count++;
-                emit_name_op_g(c, OP_DEFINE, "@", 1, L);
+                begin_scope(cc);
+                int at = declare_local(I, cc, n, "@", 1, LK_SLOT, false);
+                emit_set_local(cc, at, L);
                 chunk_emit(c, OP_POP, L);
                 compile_node(I, cc, rhs);
-                chunk_emit(c, OP_SCOPE_POP, L); cc->scope_count--;
+                end_scope(cc, true, L);
             }
         } else if (op == TOK_TILDE_GT) {
             /* elementwise pipe: x ~> f ==> map(f, x); the parser has already
@@ -362,29 +462,34 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         break;
     }
 
-    case AST_LET:
+    case AST_LET: {
+        bool direct = (cc->direct_let == n);          /* an item of a block: cannot be skipped */
+        cc->direct_let = nullptr;
         if (n->as.let.body) {                         /* let x = v in body  (expression) */
-            chunk_emit(c, OP_SCOPE_PUSH, L);
-            begin_scope(cc); cc->scope_count++;
+            begin_scope(cc);
             if (n->as.let.value->kind == AST_LAMBDA)
                 compile_lambda(I, cc, n->as.let.value, n->as.let.name, n->as.let.namelen);
             else
                 compile_node(I, cc, n->as.let.value);
-            emit_name_op_g(c, OP_DEFINE, n->as.let.name, n->as.let.namelen, L);
-            chunk_emit(c, OP_POP, L);                  /* binding holds it; clear the stack copy */
-            declare_env_local(cc, n->as.let.name, n->as.let.namelen);
+            int li = declare_local(I, cc, n, n->as.let.name, n->as.let.namelen, LK_SLOT, false);
+            emit_set_local(cc, li, L);
+            chunk_emit(c, OP_POP, L);                  /* the slot holds it; clear the stack copy */
             compile_node(I, cc, n->as.let.body);       /* leaves the body's value on the stack */
-            end_scope(cc); cc->scope_count--;
-            chunk_emit(c, OP_SCOPE_POP, L);            /* drops the binding; value stays on stack */
+            end_scope(cc, true, L);                    /* empties the slot; value stays on stack */
             break;
         }
         if (n->as.let.value->kind == AST_LAMBDA)
             compile_lambda(I, cc, n->as.let.value, n->as.let.name, n->as.let.namelen);
         else
             compile_node(I, cc, n->as.let.value);
-        emit_name_op_g(c, OP_DEFINE, n->as.let.name, n->as.let.namelen, L);
-        if (cc->depth > 0) declare_env_local(cc, n->as.let.name, n->as.let.namelen);
+        if (cc->depth > 0) {                           /* a local: its slot */
+            int li = declare_local(I, cc, n, n->as.let.name, n->as.let.namelen,
+                                   direct ? LK_SLOT : LK_MAYBE, true);
+            chunk_emit(c, OP_SET_LOCAL, L); chunk_emit(c, cc->locals[li].slot, L);
+        } else                                         /* top level: a global, by name */
+            emit_name_op_g(c, OP_DEFINE, n->as.let.name, n->as.let.namelen, L);
         break;
+    }
 
     case AST_ASSIGN: {
         AstNode *tgt = n->as.binary.lhs;
@@ -416,24 +521,26 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         break;
     }
 
-    case AST_BLOCK:
+    case AST_BLOCK:                                    /* a loop body: its statements in turn */
         for (uint32_t i = 0; i < n->as.list.count; i++) {
             if (i) chunk_emit(c, OP_POP, L);
+            cc->direct_let = n->as.list.items[i];
             compile_node(I, cc, n->as.list.items[i]);
         }
+        cc->direct_let = nullptr;
         if (n->as.list.count == 0) chunk_emit(c, OP_NULL, L);
         break;
 
     case AST_BLOCK_EXPR:                               /* scoped block as an expression */
-        chunk_emit(c, OP_SCOPE_PUSH, L);
-        begin_scope(cc); cc->scope_count++;
+        begin_scope(cc);
         for (uint32_t i = 0; i < n->as.list.count; i++) {
             if (i) chunk_emit(c, OP_POP, L);
+            cc->direct_let = n->as.list.items[i];
             compile_node(I, cc, n->as.list.items[i]);
         }
+        cc->direct_let = nullptr;
         if (n->as.list.count == 0) chunk_emit(c, OP_NULL, L);
-        end_scope(cc); cc->scope_count--;
-        chunk_emit(c, OP_SCOPE_POP, L);                /* drops the block's locals; value stays */
+        end_scope(cc, true, L);                        /* empties the block's slots; value stays */
         break;
 
     case AST_WHILE: {
@@ -444,16 +551,15 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         uint32_t exit = emit_jump(c, OP_JUMP_IF_FALSE, L);
         chunk_emit(c, OP_POP, L);
         int li = cc->nloops++;
-        cc->loops[li].scope_base = cc->scope_count;     /* unwind target for break/continue */
+        cc->loops[li].break_base = cc->nslots;          /* break/continue empty the body's slots */
+        cc->loops[li].cont_base  = cc->nslots;
         cc->loops[li].cont_target = loop_start;         /* continue re-evaluates the condition */
         cc->loops[li].is_for = false;
         cc->loops[li].nbreaks = 0;
-        chunk_emit(c, OP_SCOPE_PUSH, L);
-        begin_scope(cc); cc->scope_count++;
+        begin_scope(cc);
         compile_node(I, cc, n->as.whileloop.body);
-        end_scope(cc); cc->scope_count--;
         chunk_emit(c, OP_POP, L);
-        chunk_emit(c, OP_SCOPE_POP, L);
+        end_scope(cc, true, L);                         /* a pass's lets do not see the next */
         emit_loop(I, n, c, loop_start, L);
         patch_jump(I, n, c, exit);
         chunk_emit(c, OP_POP, L);                        /* drop the false condition */
@@ -470,24 +576,25 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         compile_node(I, cc, n->as.forloop.iter);
         chunk_emit(c, OP_FOR_BEGIN, L);
         chunk_emit(c, OP_MARK_PUSH, L);                 /* base above [iterable, index] */
-        uint32_t loop_start = c->code_len;
-        chunk_emit(c, OP_FOR_NEXT, L);
-        uint32_t name = chunk_add_name(c, n->as.forloop.var, n->as.forloop.varlen);
-        chunk_emit_u16(c, (uint16_t)name, L);
-        uint32_t exit = c->code_len; chunk_emit_u16(c, 0xffff, L);
         int li = cc->nloops++;
-        cc->loops[li].scope_base = cc->scope_count;     /* before FOR_NEXT's per-iteration scope */
+        cc->loops[li].break_base = cc->nslots;          /* break empties the variable too */
+        begin_scope(cc);                                /* the loop variable's scope ... */
+        int var = declare_local(I, cc, n, n->as.forloop.var, n->as.forloop.varlen, LK_SLOT, false);
+        uint32_t loop_start = c->code_len;
+        chunk_emit(c, OP_FOR_NEXT, L);                  /* sets it each pass; empties it at the end */
+        chunk_emit(c, cc->locals[var].slot, L);
+        uint32_t exit = c->code_len; chunk_emit_u16(c, 0xffff, L);
+        cc->loops[li].cont_base = cc->nslots;           /* continue: the body's lets only */
         cc->loops[li].cont_target = loop_start;         /* continue goes to FOR_NEXT */
         cc->loops[li].is_for = true;
         cc->loops[li].nbreaks = 0;
-        begin_scope(cc); cc->scope_count++;             /* FOR_NEXT pushes the body scope at runtime */
-        declare_env_local(cc, n->as.forloop.var, n->as.forloop.varlen);
+        begin_scope(cc);                                /* ... and the body's, one per pass */
         compile_node(I, cc, n->as.forloop.body);
-        end_scope(cc); cc->scope_count--;
         chunk_emit(c, OP_POP, L);
-        chunk_emit(c, OP_SCOPE_POP, L);
+        end_scope(cc, true, L);
         emit_loop(I, n, c, loop_start, L);
         patch_jump(I, n, c, exit);
+        end_scope(cc, false, L);
         for (int b = 0; b < cc->loops[li].nbreaks; b++)  /* break lands on the MARK_POP below */
             patch_jump(I, n, c, cc->loops[li].breaks[b]);
         cc->nloops--;
@@ -501,7 +608,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         if (cc->nloops == 0) compile_error(I, n, "'break' is only valid inside a loop");
         int li = cc->nloops - 1;
         chunk_emit(c, OP_MARK_RESET, L);                /* drop mid-expression temporaries */
-        for (int s = cc->loops[li].scope_base; s < cc->scope_count; s++) chunk_emit(c, OP_SCOPE_POP, L);
+        emit_clear_from(cc, cc->loops[li].break_base, L);
         if (cc->loops[li].nbreaks >= 32) compile_error(I, n, "too many 'break' statements in one loop");
         cc->loops[li].breaks[cc->loops[li].nbreaks++] = emit_jump(c, OP_JUMP, L);
         break;
@@ -511,7 +618,7 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
         if (cc->nloops == 0) compile_error(I, n, "'continue' is only valid inside a loop");
         int li = cc->nloops - 1;
         chunk_emit(c, OP_MARK_RESET, L);                /* drop mid-expression temporaries */
-        for (int s = cc->loops[li].scope_base; s < cc->scope_count; s++) chunk_emit(c, OP_SCOPE_POP, L);
+        emit_clear_from(cc, cc->loops[li].cont_base, L);
         emit_loop(I, n, c, cc->loops[li].cont_target, L);
         break;
     }
@@ -612,10 +719,10 @@ static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
     uint32_t idx = chunk_add_proto(cc->chunk, proto);     /* enclosing owns proto */
 
     Compiler fc = (Compiler){ .enclosing = cc, .chunk = proto, .depth = 1, .index_dim = -1, .in_function = true };
-    declare_slot(&fc, selfname, selflen);                 /* slot 0 = self (the closure) */
+    declare_local(I, &fc, n, selfname, selflen, LK_SLOT, false);   /* slot 0 = self (the closure) */
     for (uint32_t i = 0; i < np; i++) {
         AstNode *p = n->as.lambda.params.items[i];
-        declare_slot(&fc, p->as.lit.text, p->as.lit.len); /* slots 1..np = params */
+        declare_local(I, &fc, p, p->as.lit.text, p->as.lit.len, LK_SLOT, false);   /* slots 1..np */
     }
     /* entry 13 prologue: a defaulted param whose slot arrived null (absent
      * or explicit null) evaluates its default here, left to right — so a
@@ -634,13 +741,13 @@ static void compile_lambda(Interp *I, Compiler *cc, AstNode *n,
         patch_jump(I, n, proto, at);
     }
     compile_node(I, &fc, n->as.lambda.body);              /* body leaves one value */
+    chunk_emit(proto, OP_RETURN, n->line);                /* every chunk ends by returning it */
+    proto->nlocals = (uint32_t)fc.max_slots - (np + 1);   /* its lets, loop variables, pipes */
 
     for (int i = 0; i < fc.nupvals; i++) {                /* push captures, in order */
         CUpval *uv = &fc.upvals[i];
-        if (uv->from_local && uv->is_slot) {
-            chunk_emit(cc->chunk, OP_GET_LOCAL, n->line); chunk_emit(cc->chunk, uv->slot, n->line);
-        } else if (uv->from_local) {
-            emit_name_op_g(cc->chunk, OP_GET_VAR, uv->name, uv->len, n->line);
+        if (uv->from_local) {
+            emit_get_local(cc, uv->local, n->line);
         } else {
             chunk_emit(cc->chunk, OP_GET_UPVALUE, n->line); chunk_emit(cc->chunk, uv->up_index, n->line);
         }
@@ -666,8 +773,12 @@ bool vm_compile(Interp *I, AstNode *stmt, Chunk *out)
     }
     Compiler cc = (Compiler){ .enclosing = nullptr, .chunk = out, .depth = 0, .index_dim = -1 };
     compile_node(I, &cc, stmt);
+    out->nlocals = (uint32_t)cc.max_slots;              /* a top-level loop's or block's locals */
     if (stmt->kind == AST_IDENT)        /* bare 'who' / 'rand' / a 0-arg fn name: call it */
         chunk_emit(out, OP_AUTOCALL, stmt->line);
+    /* Every chunk ends in OP_RETURN (here and in compile_lambda), so the VM
+     * does not ask "is this the end?" before each instruction (0.1.39). */
+    chunk_emit(out, OP_RETURN, stmt->line);
     memcpy(I->jmp, saved, sizeof(jmp_buf));
     return true;
 }

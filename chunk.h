@@ -3,7 +3,11 @@
  * A Chunk holds a flat byte stream, a constant pool (owned Values, computed
  * once at compile time — this also folds literals so "3.14" is parsed once,
  * not on every evaluation), and a name pool (non-owning slices into the parse
- * arena, used for variable get/define/assign and field access). */
+ * arena, used for global get/define/assign and field access).
+ *
+ * Every local variable is a frame slot (0.1.39): a function's self and
+ * parameters, and since then loop variables, `let`s inside loops, blocks
+ * and functions, and the '@' of a pipe. Names are left only for globals. */
 #ifndef COZY_CHUNK_H
 #define COZY_CHUNK_H
 
@@ -16,7 +20,7 @@ typedef enum : uint8_t {
     OP_GET_VAR,        /* u16 name  : env_lookup -> push (+1); err if missing */
     OP_DEFINE,         /* u16 name  : env_define(name, peek); leaves value    */
     OP_SET_VAR,        /* u16 name  : env_assign(name, peek); err if undeclared */
-    OP_GET_AT,         /*           : push the '@' binding; err if absent     */
+    OP_GET_AT,         /*           : '@' outside a pipe: always the error    */
     OP_BINOP,          /* u8 token  : b=peek,a=peek; push apply_binop; pop 2  */
     OP_UNARY,          /* u8 token  : v=peek; push apply_unary; pop 1         */
     OP_TRANSPOSE,      /* u8 conj   : v=peek; push transpose; pop 1           */
@@ -35,11 +39,9 @@ typedef enum : uint8_t {
     OP_TEE,            /*           : print top of stack (tee pipe), no pop   */
     /* --- stage 2: scopes, loops, iteration --- */
     OP_LOOP,           /* u16 off   : ip -= off (backward jump)               */
-    OP_SCOPE_PUSH,     /*           : env = child(env)                        */
-    OP_SCOPE_POP,      /*           : env = parent(env), release child        */
     OP_FOR_BEGIN,      /*           : validate iterable (top); push index 0   */
-    OP_FOR_NEXT,       /* u16 name, u16 end : if done jump end; else push     */
-                       /*           scope, bind name = iter[idx], idx++       */
+    OP_FOR_NEXT,       /* u8 slot, u16 end : if done, empty the slot and jump */
+                       /*           end; else slot = iter[idx], idx++         */
     OP_FOR_END,        /*           : pop [iterable, index]                   */
     OP_MARK_PUSH,      /*           : record sp (loop-body base) on the mark stack */
     OP_MARK_POP,       /*           : drop the top mark (normal loop exit)    */
@@ -48,8 +50,14 @@ typedef enum : uint8_t {
     OP_CLOSURE,        /* u16 proto, u8 nup : pop nup captured values as the    */
                        /*           closure's upvalue snapshots                  */
     /* --- lexical addressing: slot locals + value-capture upvalues --- */
-    OP_GET_LOCAL,      /* u8 slot   : push frame slot (params/self)             */
+    OP_GET_LOCAL,      /* u8 slot   : push frame slot                           */
     OP_SET_LOCAL,      /* u8 slot   : frame slot = top (leaves top)             */
+    OP_GET_LOCAL_OR,   /* u8 slot, u16 skip : a `let` that may not have run: if */
+                       /*           the slot holds a value push it and skip the */
+                       /*           fallback code that follows; else fall into it */
+    OP_SET_LOCAL_OR,   /* u8 slot, u16 skip : likewise for assignment           */
+    OP_CLEAR_LOCALS,   /* u8 first, u8 n : a scope ends: release and empty the  */
+                       /*           slots first .. first+n-1                    */
     OP_GET_UPVALUE,    /* u8 idx    : push a captured snapshot                  */
     OP_SET_UPVALUE,    /* u8 idx    : captured snapshot = top (leaves top)      */
     /* --- stage 3: aggregate builders --- */
@@ -76,6 +84,8 @@ typedef struct Chunk {
     /* parameters, when this chunk is a function proto (non-owning arena slices) */
     const char **params; uint32_t *paramlens; uint32_t nparams;
     uint32_t ndefaults;   /* trailing params with defaults; min arity = nparams - ndefaults */
+    uint32_t nlocals;     /* frame slots for locals, above self and the parameters
+                             (in a top-level statement: all of its slots) */
     const char *fname; uint32_t fnamelen;   /* function name for backtraces
                                                (the let-binding; empty = anonymous) */
     const char *doc; uint32_t doclen;       /* docstring span (into the kept source) */

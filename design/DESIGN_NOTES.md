@@ -796,3 +796,49 @@ a JIT-shaped ambition. RESIDUE: the dispatch loop itself (about sixty
 machine instructions per bytecode, largely 40-byte Values copied by
 value); the built-in backend's eig and svd, untouched here; prod, cumsum,
 var/std and the dim-wise reductions, still on the general path.
+
+## 26. Locals in frame slots — SHIPPED 0.1.39 (entry 25's REJECTED item;
+owner-triggered: "now do the compile-time slots for let and loop
+variables"). Entry 25 parked it on a premise that turned out false: that
+`eval`, `names` and `who` see locals through the chain of scopes. A
+frame's scopes were private to vm.c; `eval` has always run against the
+session. The compiler already classified every name; only the emission
+changed. DECIDED: every local is a slot of its frame (self, parameters,
+then chunk->nlocals more), a top-level statement gets a frame of its own
+locals, and names are for globals only. DECIDED: scope semantics are
+kept by emptying a scope's slots where the scope ended
+(OP_CLEAR_LOCALS; OP_FOR_NEXT empties the loop variable when the loop
+runs out), which also keeps the moment values are released. DECIDED: an
+empty slot is a null with a mark no program value has; stores into slots
+wash nulls, so the mark cannot be forged. DECIDED: a `let` that is a
+direct statement of a block or loop body has run before anything after
+it in its scope, and is read unchecked; a `let` in bare parentheses can
+be skipped and is read with OP_GET_LOCAL_OR, whose fallback is the
+compiled resolution of the name outside that let (outer local, upvalue,
+global) -- the lexical version of what the chain did. Two corners differ
+from 0.1.38 and are in the changelog (a parenthesised let as a whole
+function body no longer defines a global; a skipped let no longer hides
+a parameter or captured variable of its name). Both old behaviours were
+accidents of the chain starting at the session inside a function.
+DECIDED: `@` is a local of its pipe; OP_GET_AT remains as the error for
+`@` outside one. DECIDED (same release, because the profile after slots
+demanded it): the VM's ip and sp are C locals written through to memory
+at every change -- memory is always what a helper, the error sweep or a
+backtrace expects, so nothing else had to change -- and the two-numbers
+case of a binary operator is a shared inline (nrt.h). MEASURED AND
+REJECTED: an SSE2 store to avoid store-forwarding stalls on freshly
+built values (5% on one benchmark, nothing on the rest, and x86-only);
+a hand-inlined retain/release without the ip/sp change (fewer
+instructions, slower, because the wait was on the memory round trip).
+LESSON: instruction counts (callgrind) pointed at the wrong thing twice;
+only timing variants side by side found the stack-pointer chain.
+PROOF: tests/81_slots.test; 10,000 generated programs identical between
+0.1.38 and 0.1.39; sanitizers clean. FOUND ON THE WAY: `map` packing
+arrays and records as numbers (fixed, changelog). RESIDUE: dispatch
+(a switch, a line-number store per instruction), 40-byte values, a
+capacity test per push; a VM run per element in `map` and the indexed
+reductions; the 0.1.38 environment pool, now idle; global variables are
+still found through the hash index (a per-site cache would be the next
+step if top-level loops matter). TRIGGER: a workload where scalar loops
+dominate after this, or the pool removed as housekeeping.
+

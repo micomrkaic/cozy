@@ -150,16 +150,7 @@ static void obj_free(Obj *o)
  * (VAL_DUAL) land numerically above VAL_STRING, so the old `kind >= VAL_STRING`
  * range test dereferenced a dual's doubles as a pointer (caught by ASan the
  * day dual arrived — the appended-kind trap, second occurrence). */
-static inline bool kind_is_heap(ValueKind k)
-{
-    switch (k) {
-    case VAL_STRING: case VAL_ARRAY: case VAL_RECORD:
-    case VAL_CLOSURE: case VAL_BUILTIN: case VAL_SPARSE:
-        return true;
-    default:
-        return false;                 /* null, bool, int, float, complex, dual */
-    }
-}
+/* (kind_is_heap is in value.h since 0.1.39: the VM asks it too.) */
 
 Value value_retain(Value v)
 {

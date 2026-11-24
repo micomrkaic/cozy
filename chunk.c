@@ -121,6 +121,7 @@ void chunk_disassemble(FILE *out, const Chunk *c, const char *title)
             fprintf(out, "; arity %u", c->nparams);      /* params live in slots 1..arity */
         }
     }
+    if (c->nlocals) fprintf(out, "; %u local slot%s", c->nlocals, c->nlocals == 1 ? "" : "s");
     fputs(")\n", out);
 
     uint32_t prev_line = 0;
@@ -159,12 +160,9 @@ void chunk_disassemble(FILE *out, const Chunk *c, const char *title)
         case OP_JUMP_IF_TRUE:  { uint16_t o = U16(); fprintf(out, "JUMP_IF_TRUE   -> %04u", i + o); break; }
         case OP_POP:          fputs("POP", out); break;
         case OP_LOOP:       { uint16_t o = U16(); fprintf(out, "LOOP           -> %04u", i - o); break; }
-        case OP_SCOPE_PUSH:   fputs("SCOPE_PUSH", out); break;
-        case OP_SCOPE_POP:    fputs("SCOPE_POP", out); break;
         case OP_FOR_BEGIN:    fputs("FOR_BEGIN", out); break;
-        case OP_FOR_NEXT:   { uint16_t k = U16(); uint16_t o = U16();
-                              fputs("FOR_NEXT       ", out); dis_name(out, c, k);
-                              fprintf(out, ", end -> %04u", i + o); break; }
+        case OP_FOR_NEXT:   { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "FOR_NEXT       slot %u, end -> %04u", s, i + o); break; }
         case OP_FOR_END:      fputs("FOR_END", out); break;
         case OP_MARK_PUSH:    fputs("MARK_PUSH", out); break;
         case OP_MARK_POP:     fputs("MARK_POP", out); break;
@@ -173,6 +171,12 @@ void chunk_disassemble(FILE *out, const Chunk *c, const char *title)
                               fprintf(out, "CLOSURE        fn#%u, nup=%u", p, nu); break; }
         case OP_GET_LOCAL:  { uint8_t s = U8(); fprintf(out, "GET_LOCAL      slot %u", s); break; }
         case OP_SET_LOCAL:  { uint8_t s = U8(); fprintf(out, "SET_LOCAL      slot %u", s); break; }
+        case OP_GET_LOCAL_OR: { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "GET_LOCAL_OR   slot %u, set -> %04u", s, i + o); break; }
+        case OP_SET_LOCAL_OR: { uint8_t s = U8(); uint16_t o = U16();
+                              fprintf(out, "SET_LOCAL_OR   slot %u, set -> %04u", s, i + o); break; }
+        case OP_CLEAR_LOCALS: { uint8_t s = U8(); uint8_t k = U8();
+                              fprintf(out, "CLEAR_LOCALS   slot %u, n=%u", s, k); break; }
         case OP_GET_UPVALUE:{ uint8_t s = U8(); fprintf(out, "GET_UPVALUE    up %u", s); break; }
         case OP_SET_UPVALUE:{ uint8_t s = U8(); fprintf(out, "SET_UPVALUE    up %u", s); break; }
         case OP_MATRIX:     { uint16_t k = U16(); fputs("MATRIX         shape ", out); dis_const(out, c, k); break; }

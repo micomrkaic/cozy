@@ -405,7 +405,7 @@ the same library NumPy and Octave use, and since 0.1.38 its own array
 kernels run over raw numbers as theirs do. Seconds, best of three, on one
 four-core machine, with NumPy 2.5.3 and Octave 8.4.0:
 
-| | Cozy 0.1.38 | NumPy | Octave |
+| | Cozy 0.1.39 | NumPy | Octave |
 |---|---|---|---|
 | `A * B`, n = 1000 | 0.016 | 0.007 | 0.011 |
 | `A \ b`, n = 1000 | 0.021 | 0.009 | 0.015 |
@@ -413,7 +413,7 @@ four-core machine, with NumPy 2.5.3 and Octave 8.4.0:
 | `svd` with vectors, n = 1000 | 0.26 | 0.27 | 2.09 |
 | `sum(sin(x) .^ 2 + cos(x) .^ 2)`, 5 million elements | 0.14 | 0.08 | 0.17 |
 | `sort(x)`, 5 million elements | 0.24 | 0.04 | 0.55 |
-| a scalar loop of a million passes | 0.09 | 0.03 | 0.56 |
+| a scalar loop of a million passes | 0.06 | 0.03 | 0.56 |
 
 Unlike the transcripts, these numbers are not checked by any test: they
 are one machine on one day, and the ratios are what to read. Dense

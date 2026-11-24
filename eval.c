@@ -1670,40 +1670,10 @@ Value make_range(Interp *I, Value sv, Value ev, Value stv)   /* non-consuming; r
 
 Value apply_binop(Interp *I, enum TokenKind op, Value a, Value b)
 {
-    /* Two plain numbers -- every step of a scalar loop -- answered here as
-     * scalar_arith_k and scalar_cmp answer them, without the walk through
-     * the kinds that are not numbers: Int with Int stays Int while it fits
-     * and promotes to Float when it does not; anything with a Float is done
-     * in doubles; division is always Float. Powers, and every other kind,
-     * go the general way below. */
-    if ((a.kind == VAL_INT || a.kind == VAL_FLOAT) && (b.kind == VAL_INT || b.kind == VAL_FLOAT)) {
-        if (a.kind == VAL_INT && b.kind == VAL_INT) {
-            int64_t x = a.as.i, y = b.as.i, r;
-            switch (op) {
-            case TOK_PLUS:  return __builtin_add_overflow(x, y, &r) ? val_float((double)x + (double)y) : val_int(r);
-            case TOK_MINUS: return __builtin_sub_overflow(x, y, &r) ? val_float((double)x - (double)y) : val_int(r);
-            case TOK_STAR: case TOK_DOT_STAR:
-                            return __builtin_mul_overflow(x, y, &r) ? val_float((double)x * (double)y) : val_int(r);
-            case TOK_SLASH: case TOK_DOT_SLASH: return val_float((double)x / (double)y);
-            case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
-            case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
-            case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
-            default: break;
-            }
-        } else {
-            double x = a.kind == VAL_INT ? (double)a.as.i : a.as.f, y = b.kind == VAL_INT ? (double)b.as.i : b.as.f;
-            switch (op) {
-            case TOK_PLUS:  return val_float(x + y);
-            case TOK_MINUS: return val_float(x - y);
-            case TOK_STAR: case TOK_DOT_STAR:   return val_float(x * y);
-            case TOK_SLASH: case TOK_DOT_SLASH: return val_float(x / y);
-            case TOK_EQ: return val_bool(x == y); case TOK_NE: return val_bool(x != y);
-            case TOK_LT: return val_bool(x <  y); case TOK_LE: return val_bool(x <= y);
-            case TOK_GT: return val_bool(x >  y); case TOK_GE: return val_bool(x >= y);
-            default: break;
-            }
-        }
-    }
+    /* two plain numbers: binop_numbers (eval.h), which the VM also asks
+     * directly; every other kind goes the general way below */
+    Value fast;
+    if (binop_numbers(op, &a, &b, &fast)) return fast;
     if (is_sparse(a) || is_sparse(b)) return sparse_binop(I, op, a, b);
     if (is_array(a) || is_array(b)) return array_binop(I, op, a, b);
     switch (op) {
@@ -2273,6 +2243,7 @@ static Value bi_map(Interp *I, Value *args, uint32_t n)
     jmp_buf saved;
     memcpy(saved, I->jmp, sizeof(jmp_buf));
     volatile size_t done = 0;
+    bool saw_str = false, saw_other = false;
     if (setjmp(I->jmp)) array_build_abort(I, tmp, done, saved);
     for (size_t k = 0; k < nn; k++) {
         Value e = arr_get(arr, k);            /* borrowed from arr (see arr_get) */
@@ -2280,6 +2251,21 @@ static Value bi_map(Interp *I, Value *args, uint32_t n)
         Value mapped = call_value(I, f, one, 1);
         tmp[k] = mapped;
         done = k + 1;
+        /* The result is an array of what f returned, so each must be
+         * something an array can hold. An Array, Record or function used
+         * to be packed as if it were a number -- its pointer read as a
+         * complex -- and printed as noise (found 0.1.39 by the generator
+         * that tests scoping; `sum[k = 1:3] [k, 2]` reaches here too).
+         * A null is still let through and packed as zero, as it always
+         * was: `map(fn k -> print(k), x);` is somebody's for-each. */
+        if (mapped.kind == VAL_STRING) saw_str = true;
+        else if (is_num(mapped) || mapped.kind == VAL_BOOL || mapped.kind == VAL_DATE
+                 || mapped.kind == VAL_NULL) saw_other = true;
+        else
+            runtime_error(I, "map: the function must return a number or a string for each element, got %s",
+                          type_name(mapped.kind));
+        if (saw_str && saw_other)
+            runtime_error(I, "map: the function returned strings for some elements and numbers for others");
     }
     memcpy(I->jmp, saved, sizeof(jmp_buf));
     Value r = pack_array(tmp, nn, arr->rows, arr->cols);

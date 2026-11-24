@@ -169,15 +169,16 @@ workbench's value is the panes around a session that remains hundreds
 of times faster than the boxed era. A persistent warm compute thread is
 parked in the docket with these experiments as its trigger.
 
-## Scalar loops pay for names (measured 0.1.38)
+## Scalar loops are interpreted (measured 0.1.39)
 
-Parameters live in frame slots; every other variable -- globals, `let`
-bindings, loop variables -- is found by name in the chain of environments
-at run time. Since 0.1.38 a scope costs no allocation and a large
-environment is indexed, which made a scalar loop 1.4 times faster, but a
-million passes of `s = s + i * i` still take about 0.09 s: four times
-CPython, a sixth of Octave. Array code does not pay this (the loop is
-inside the kernel), which is where numerical work belongs in this
-language. Compile-time slots for locals are parked as design entry 25
-with their reason: they change what `eval` and `who` can see.
+Until 0.1.39 every variable except a parameter was found by name at run
+time, and a million passes of `s = s + i * i` took about 0.09 s. Locals
+are frame slots now (design entry 26) and the same loop takes about
+0.055 s: a little under twice CPython, a tenth of Octave. What remains is
+the interpreter itself -- about fifteen machine instructions of dispatch
+per bytecode, and values of 40 bytes copied whole -- and a global is
+still found through a hash of its name. Array code does not pay any of
+this (the loop is inside the kernel), which is where numerical work
+belongs in this language. `sum[k = 1:n]` and `map` pay more: they start
+a run of the VM for each element, about 100 ns.
 Status: DOCUMENTED COST.

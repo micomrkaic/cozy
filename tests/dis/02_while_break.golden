@@ -1,34 +1,33 @@
-== stmt 1 ==  (6 bytes, 1 consts, 1 names, 0 protos)
+== stmt 1 ==  (7 bytes, 1 consts, 1 names, 0 protos)
 0000     1  CONST          #0   ; 0
 0003     |  DEFINE         'i'
+0006     |  RETURN
 
-== stmt 2 ==  (56 bytes, 3 consts, 4 names, 0 protos)
+== stmt 2 ==  (54 bytes, 3 consts, 4 names, 0 protos)
 0000     1  MARK_PUSH
 0001     |  GET_VAR        'i'
 0004     |  CONST          #0   ; 5
 0007     |  BINOP          <
-0009     |  JUMP_IF_FALSE  -> 0053
+0009     |  JUMP_IF_FALSE  -> 0050
 0012     |  POP
-0013     |  SCOPE_PUSH
-0014     |  GET_VAR        'i'
-0017     |  CONST          #1   ; 1
-0020     |  BINOP          +
-0022     |  SET_VAR        'i'
-0025     |  POP
-0026     |  GET_VAR        'i'
-0029     |  CONST          #2   ; 3
-0032     |  BINOP          ==
-0034     |  JUMP_IF_FALSE  -> 0046
-0037     |  POP
-0038     |  MARK_RESET
-0039     |  SCOPE_POP
-0040     |  JUMP           -> 0054
-0043     |  JUMP           -> 0048
+0013     |  GET_VAR        'i'
+0016     |  CONST          #1   ; 1
+0019     |  BINOP          +
+0021     |  SET_VAR        'i'
+0024     |  POP
+0025     |  GET_VAR        'i'
+0028     |  CONST          #2   ; 3
+0031     |  BINOP          ==
+0033     |  JUMP_IF_FALSE  -> 0044
+0036     |  POP
+0037     |  MARK_RESET
+0038     |  JUMP           -> 0051
+0041     |  JUMP           -> 0046
+0044     |  POP
+0045     |  NULL
 0046     |  POP
-0047     |  NULL
-0048     |  POP
-0049     |  SCOPE_POP
-0050     |  LOOP           -> 0001
-0053     |  POP
-0054     |  MARK_POP
-0055     |  NULL
+0047     |  LOOP           -> 0001
+0050     |  POP
+0051     |  MARK_POP
+0052     |  NULL
+0053     |  RETURN

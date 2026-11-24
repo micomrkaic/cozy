@@ -1,5 +1,115 @@
 # Cozy changelog
 
+## 0.1.39 — locals are slots
+
+The item 0.1.38 listed as not done. A loop variable, a `let` inside a
+loop, a block or a function, and the `@` of a pipe used to be names: an
+environment was made for every pass of a loop and every block, and each
+use of a variable searched the chain of them by name. They are slots of
+the function's frame now, decided when the code is compiled; a use is an
+index. Names remain for globals only.
+
+Milliseconds, best of five, built-in backend, the same machine (CPython
+3 runs the first line in 32):
+
+| a million passes unless said | 0.1.38 | 0.1.39 |
+|---|---|---|
+| `s = s + i * i` in a function | 93 | 55 |
+| the same with Floats (`s = s * 0.999 + i / 7`) | 92 | 67 |
+| the same typed at the prompt (`s` a global) | 88 | 61 |
+| the same calling `sin(i)` | 110 | 78 |
+| two nested loops with a `let` in the body | 141 | 84 |
+| a pipe in the body, half a million passes | 64 | 42 |
+| a `while` loop (Collatz from 27, 3000 times) | 62 | 41 |
+| `fib(25)`, 250,000 calls | 19.5 | 12.2 |
+
+### Changed
+- **Every local is a frame slot.** The compiler already knew, for each
+  name, whether it was a local, a captured variable or a global; for
+  locals other than parameters it then threw that away and emitted a
+  lookup by name. It now gives each a slot. `OP_SCOPE_PUSH` and
+  `OP_SCOPE_POP` are gone, and a frame no longer carries an environment.
+  What a scope means is kept exactly:
+  - a scope's slots are emptied where the scope ended (the end of a
+    block, of each pass of a loop, on `break` and `continue`), so a value
+    is released when it used to be, and a `let` of one pass is not there
+    in the next;
+  - a `let` written where it may be skipped -- in parentheses, as in
+    `if c then (let q = 1) end` -- is read with a test: when it has not
+    run, the name means what it means outside, as it did when the
+    chain of scopes was searched;
+  - closures still take the value a local has when they are made;
+  - `eval`, `who` and `names` work on the session, as they always did.
+    (Design entry 25 parked this change on the belief that `eval` could
+    see locals. It never could: `for i = 1:2 do eval("i") end` was an
+    error before and is the same error now.)
+- **The VM keeps its place in registers.** With the lookups gone, the
+  profile showed the interpreter loop waiting on itself: the instruction
+  pointer and the stack pointer lived in memory and were loaded back,
+  incremented and stored for every byte decoded and every value pushed.
+  They are local variables now, written through to memory at each change
+  so that the error path and backtraces read what they always read. Two
+  numbers are combined, and a number is copied, without a call
+  (`binop_numbers`, shared with `apply_binop`, so there is one copy of
+  the rule). Every chunk ends in an explicit return, which removes an
+  end-of-code test before each instruction.
+- A function may have at most 255 locals alive at once (parameters
+  included); beyond that it is a compile error that says so. Scopes give
+  their slots back, so this counts the deepest nesting, not the number of
+  `let`s in the function. Before, the compiler's table of locals had 256
+  places and no check.
+
+### The behaviour that changes
+Two corners, both a `let` in bare parentheses (not `let .. in`, not a
+`let` in a block):
+- **As the whole body of a function it defined a global.**
+  `let f = fn x -> (let w = x); f(3); w` printed 3. `w` is the function's
+  local now, like every other `let` in a function, and the last `w` is an
+  undefined name.
+- **When skipped, it hid a parameter of the same name.**
+  `let f = fn q -> (if q > 5 then (let q = 0) end; q); f(1)` was an
+  "undefined name 'q'" (or the value of a global `q`, if there was one):
+  the search went from the function's scopes straight to the session.
+  It is 1 now -- the parameter. The same holds for a variable captured
+  from an enclosing function.
+
+### Fixed
+- **`map` (and so `~>` and `sum[k = ...]`) with a function that returns
+  an Array, a Record or a function.** The result was packed as if it
+  were a number, the pointer read as a complex:
+  `sum[k = 1:3] [k, 2 * k]` printed `1.39563e-309+0i`, a different
+  number every run. It is an error now ("map: the function must return a
+  number or a string for each element, got Array"), as is a function
+  that returns strings for some elements and numbers for others (the
+  numbers used to become empty strings). Found by the generator below,
+  whose two interpreters printed different noise. A function returning
+  null is still accepted and packed as zero, as before, so that
+  `x ~> print;` keeps working as a for-each.
+
+### Verified
+- tests/81_slots.test: 83 cases. The 62 that say what a scope means were
+  generated from the 0.1.38 binary and must be answered the same; the
+  rest pin the two corners above, the limit of 255, and `map`.
+- 10,000 random programs about scoping (nested loops and blocks,
+  shadowing, skipped lets, closures, pipes, `break`, `continue`,
+  `return`, errors in the middle) run through 0.1.38 and 0.1.39: the
+  output and the error of every one are identical. 2,500 of them under
+  the address and leak sanitizers: clean.
+- The golden suite (1766 inputs) under the built-in and the OpenBLAS
+  backend, under the sanitizers, and under WebAssembly; the stress
+  workout; the bytecode goldens regenerated and read.
+
+### Not done
+- The VM still spends about fifteen machine instructions per bytecode
+  on dispatch and copies 40-byte values; a scalar loop is now a little
+  under twice CPython's time. What is left is the shape of the
+  interpreter (design entry 26), not a lookup.
+- `sum[k = 1:n]` and `map` start a run of the VM for every element
+  (about 100 ns each); this release does not touch that.
+- The pool of recycled environments that 0.1.38 added for loop scopes
+  has nothing left to recycle (only the session's environment is ever
+  made). It is harmless and is left in place for this release.
+
 ## 0.1.38 — the same answers, sooner
 
 A release about speed. Nothing computes a different number, with one

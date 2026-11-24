@@ -1,23 +1,31 @@
 /* vm.c — Cozy bytecode VM (call-frame stack, lexical addressing).
  *
  * One operand stack and one CallFrame stack per vm_run invocation, with a single
- * setjmp at the top. A function's parameters and self live in stack slots, so a
- * direct call (OP_CALL on a compiled closure) pushes a frame over the callee and
- * its arguments already on the stack — no per-call environment, malloc, setjmp,
- * or C recursion. Slot 0 of a frame is the closure itself (the self-slot, for
- * direct recursion); slots 1..nparams are the arguments. Free variables are
- * value-snapshot upvalues carried on the closure, so a closure never points back
- * at the scope that created it. Globals and loop-body `let`s remain name-keyed in
- * the env (which every frame roots at the session globals), preserving late
- * binding for recursion and mutual recursion.
+ * setjmp at the top. Every local lives in a stack slot, so a direct call (OP_CALL
+ * on a compiled closure) pushes a frame over the callee and its arguments already
+ * on the stack — no per-call environment, malloc, setjmp, or C recursion. Slot 0
+ * of a frame is the closure itself (the self-slot, for direct recursion); slots
+ * 1..nparams are the arguments; above them are chunk->nlocals slots for the
+ * function's loop variables, `let`s and pipes (0.1.39), and above those the
+ * temporaries. A top-level statement's frame has only the locals. Free variables
+ * are value-snapshot upvalues carried on the closure, so a closure never points
+ * back at the scope that created it. Globals remain name-keyed in the session's
+ * environment, preserving late binding for recursion and mutual recursion.
+ *
+ * A local slot outside its scope is EMPTY: a null that carries a mark no
+ * program value has (slot_empty). Scopes end by emptying their slots
+ * (OP_CLEAR_LOCALS), which releases the values when a dropped environment
+ * used to; OP_GET_LOCAL_OR / OP_SET_LOCAL_OR test the mark for the one kind
+ * of `let` that may be skipped. Stores into a slot wash a null of whatever
+ * its payload is, so the mark cannot be forged.
  *
  * Builtins that invoke a closure (e.g. map) go through call_value ->
  * vm_run_closure, which nests a fresh vm_run (saving/restoring I->jmp); that is
  * the only place C recursion happens, and it is shallow.
  *
  * Error handling stays total: on runtime_error the handler sweeps the whole
- * operand stack (one contiguous live-set across all frames) and unwinds every
- * frame's open loop scopes back to globals. The discipline that makes the sweep
+ * operand stack (one contiguous live-set across all frames, locals included).
+ * The discipline that makes the sweep
  * complete: a fallible op PEEKs its operands (they stay on the stack), calls a
  * non-consuming runtime helper, and only on success pops them and pushes a result.
  */
@@ -33,16 +41,16 @@
 typedef struct {
     Chunk   *chunk;
     uint32_t ip;
-    uint32_t slot_base;  /* slot 0 = closure (self); slots 1.. = params; then temps */
+    uint32_t slot_base;  /* slot 0 = closure (self); slots 1.. = params; then locals */
+    uint32_t temp_base;  /* first temporary: slot_base + self + params + locals      */
     uint32_t mark_base;  /* marks stack height at frame entry (restored on return)   */
     CloObj  *closure;    /* the executing closure (for upvalues); null at top level  */
-    EnvObj  *env;        /* loop/global scope; starts = globals, loops push children */
 } CallFrame;
 
 typedef struct {
     Value     *stack;  uint32_t sp, cap;
     CallFrame *frames; uint32_t nframe, fcap;
-    EnvObj    *globals;  /* floor for scope unwind; never released by a frame */
+    EnvObj    *globals;  /* the session's names: every variable that is not a slot */
     int64_t   *end_dims; uint32_t end_sp, end_cap;  /* 'end' context: 2 dims per frame */
     uint32_t  *marks;  uint32_t nmark, mcap;        /* loop-body sp bases (break/continue reset) */
     void      *prev;   /* enclosing VM (nested vm_run), for backtraces */
@@ -80,19 +88,25 @@ static void stack_grow(VM *st)
     if (!st->stack) abort();
 }
 
-/* Each frame owns exactly one ref to fr->env unless it is globals (borrowed). */
-static void scope_push(VM *st, CallFrame *fr)
+/* An empty local slot: a null no program can make. */
+#define SLOT_EMPTY_MARK INT64_C(0x454d5054594c4f43)
+static inline Value slot_empty(void) { return (Value){ .kind = VAL_NULL, .as.i = SLOT_EMPTY_MARK }; }
+static inline bool  slot_is_empty(Value v) { return v.kind == VAL_NULL && v.as.i == SLOT_EMPTY_MARK; }
+/* Most of what a scalar loop moves is a number, which nobody counts: the VM
+ * asks the kind itself before calling value.c (0.1.39). Same rule, same
+ * function (kind_is_heap); only the call is saved. */
+static inline Value vm_retain(Value v)
 {
-    EnvObj *child = env_new(fr->env);
-    if (fr->env != st->globals) env_release(fr->env);
-    fr->env = child;
+    if (kind_is_heap(v.kind) && v.as.obj) v.as.obj->rc++;
+    return v;
 }
-static void scope_pop(VM *st, CallFrame *fr)
+static inline void vm_release(Value v) { if (kind_is_heap(v.kind)) value_release(v); }
+/* what a slot takes: the value retained, a null washed of its payload */
+static inline void slot_put(Value *slot, const Value *v)
 {
-    EnvObj *parent = fr->env->parent;
-    if (parent != st->globals) env_retain(parent);
-    env_release(fr->env);
-    fr->env = parent;
+    *slot = *v;                                   /* one whole copy (see the note on copies) */
+    if (kind_is_heap(v->kind)) { if (v->as.obj) v->as.obj->rc++; }
+    else if (v->kind == VAL_NULL) slot->as.i = 0;
 }
 
 static bool vm_is_num(Value v)
@@ -108,7 +122,13 @@ static CallFrame *push_frame(VM *st, Chunk *chunk, CloObj *closure, uint32_t slo
     CallFrame *fr = &st->frames[st->nframe++];
     fr->chunk = chunk; fr->ip = 0; fr->slot_base = slot_base;
     fr->mark_base = st->nmark;
-    fr->closure = closure; fr->env = st->globals;
+    fr->closure = closure;
+    /* the locals: above self and the parameters, which the caller has pushed */
+    for (uint32_t k = 0; k < chunk->nlocals; k++) {
+        if (st->sp >= st->cap) stack_grow(st);
+        st->stack[st->sp++] = slot_empty();
+    }
+    fr->temp_base = st->sp;
     return fr;
 }
 
@@ -217,10 +237,6 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 
     if (setjmp(I->jmp)) {                                /* runtime_error landed here */
         for (uint32_t k = 0; k < st->sp; k++) value_release(st->stack[k]);
-        for (uint32_t f = 0; f < st->nframe; f++) {
-            CallFrame *fr = &st->frames[f];
-            while (fr->env != st->globals) scope_pop(st, fr);
-        }
         I->vm_cur = st->prev;
         vm_give(st);
         memcpy(I->jmp, saved, sizeof(jmp_buf));
@@ -231,45 +247,77 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 
     CallFrame *fr = &st->frames[st->nframe - 1];
 
-#define PUSH(v)   do { if (st->sp >= st->cap) stack_grow(st); st->stack[st->sp++] = (v); } while (0)
-#define PEEK(d)   (st->stack[st->sp - 1 - (d)])
-#define RD_U8()   (fr->chunk->code[fr->ip++])
-#define RD_U16()  (fr->ip += 2, (uint16_t)(fr->chunk->code[fr->ip - 2] | (fr->chunk->code[fr->ip - 1] << 8)))
+    /* The running frame's instruction pointer and the stack pointer live in
+     * locals (registers) and are written through to fr->ip and st->sp at
+     * every change. Memory therefore holds what it always held at any
+     * moment a helper can run or raise -- the error sweep reads st->sp,
+     * backtraces and the return to a caller's frame read fr->ip -- but the
+     * loop no longer loads them back for every byte it decodes and every
+     * value it pushes: each of those was a store-then-load of several
+     * cycles, one after another, and together they were most of what a
+     * scalar loop waited for (0.1.39). `stack` follows st->stack when it
+     * grows. FRAME_IN() after fr changes or a frame is pushed. */
+    uint32_t ip, sp, base;
+    const uint8_t *code;
+    Value *stack;
+#define FRAME_IN() do { ip = fr->ip; code = fr->chunk->code; base = fr->slot_base; \
+                        sp = st->sp; stack = st->stack; } while (0)
+    FRAME_IN();
+
+#define PUSH(v)   do { if (sp >= st->cap) { stack_grow(st); stack = st->stack; } \
+                       stack[sp] = (v); st->sp = ++sp; } while (0)
+#define PEEK(d)   (stack[sp - 1 - (d)])
+#define DROP(n)   (st->sp = (sp -= (n)))
+#define RD_U8()   (fr->ip = ip + 1, code[ip++])
+#define RD_U16()  (ip += 2, fr->ip = ip, (uint16_t)(code[ip - 2] | (code[ip - 1] << 8)))
+#define JUMP_BY(d) (fr->ip = (ip += (d)))
+#define JUMP_BACK(d) (fr->ip = (ip -= (d)))
 
     for (;;) {
-        if (fr->ip >= fr->chunk->code_len) {            /* end of chunk == return */
-            Value result = st->sp > fr->slot_base ? st->stack[--st->sp] : val_null();
-            while (fr->env != st->globals) scope_pop(st, fr);
-            while (st->sp > fr->slot_base) value_release(st->stack[--st->sp]);
-            st->nmark = fr->mark_base;                  /* discard this frame's loop marks */
-            st->nframe--;
-            if (st->nframe == 0) {
-                I->vm_cur = st->prev;
-                vm_give(st);
-                memcpy(I->jmp, saved, sizeof(jmp_buf));
-                vm_depth--;
-                *ok = true;
-                return result;
-            }
-            fr = &st->frames[st->nframe - 1];
-            PUSH(result);
-            continue;
-        }
-
+        /* no end-of-chunk test: the compiler ends every chunk in OP_RETURN */
         Chunk *ch_ = fr->chunk;
-        I->cur_line = ch_->lines[fr->ip];
-        switch ((OpCode)ch_->code[fr->ip++]) {
+        I->cur_line = ch_->lines[ip];
+        switch ((OpCode)RD_U8()) {
 
         case OP_CONST: { uint16_t k = RD_U16(); PUSH(value_retain(ch_->consts[k])); break; }
         case OP_NULL:  PUSH(val_null()); break;
 
-        case OP_GET_LOCAL: { uint8_t s = RD_U8(); PUSH(value_retain(st->stack[fr->slot_base + s])); break; }
+        case OP_GET_LOCAL: { uint8_t s = RD_U8(); PUSH(vm_retain(stack[base + s])); break; }
         case OP_SET_LOCAL: {
-            uint8_t s = RD_U8(); uint32_t idx = fr->slot_base + s;
-            value_release(st->stack[idx]); st->stack[idx] = value_retain(PEEK(0));
+            uint8_t s = RD_U8(); uint32_t idx = base + s;
+            Value old = stack[idx];
+            slot_put(&stack[idx], &PEEK(0));
+            vm_release(old);
             break;
         }
-        case OP_GET_UPVALUE: { uint8_t i = RD_U8(); PUSH(value_retain(fr->closure->upvalues[i])); break; }
+        case OP_GET_LOCAL_OR: {                          /* a `let` that may not have run */
+            uint8_t s = RD_U8(); uint16_t off = RD_U16();
+            Value v = stack[base + s];
+            if (!slot_is_empty(v)) { PUSH(vm_retain(v)); JUMP_BY(off); }
+            break;                                       /* empty: the fallback follows */
+        }
+        case OP_SET_LOCAL_OR: {
+            uint8_t s = RD_U8(); uint16_t off = RD_U16();
+            uint32_t idx = base + s;
+            Value old = stack[idx];
+            if (!slot_is_empty(old)) {
+                slot_put(&stack[idx], &PEEK(0));
+                vm_release(old);
+                JUMP_BY(off);
+            }
+            break;
+        }
+        case OP_CLEAR_LOCALS: {                          /* a scope ends */
+            uint8_t s = RD_U8(); uint8_t cnt = RD_U8();
+            Value *v = &stack[base + s];
+            for (uint8_t k = 0; k < cnt; k++) {
+                Value old = v[k];
+                v[k] = slot_empty();
+                vm_release(old);
+            }
+            break;
+        }
+        case OP_GET_UPVALUE: { uint8_t i = RD_U8(); PUSH(vm_retain(fr->closure->upvalues[i])); break; }
         case OP_SET_UPVALUE: {
             uint8_t i = RD_U8();
             value_release(fr->closure->upvalues[i]); fr->closure->upvalues[i] = value_retain(PEEK(0));
@@ -279,7 +327,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         case OP_GET_VAR: {
             uint16_t k = RD_U16();
             Value out;
-            if (!env_lookup(fr->env, ch_->names[k], ch_->namelens[k], &out))
+            if (!env_lookup(st->globals, ch_->names[k], ch_->namelens[k], &out))
                 {
                     /* teach the load line when the name is a known package
                      * export (pkg_hints.h, generated from packages/) — born
@@ -297,14 +345,14 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         }
         case OP_DEFINE: {
             uint16_t k = RD_U16();
-            env_define(fr->env, ch_->names[k], ch_->namelens[k], PEEK(0));
+            env_define(st->globals, ch_->names[k], ch_->namelens[k], PEEK(0));
             break;
         }
         case OP_SET_VAR: {
             uint16_t k = RD_U16();
-            if (!env_assign(fr->env, ch_->names[k], ch_->namelens[k], PEEK(0))) {
+            if (!env_assign(st->globals, ch_->names[k], ch_->namelens[k], PEEK(0))) {
                 Value held;
-                if (env_lookup(fr->env, ch_->names[k], ch_->namelens[k], &held)) {
+                if (env_lookup(st->globals, ch_->names[k], ch_->namelens[k], &held)) {
                     value_release(held);             /* the name exists, but only as a builtin */
                     runtime_error(I, "cannot assign to the builtin '%.*s' — write let %.*s = ... to make a variable of that name",
                                   (int)ch_->namelens[k], ch_->names[k], (int)ch_->namelens[k], ch_->names[k]);
@@ -314,38 +362,39 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             }
             break;
         }
-        case OP_GET_AT: {
-            Value out;
-            if (!env_lookup(fr->env, "@", 1, &out))
-                runtime_error(I, "'@' is only meaningful on the right-hand side of '|>'");
-            PUSH(out);
-            break;
-        }
+        case OP_GET_AT:                                  /* inside a pipe '@' is a slot */
+            runtime_error(I, "'@' is only meaningful on the right-hand side of '|>'");
 
         case OP_BINOP: {
             enum TokenKind op = (enum TokenKind)RD_U8();
-            Value r = apply_binop(I, op, PEEK(1), PEEK(0));
-            value_release(PEEK(0)); value_release(PEEK(1)); st->sp -= 2;
+            Value r;
+            if (binop_numbers(op, &PEEK(1), &PEEK(0), &r)) {   /* two numbers: nothing to release */
+                DROP(1);
+                PEEK(0) = r;
+                break;
+            }
+            r = apply_binop(I, op, PEEK(1), PEEK(0));
+            value_release(PEEK(0)); value_release(PEEK(1)); DROP(2);
             PUSH(r);
             break;
         }
         case OP_UNARY: {
             enum TokenKind op = (enum TokenKind)RD_U8();
             Value r = apply_unary(I, op, PEEK(0));
-            value_release(PEEK(0)); st->sp -= 1;
+            value_release(PEEK(0)); DROP(1);
             PUSH(r);
             break;
         }
         case OP_TRANSPOSE: {
             bool conj = RD_U8() != 0;
             Value r = transpose(I, PEEK(0), conj);
-            value_release(PEEK(0)); st->sp -= 1;
+            value_release(PEEK(0)); DROP(1);
             PUSH(r);
             break;
         }
         case OP_RANGE: {
             Value r = make_range(I, PEEK(2), PEEK(0), PEEK(1));
-            value_release(PEEK(0)); value_release(PEEK(1)); value_release(PEEK(2)); st->sp -= 3;
+            value_release(PEEK(0)); value_release(PEEK(1)); value_release(PEEK(2)); DROP(3);
             PUSH(r);
             break;
         }
@@ -365,14 +414,14 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 for (uint32_t pad = argc; pad < np2; pad++)  /* absent -> null; the */
                     PUSH(val_null());                        /* ARGDEF prologue fills */
                 if (st->nframe >= VM_MAX_FRAMES) runtime_error(I, "call stack overflow");
-                uint32_t sb = st->sp - np2 - 1;           /* callee + args become slots */
-                fr = push_frame(st, cl->chunk, cl, sb);
+                uint32_t sb = sp - np2 - 1;           /* callee + args become slots */
+                fr = push_frame(st, cl->chunk, cl, sb); FRAME_IN();   /* and its locals go above them */
             } else {                                      /* builtin (or error): in place */
-                Value *args2 = &st->stack[st->sp - argc];
+                Value *args2 = &stack[sp - argc];
                 Value r = call_value(I, callee, args2, argc);
                 for (uint32_t i = 0; i < argc; i++) value_release(args2[i]);
                 value_release(callee);
-                st->sp -= (uint32_t)argc + 1;
+                DROP((uint32_t)argc + 1);
                 PUSH(r);
             }
             break;
@@ -381,8 +430,8 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
         case OP_ARGDEF: {                            /* entry 13: default fill */
             uint8_t  slot = RD_U8();
             uint16_t off  = RD_U16();
-            if (st->stack[fr->slot_base + slot].kind != VAL_NULL)
-                fr->ip += off;                           /* provided: skip default */
+            if (stack[base + slot].kind != VAL_NULL)
+                JUMP_BY(off);                           /* provided: skip default */
             break;
         }
 
@@ -390,20 +439,19 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             Value callee = PEEK(0);
             if (callee.kind == VAL_CLOSURE && as_clo(callee)->chunk->nparams == 0) {
                 if (st->nframe >= VM_MAX_FRAMES) runtime_error(I, "call stack overflow");
-                fr = push_frame(st, as_clo(callee)->chunk, as_clo(callee), st->sp - 1);
+                fr = push_frame(st, as_clo(callee)->chunk, as_clo(callee), sp - 1); FRAME_IN();
             } else if (callee.kind == VAL_BUILTIN && as_blt(callee)->min_arity == 0) {
                 Value r = call_value(I, callee, nullptr, 0);
                 value_release(callee);
-                st->sp -= 1;
+                DROP(1);
                 PUSH(r);
             }                                            /* otherwise leave the value untouched */
             break;
         }
 
         case OP_RETURN: {
-            Value result = st->sp > fr->slot_base ? st->stack[--st->sp] : val_null();
-            while (fr->env != st->globals) scope_pop(st, fr);
-            while (st->sp > fr->slot_base) value_release(st->stack[--st->sp]);
+            Value result = sp > fr->temp_base ? stack[DROP(1)] : val_null();
+            while (sp > fr->slot_base) value_release(stack[DROP(1)]);
             st->nmark = fr->mark_base;                  /* discard this frame's loop marks */
             st->nframe--;
             if (st->nframe == 0) {
@@ -415,6 +463,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 return result;
             }
             fr = &st->frames[st->nframe - 1];
+            FRAME_IN();
             PUSH(result);
             break;
         }
@@ -431,7 +480,7 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                     out = value_retain(rec->vals[i]); found = true; break;
                 }
             if (!found) runtime_error(I, "record has no field '%.*s'", (int)ch_->namelens[k], ch_->names[k]);
-            value_release(t); st->sp -= 1;
+            value_release(t); DROP(1);
             PUSH(out);
             break;
         }
@@ -441,31 +490,28 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 runtime_error(I, "operand of '&&'/'||' must be Bool, got %s", value_type_name(PEEK(0)));
             break;
 
-        case OP_JUMP: { uint16_t off = RD_U16(); fr->ip += off; break; }
-        case OP_LOOP: { uint16_t off = RD_U16(); fr->ip -= off; break; }
+        case OP_JUMP: { uint16_t off = RD_U16(); JUMP_BY(off); break; }
+        case OP_LOOP: { uint16_t off = RD_U16(); JUMP_BACK(off); break; }
         case OP_JUMP_IF_FALSE: {
             uint16_t off = RD_U16();
             if (PEEK(0).kind != VAL_BOOL)
                 runtime_error(I, "condition must be Bool, got %s", value_type_name(PEEK(0)));
-            if (!PEEK(0).as.b) fr->ip += off;
+            if (!PEEK(0).as.b) JUMP_BY(off);
             break;
         }
         case OP_JUMP_IF_TRUE: {
             uint16_t off = RD_U16();
             if (PEEK(0).kind != VAL_BOOL)
                 runtime_error(I, "condition must be Bool, got %s", value_type_name(PEEK(0)));
-            if (PEEK(0).as.b) fr->ip += off;
+            if (PEEK(0).as.b) JUMP_BY(off);
             break;
         }
-        case OP_POP: st->sp -= 1; value_release(st->stack[st->sp]); break;
+        case OP_POP: DROP(1); vm_release(stack[sp]); break;
         case OP_TEE: {
             value_print(vout(), PEEK(0));
             fputc('\n', vout());
             break;
         }
-
-        case OP_SCOPE_PUSH: scope_push(st, fr); break;
-        case OP_SCOPE_POP:  scope_pop(st, fr);  break;
 
         case OP_FOR_BEGIN: {
             Value it = PEEK(0);
@@ -475,26 +521,33 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             break;
         }
         case OP_FOR_NEXT: {
-            uint16_t name = RD_U16();
+            uint8_t  slot = RD_U8();
             uint16_t endoff = RD_U16();
             Value iter = PEEK(1);
             int64_t idx = PEEK(0).as.i;
             int64_t count = iter.kind == VAL_ARRAY
                           ? (int64_t)as_arr(iter)->rows * as_arr(iter)->cols : 1;
-            if (idx >= count) { fr->ip += endoff; break; }
+            Value *var = &stack[base + slot];
+            Value old = *var;
+            if (idx >= count) {                          /* done: the variable's scope ends */
+                *var = slot_empty();
+                vm_release(old);
+                JUMP_BY(endoff);
+                break;
+            }
             /* arr_get lends a string element rather than giving a reference:
-             * retain it, or the release below frees the array's own string
-             * (a for loop over a string array used to corrupt the heap) */
-            Value elem = iter.kind == VAL_ARRAY ? value_retain(arr_get(as_arr(iter), (size_t)idx))
-                                                : value_retain(iter);
-            scope_push(st, fr);
-            env_define(fr->env, ch_->names[name], ch_->namelens[name], elem);
-            value_release(elem);
+             * the slot must hold one of its own (a for loop over a string
+             * array used to corrupt the heap) */
+            if (iter.kind == VAL_ARRAY) {
+                Value elem = arr_get(as_arr(iter), (size_t)idx);
+                slot_put(var, &elem);
+            } else slot_put(var, &iter);
+            vm_release(old);
             PEEK(0) = val_int(idx + 1);
             break;
         }
         case OP_FOR_END:
-            value_release(PEEK(1)); st->sp -= 2;
+            value_release(PEEK(1)); DROP(2);
             break;
 
         case OP_MARK_PUSH:
@@ -503,21 +556,21 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 st->marks = realloc(st->marks, st->mcap * sizeof *st->marks);
                 if (!st->marks) abort();
             }
-            st->marks[st->nmark++] = st->sp;
+            st->marks[st->nmark++] = sp;
             break;
         case OP_MARK_POP:
             st->nmark--;
             break;
         case OP_MARK_RESET:                              /* break/continue: drop mid-expression temporaries */
-            while (st->sp > st->marks[st->nmark - 1]) { st->sp--; value_release(st->stack[st->sp]); }
+            while (sp > st->marks[st->nmark - 1]) { DROP(1); value_release(stack[sp]); }
             break;
 
         case OP_CLOSURE: {
             uint16_t pidx = RD_U16();
             uint8_t  nup  = RD_U8();
             Value *ups = nup ? malloc(nup * sizeof *ups) : nullptr;
-            for (uint8_t i = 0; i < nup; i++) ups[i] = st->stack[st->sp - nup + i];  /* move */
-            st->sp -= nup;
+            for (uint8_t i = 0; i < nup; i++) ups[i] = stack[sp - nup + i];  /* move */
+            DROP(nup);
             PUSH(val_closure_vm(ch_->protos[pidx], ups, nup));
             break;
         }
@@ -529,10 +582,10 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             const int64_t *rc = (const int64_t *)shape->data;
             uint32_t ntot = 0;
             for (uint32_t r = 0; r < nrows; r++) ntot += (uint32_t)rc[r];
-            Value *ev = &st->stack[st->sp - ntot];
+            Value *ev = &stack[sp - ntot];
             Value result = build_matrix(I, ev, nrows, rc);
             for (uint32_t r = 0; r < ntot; r++) value_release(ev[r]);
-            st->sp -= ntot;
+            DROP(ntot);
             PUSH(result);
             break;
         }
@@ -540,11 +593,11 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             uint8_t argc = RD_U8();
             uint8_t colonmask = RD_U8();
             Value  target = PEEK(argc);
-            Value *idx    = &st->stack[st->sp - argc];
+            Value *idx    = &stack[sp - argc];
             Value result = do_index(I, target, idx, argc, colonmask);
             for (uint32_t k = 0; k < argc; k++) value_release(idx[k]);
             value_release(target);
-            st->sp -= (uint32_t)argc + 1;
+            DROP((uint32_t)argc + 1);
             PUSH(result);
             break;
         }
@@ -583,13 +636,13 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
             uint8_t argc = RD_U8();
             uint8_t colonmask = RD_U8();
             Value  value  = PEEK(0);                       /* top: the value */
-            Value *idx    = &st->stack[st->sp - 1 - argc]; /* below it: the indices */
+            Value *idx    = &stack[sp - 1 - argc]; /* below it: the indices */
             Value  target = PEEK(argc + 1);                /* below those: the array */
             Value  result = do_index_set(I, target, idx, argc, colonmask, value);
             value_release(value);
             for (uint32_t k = 0; k < argc; k++) value_release(idx[k]);
             value_release(target);
-            st->sp -= (uint32_t)argc + 2;
+            DROP((uint32_t)argc + 2);
             PUSH(result);
             break;
         }
@@ -602,9 +655,9 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
                 rrec->keys[k]    = ch_->names[ni];
                 rrec->keylens[k] = ch_->namelens[ni];
             }
-            Value *vals = &st->stack[st->sp - cnt];
+            Value *vals = &stack[sp - cnt];
             for (uint32_t k = 0; k < cnt; k++) rrec->vals[k] = vals[k];   /* move ownership */
-            st->sp -= cnt;
+            DROP(cnt);
             PUSH(rec);
             break;
         }
@@ -613,8 +666,12 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 
 #undef PUSH
 #undef PEEK
+#undef DROP
 #undef RD_U8
 #undef RD_U16
+#undef JUMP_BY
+#undef JUMP_BACK
+#undef FRAME_IN
 }
 
 /* Builtin -> closure path: nests a fresh vm_run with the callee as slot 0. */
