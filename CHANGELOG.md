@@ -1,5 +1,37 @@
 # Cozy changelog
 
+## 0.1.41 — builds with GCC 14
+
+### Fixed
+- **0.1.38, 0.1.39 and 0.1.40 did not compile with GCC 14** (Debian 13's
+  compiler): `eval.c:559: variable 'n' might be clobbered by 'longjmp'`,
+  an error because warnings are. The fast path for elementwise
+  arithmetic added in 0.1.38 is called at the top of a function that
+  goes on to call `setjmp`; GCC 14 inlines it there, and then reports
+  its loop bound as a local that a `longjmp` might clobber. It cannot --
+  the fast path has returned before `setjmp` is reached -- but the build
+  stops all the same. The three fast paths (`ew_fast`, `cmp_fast`,
+  `logical_fast`) are now kept out of line, so a function that calls
+  `setjmp` holds only what it needs across the jump. Nothing computes
+  differently; the cost is one call per array operation.
+  Reported by the owner from `make install`. CI had not seen it because
+  it built with GCC 13 only.
+
+### Changed
+- CI's Linux job now also builds with GCC 14, with and without
+  OpenBLAS and NLopt, before running the suite.
+
+### Verified
+- Every source file compiled at -O2 with GCC 13, GCC 14 and clang,
+  warnings as errors: clean. The golden suite (1829 inputs) on a GCC 14
+  build and on the usual one, under both backends and the sanitizers.
+
+### Not done
+- At -O1 and -Os GCC (13 and 14) says the same of the VM's own pointer
+  in `vm_run`, and at -O3 it warns about a date label that `snprintf`
+  might truncate. Both are older than this series and neither is the
+  build the Makefile makes (-O2); they are noted, not fixed.
+
 ## 0.1.40 — globals remembered, the pool retired
 
 The two items 0.1.39 left: the idle pool of environments, and globals

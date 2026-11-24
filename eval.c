@@ -553,8 +553,19 @@ static bool real_arg_doubles(RealArg *r, size_t n)
         else          for (size_t k = 0; k < n; k++) { double u = sa,    v = pb[k]; (OUT)[k] = (EXPR); } \
     } while (0)
 
+/* The three fast paths below are called at the top of functions that go on
+ * to call setjmp (the general path guards its partial result). Inlined
+ * there, their loop variables become locals of a function that calls
+ * setjmp, and GCC 14 reports the first of them as "might be clobbered by
+ * longjmp" -- wrongly, since they are dead before setjmp is reached, but
+ * with -Werror that stops the build (0.1.38 to 0.1.40 did not compile
+ * with GCC 14; CI ran GCC 13, which inlines differently). Kept out of
+ * line, the question cannot arise: a setjmp function holds only what it
+ * needs across the jump. The call is once per array operation. */
+#define FAST_PATH [[gnu::noinline]] static bool
+
 /* a (op) b elementwise, for Int and Float operands of which at least one is an array */
-static bool ew_fast(Arith kind, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+FAST_PATH ew_fast(Arith kind, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
 {
     size_t n = (size_t)rows * cols;
     RealArg x, y;
@@ -614,7 +625,7 @@ static bool ew_fast(Arith kind, Value a, Value b, uint32_t rows, uint32_t cols, 
 }
 
 /* a (cmp) b elementwise: Int with Int compares as integers, anything with a Float as doubles */
-static bool cmp_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+FAST_PATH cmp_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
 {
     size_t n = (size_t)rows * cols;
     RealArg x, y;
@@ -648,7 +659,7 @@ static bool cmp_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_
 }
 
 /* a & b, a | b on masks: both sides Bool (an array of them, or one) */
-static bool logical_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
+FAST_PATH logical_fast(enum TokenKind op, Value a, Value b, uint32_t rows, uint32_t cols, Value *out)
 {
     size_t n = (size_t)rows * cols;
     bool aa = is_array(a), ba = is_array(b);

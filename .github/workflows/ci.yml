@@ -16,6 +16,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: deps
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libnlopt-dev libreadline-dev
+      - name: GCC 14 builds it too (warnings are errors)
+        run: |
+          gcc-14 --version | head -1
+          make clean && make CC=gcc-14 -j4 cozy vmtest
+          make clean && make CC=gcc-14 BACKEND=openblas OPTIM=nlopt -j4 cozy
       - name: tier0 suite
         run: make clean && make -j4 && make test
       - name: openblas+nlopt suite
