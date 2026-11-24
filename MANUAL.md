@@ -35,7 +35,7 @@ instructions see the [README](README.md); for the honest list of sharp edges see
 
 ## 1. Getting started
 
-Build (a C23 compiler and `libm`; readline optional — see the README for macOS
+Build (a C23 compiler and `libm`, nothing else — see the README for macOS
 notes):
 
 ```sh
@@ -110,10 +110,15 @@ cozy> help(median)
 `who`, `help`, `rand` work without parentheses, and so does your own `let f =
 fn -> 42; f`.
 
-**Line editing.** With readline (or macOS libedit), you get history (persisted
-to `~/.cozy_history`), completion on builtin and variable names, and the
-usual Emacs keys. Multi-line constructs continue with a `     ...>` prompt until
-the `end` arrives.
+**Line editing.** The prompt is a full line editor (isocline, built in): the
+usual Emacs keys (Ctrl-A/E, Ctrl-K/U/W, Alt-B/F, arrows), history with
+up/down and Ctrl-R search (persisted to `~/.cozy_history`; a multi-line entry
+is one item), Tab completion on builtin and variable names — and on file
+names inside a string, so `load("tests/da` Tab works — and matching
+brackets highlighted. Ctrl-C abandons the entry (or stops a running
+computation), Ctrl-D on an empty line exits. `input()` is edited the same
+way. Multi-line constructs continue with a `     ...>` prompt until the
+`end` arrives.
 
 **Display defaults.** The REPL prints matrices as aligned blocks (`pretty on`)
 and numbers in a terse 6-significant-digit format; both are configurable — see

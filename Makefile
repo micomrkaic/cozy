@@ -10,43 +10,21 @@
 #   make STD=c23             newer std spelling (gcc 14+, recent clang)
 #   make WERROR=             drop -Werror (handy on a new compiler whose warning
 #                            set differs from the one this was tuned against)
-#   make READLINE=0          force the plain fgets REPL (skip libreadline)
 CC      ?= cc
 STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
 LDFLAGS ?=
-SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c kalman.c linalg_tier0.c serve.c
-HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h kalman.h
+SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c lineedit.c main.c sparse.c kalman.c linalg_tier0.c serve.c
+HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h kalman.h lineedit.h
 BIN      = cozy
 LIBS     = -lm $(LINALG_LIBS) $(OPTIM_LIBS)
 
-# On macOS, Homebrew's readline lives under the brew prefix rather than the
-# default search path; add it so the probe and link can find it. Empty on Linux
-# (or anywhere without Homebrew), so behaviour there is unchanged.
-BREW := $(shell brew --prefix 2>/dev/null)
-ifneq ($(BREW),)
-  RL_INC := -I$(BREW)/include
-  RL_LIB := -L$(BREW)/lib
-endif
-
-# Auto-detect readline (or the libedit shim that macOS's -lreadline resolves to);
-# build a line-editing REPL if present, else fall back to a plain fgets REPL.
-# Override with READLINE=0 to force the fallback.
-READLINE ?= $(shell printf 'int main(void){char*l=readline("");return l!=0;}\n' \
-              | $(CC) -xc - $(RL_INC) -include readline/readline.h $(RL_LIB) -lreadline -o /dev/null 2>/dev/null && echo 1)
-ifeq ($(READLINE),1)
-  CFLAGS += -DHAVE_READLINE $(RL_INC)
-  LIBS   += $(RL_LIB) -lreadline
-  # Real GNU readline also exposes rl_catch_signals and the signal-cleanup
-  # helpers; the macOS libedit shim does not. Gate those extras separately so
-  # the REPL still builds (with line editing + history) against libedit.
-  GNU_READLINE := $(shell printf 'int main(void){rl_catch_signals=0;rl_cleanup_after_signal();return 0;}\n' \
-              | $(CC) -xc - $(RL_INC) -include readline/readline.h $(RL_LIB) -lreadline -o /dev/null 2>/dev/null && echo 1)
-  ifeq ($(GNU_READLINE),1)
-    CFLAGS += -DHAVE_GNU_READLINE
-  endif
-endif
+# Line editing is isocline (third_party/isocline, MIT), compiled in: no
+# readline, no libedit, nothing to detect (0.1.50). The same editor runs in
+# every build, so history, completion and keys behave the same everywhere.
+ISOCLINE_INC = -Ithird_party/isocline/include
+CFLAGS += $(ISOCLINE_INC)
 
 # ---------------------------------------------------------------------------
 # Object build: each .c compiles once into build/obj/, with compiler-generated
@@ -123,11 +101,15 @@ $(ASANDIR)/%.o: %.c | $(ASANDIR)
 
 -include $(wildcard $(OBJDIR)/*.d) $(wildcard $(ASANDIR)/*.d)
 
-$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
+$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/lineedit.o $(OBJDIR)/isocline.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
 
+# isocline is vendored, not ours: its own warning set, never -Werror (third_party/isocline/COZY.md)
+$(OBJDIR)/isocline.o: third_party/isocline/src/isocline.c $(wildcard third_party/isocline/src/*.[ch]) third_party/isocline/include/isocline.h | $(OBJDIR)
+	$(CC) -std=$(STD) -O2 -Wall -Wno-unused-function $(ISOCLINE_INC) -c $< -o $@
+
 # Headless test driver: same VM as `cozy`, but reads stdin line by line and
-# echoes each result (no readline), so piping a script in gives one result per
+# echoes each result (no line editor), so piping a script in gives one result per
 # line. Handy for batch/regression testing and ASan runs.
 # Cozy as a library (cozy.h, embed.c): the interpreter's core plus a string-in,
 # numbers-out session API, for C programs that want the language as their
@@ -153,7 +135,7 @@ test: vmtest $(BIN)
 	@bash tests/run_pkgdocs.sh
 	@bash tests/run_ascii_plot.sh
 	@bash tests/run_longline.sh
-	@timeout 30 python3 tests/run_completion.py || true
+	@timeout 300 python3 tests/run_lineedit.py
 	@bash tests/run_svg.sh
 	@bash tests/run_demo.sh
 	@sh tests/run_packeur.sh ./vmtest 2>/dev/null || sh tests/run_packeur.sh ./cozy

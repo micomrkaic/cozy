@@ -1,0 +1,26 @@
+# isocline in Cozy
+
+The line editor of the native REPL (and, from the browser stage on, of the
+WebAssembly one): [isocline](https://github.com/daanx/isocline) by Daan
+Leijen, MIT licence (LICENSE here), vendored at commit 8d6dc1e (April 2026).
+It replaced GNU readline in 0.1.50 so that one editor, compiled into every
+build, behaves the same everywhere.
+
+Built as one translation unit (`src/isocline.c` includes the rest) with
+`-Wno-unused-function` and without `-Werror`: it is not our code.
+
+## Local changes (grep COZY)
+
+- `ic_last_cancelled()`: whether the last `ic_readline` ended with Ctrl-C.
+  Upstream returns an empty string for both Ctrl-C and an empty Enter; the
+  REPL needs the difference (Ctrl-C abandons a multi-line entry, an empty
+  Enter continues it). `src/env.h` (the flag), `src/editline.c` (set on
+  Ctrl-C/Ctrl-G), `src/isocline.c` and `include/isocline.h` (reset and
+  query).
+
+- A line feed (Ctrl-J, `\n`) is Enter when multi-line editing is off, as
+  in readline; upstream ignores it then. Some terminals and pasted text
+  send it, and so do scripts that drive the REPL. `src/editline.c`.
+
+To update: copy upstream's `src`, `include` and `LICENSE` over these, and
+re-apply the changes above (each is marked with a `COZY` comment).
