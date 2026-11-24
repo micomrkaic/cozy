@@ -150,6 +150,7 @@
     "isnan"
     "keep"
     "kron"
+    "ksmooth"
     "lbeta"
     "length"
     "lgamma"

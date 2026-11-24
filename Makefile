@@ -16,8 +16,8 @@ STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
 LDFLAGS ?=
-SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c linalg_tier0.c serve.c
-HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h
+SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c main.c sparse.c kalman.c linalg_tier0.c serve.c
+HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h kalman.h
 BIN      = cozy
 LIBS     = -lm $(LINALG_LIBS) $(OPTIM_LIBS)
 
@@ -104,7 +104,7 @@ ifeq ($(OPTIM),nlopt)
 else
   OPTIM_LIBS =
 endif
-CORE     = lexer arena ast parser value eval chunk compile vm sparse $(LINALG)
+CORE     = lexer arena ast parser value eval chunk compile vm sparse kalman $(LINALG)
 CORE_O   = $(CORE:%=$(OBJDIR)/%.o)
 ASAN_O   = $(CORE:%=$(ASANDIR)/%.o) $(ASANDIR)/vmtest.o
 ASANFLAGS = -std=$(STD) -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
@@ -278,7 +278,7 @@ uninstall:
 # build with:  make wasm EMCC_C23="-Dnullptr=NULL '-Dalignof(x)=_Alignof(x)' -Dstatic_assert=_Static_assert"
 EMCC       ?= emcc
 EMCC_C23   ?=
-WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c linalg_tier0.c
+WASM_SRCS   = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c wasm_api.c sparse.c kalman.c linalg_tier0.c
 WASM_FLAGS  = -sMODULARIZE=1 -sEXPORT_NAME=Cozy -sALLOW_MEMORY_GROWTH=1 \
               -sSUPPORT_LONGJMP=1 -sENVIRONMENT=web -sSINGLE_FILE=1 -sASYNCIFY=1 \
               -sEXPORTED_FUNCTIONS=_cozy_init,_cozy_eval,_cozy_version,_malloc,_free \
@@ -327,7 +327,7 @@ else
   WASM_OPTIM_FLAGS =
   WASM_OPTIM_SRCS  =
 endif
-WASM_TEST_SRCS = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c sparse.c linalg_tier0.c wasm_test_stub.c vmtest.c
+WASM_TEST_SRCS = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c sparse.c kalman.c linalg_tier0.c wasm_test_stub.c vmtest.c
 build/vmtest-wasm.js: $(WASM_TEST_SRCS) $(HDRS) version.h
 	@mkdir -p build
 	$(EMCC) -std=gnu2x -O2 $(EMCC_C23) $(WASM_OPTIM_FLAGS) -sSUPPORT_LONGJMP=1 -sALLOW_MEMORY_GROWTH=1 \

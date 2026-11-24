@@ -1,5 +1,43 @@
 # Cozy changelog
 
+## 0.1.45 — the Kalman smoother, as one banded system
+
+`ksmooth(Y, model[, opts])` smooths a linear Gaussian state-space model by
+solving `J X = h` for the whole state path at once — the simultaneous form
+of the Kalman/RTS smoother, from github.com/micomrkaic/Kalman-Smoother. It
+is the numerical core of a nowcasting app to come; this release is the
+kernel (design entry 31).
+
+### Added
+- **`ksmooth`.** The model is a record `{F, Q, H, R[, a0, P0, c, d]}`; `Y`
+  is series x periods with `NaN` for what is missing. The result has the
+  smoothed path `x` (column 1 is `x_0`), `sd`, the covariance blocks `P`,
+  the cross blocks `P1`, `P2`, ..., the marginal `loglik`, `logdetJ`,
+  `nobs` and the bandwidth `lags`. Options: `cov = false`, and precision
+  weights `wy` (per period, or per series and period on a diagonal `R`)
+  and `wx` (per period).
+- **Measurement lags instead of companion states.** `H = [H0, H1, ...,
+  Hp]` loads `y_t` on `x_t .. x_{t-p}`: a quarterly series that averages a
+  monthly factor is `[1/3, 1/3, 1/3]` on it. The lags widen the band of
+  `J`, not the state, and `Q` keeps no zero variances — a `Q` that is not
+  positive definite is an error that says where the lag belongs.
+- **kalman.c**, the kernel, pure C without the interpreter: banded block
+  Cholesky, triangular solves, and the Takahashi recurrence for the blocks
+  of `J^{-1}` inside the band. Series are folded into state-sized blocks
+  once per missing-data pattern, so the cost is in states, not series:
+  200 series x 360 months with 30% gaps, 4 factors and 2 lags, full
+  covariances, in 10 ms native and 19 ms in WebAssembly.
+- **tests/ref_ksmooth.py**, an independent dense reference (numpy; not run
+  by `make test`): 200 random models agree to 8e-12, the log-likelihood
+  taken from the Gaussian marginal of `y` directly; also checked against
+  the original Python package.
+- Manual: "State space: the Kalman smoother", with a nowcast whose standard
+  error uses the cross blocks.
+
+### Known limitations
+- `Q` must be positive definite, the matrices are constant in time, and
+  dual numbers do not flow through the kernel (KNOWN_LIMITATIONS.md).
+
 ## 0.1.44 — the body of a reduction, inline
 
 The item 0.1.43 left: `r[k = a:b] body` made a function of the body each
