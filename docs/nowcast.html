@@ -331,6 +331,10 @@ function cozyName(raw, idx) {
 /* ================================================================== */
 /* the engine: Cozy in a worker                                       */
 /* ================================================================== */
+/* the bundle the worker loads, with its content hash: a browser or CDN
+   cache can never pair this page with an older engine. Stamped by
+   tools/gen_dsge_page.py whenever docs/cozy.js changes; make test checks it. */
+var COZY_BUNDLE = "cozy.js?v=201afd4d8a9e";
 const Engine = (() => {
   const WORKER = `
     self.window = self;
@@ -338,7 +342,15 @@ const Engine = (() => {
     function out(s) { return s; }
     function boot() {
       Cozy().then(function (m) {
-        M = m; M._cozy_init();
+        M = m;
+        var need = ["_cozy_init", "_cozy_eval", "_cozy_set_matrix", "_cozy_get_matrix", "_cozy_get_dims"];
+        var missing = need.filter(function (f) { return typeof M[f] !== "function"; });
+        if (missing.length) {
+          postMessage({ fatal: "the Cozy engine this browser loaded (cozy.js) is older than this page — it lacks " +
+            missing.join(", ") + ". Reload the page with the cache bypassed (Ctrl+Shift+R, or Cmd+Shift+R on a Mac)." });
+          return;
+        }
+        M._cozy_init();
         postMessage({ ready: true, version: M.UTF8ToString(M._cozy_version()) });
         queue.forEach(handle); queue = [];
       }, function (e) { postMessage({ fatal: String(e) }); });
@@ -368,19 +380,24 @@ const Engine = (() => {
     }
     onmessage = function (e) { handle(e.data); };
   `;
-  let worker = null, nextId = 1, readyResolve, version = "";
+  let worker = null, nextId = 1, readyResolve, readyReject, version = "";
   const pending = new Map();
-  const ready = new Promise(res => { readyResolve = res; });
+  const ready = new Promise((res, rej) => { readyResolve = res; readyReject = rej; });
   function start() {
     let src;
     const inline = document.querySelector("script[data-cozy-bundle]");
     if (inline) src = inline.textContent + "\n" + WORKER + "\nboot();";
-    else src = "importScripts(" + JSON.stringify(new URL("cozy.js", location.href).href) + ");\n" + WORKER + "\nboot();";
+    else src = "importScripts(" + JSON.stringify(new URL(COZY_BUNDLE, location.href).href) + ");\n" + WORKER + "\nboot();";
     worker = new Worker(URL.createObjectURL(new Blob([src], { type: "text/javascript" })));
     worker.onmessage = e => {
       const m = e.data;
       if (m.ready) { version = m.version; readyResolve(); return; }
-      if (m.fatal) { setEngine("engine failed to start", "busy"); return; }
+      if (m.fatal) {
+        setEngine("engine failed to start", "busy");
+        message("datamsg", "err", "The Cozy engine did not start: " + m.fatal);
+        for (const [, p] of pending) p.reject(new Error(m.fatal));
+        pending.clear(); readyReject(new Error(m.fatal)); return;
+      }
       const p = pending.get(m.id); pending.delete(m.id);
       if (!p) return;
       m.error ? p.reject(new Error(m.error)) : p.resolve(m);
