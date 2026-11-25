@@ -64,6 +64,23 @@ current input.
 The interactive shell adds conveniences on top of the language. None of them
 apply to scripts — they are REPL features.
 
+**New to Cozy? Type `tutor`.** Sixteen short lessons — arithmetic and
+`ans`, names, arrays and matrices, linear algebra, functions, pipes, the
+blackboard notation (`sum[k = 1:n]`, `where`, chained comparisons), control
+flow, records and packages, missing data, complex and dual numbers,
+randomness, text and dates and tables, the solvers, finding your way, and
+why the language is built the way it is. Like vimtutor, it runs at the
+ordinary prompt: you type what a step asks, with the real line editor and
+the real error messages, and the tutor checks what you typed and what it
+gave, says so, and moves on. While it runs, `hint` nudges (twice: the
+answer), `skip`, `back`, `again` and `lessons` do what they say, and a bare
+Enter turns a page. `tutor off` leaves; `tutor` carries on where you
+stopped (the place is kept in `~/.cozy_tutor`), `tutor 7` opens lesson 7,
+`tutor restart` starts over. It works in the browser playground too. The
+lessons are a package, `packages/tutor.cz`, and the test suite plays every
+one of them with its answer, so the tutor cannot fall out of step with the
+language.
+
 **Commands** (typed bare, not as function calls):
 
 | Command | Effect |
@@ -133,7 +150,7 @@ shell escape: `!ls -la`.
 
 ```
 cozy> ls("packages")
-["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "dsge.cz"; "finance.cz"; "fred.cz"; "nowcast.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"]
+["astro.cz"; "autodiff.cz"; "demo.cz"; "dist.cz"; "dsge.cz"; "finance.cz"; "fred.cz"; "nowcast.cz"; "optim.cz"; "phys.cz"; "poly.cz"; "rmt.cz"; "scatter.cz"; "sparselin.cz"; "symb.cz"; "ts.cz"; "tutor.cz"]
 cozy> cd("packages");
 cozy> load("dist.cz"); norm.cdf(0, 0, 1)
 0.5
@@ -1606,6 +1623,7 @@ cozy> clear("scatter"); who
 | `manual [doc]` | page rendered documentation: manual, manual book\|packages\|changelog\|lessons\|design\|readme |
 | `pretty on\|off` | aligned multi-line matrix display (default on in the REPL) |
 | `more on\|off` | page long output through $PAGER |
+| `tutor [N \| restart \| off]` | the interactive tutor: lessons at the prompt that check what you type (hint, skip, back, again, lessons while it runs); tutor resumes where you stopped, tutor N opens lesson N |
 
 ### Solvers
 

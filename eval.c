@@ -5233,6 +5233,7 @@ static Value bi_exit(Interp *I, Value *args, uint32_t n)
 static Value bi_manual_stub(Interp *I, Value *args, uint32_t n) { (void)args; (void)n; return bi_repl_hint(I, "manual"); }
 static Value bi_pretty_stub(Interp *I, Value *args, uint32_t n) { (void)args; (void)n; return bi_repl_hint(I, "pretty"); }
 static Value bi_more_stub(Interp *I, Value *args, uint32_t n)   { (void)args; (void)n; return bi_repl_hint(I, "more"); }
+static Value bi_tutor_stub(Interp *I, Value *args, uint32_t n)  { (void)args; (void)n; return bi_repl_hint(I, "tutor"); }
 
 enum WhoKind { W_ALL, W_REC, W_FN, W_VAR };
 
@@ -8945,6 +8946,7 @@ EnvObj *globals_new(void)
     def_builtin(e, "exit",   bi_exit,        0, 1);
     def_builtin(e, "quit",   bi_exit,        0, 1);
     def_builtin(e, "manual", bi_manual_stub, 0, 1);
+    def_builtin(e, "tutor",  bi_tutor_stub,  0, 1);
     def_builtin(e, "pretty", bi_pretty_stub, 0, 1);
     def_builtin(e, "more",   bi_more_stub,   0, 1);
     def_builtin(e, "who",   bi_who,   0, 2);

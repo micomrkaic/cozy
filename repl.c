@@ -249,6 +249,50 @@ static void page_output(const char *buf, size_t sz)
 
 /* If `line` is the command `word` (followed by end or whitespace, not '('),
  * return a pointer to its trimmed argument (empty string if none); else null. */
+/* ------------------------------------------------------------------ */
+/* the tutor (packages/tutor.cz) — the REPL's side. The lessons and their */
+/* checks are Cozy; the REPL starts them ("tutor"), hands every entry to */
+/* the lesson (tutor_after, with the entry's text, value and error), maps */
+/* the tutor's words (hint, skip, back, again, a bare Enter) to it, and   */
+/* keeps the learner's place in ~/.cozy_tutor across sessions.           */
+/* ------------------------------------------------------------------ */
+static bool tutor_active(EnvObj *g)
+{
+    Value v;
+    if (!env_lookup(g, "tutor_on", 8, &v)) return false;
+    bool on = v.kind == VAL_INT && v.as.i > 0;
+    value_release(v);
+    return on;
+}
+
+static void tutor_path(char *buf, size_t n)
+{
+    const char *home = getenv("HOME");
+    snprintf(buf, n, "%s/.cozy_tutor", home ? home : ".");
+}
+
+static long tutor_saved(void)
+{
+    char p[4096]; tutor_path(p, sizeof p);
+    FILE *f = fopen(p, "r");
+    long k = 0;
+    if (f) { if (fscanf(f, "%ld", &k) != 1) k = 0; fclose(f); }
+    return k;
+}
+
+static void tutor_save(EnvObj *g)
+{
+    static long last = -1;
+    Value v;
+    if (!env_lookup(g, "tutor_step", 10, &v)) return;
+    if (v.kind == VAL_INT && v.as.i > 0 && v.as.i != last) {
+        char p[4096]; tutor_path(p, sizeof p);
+        FILE *f = fopen(p, "w");
+        if (f) { fprintf(f, "%lld\n", (long long)v.as.i); fclose(f); last = (long)v.as.i; }
+    }
+    value_release(v);
+}
+
 static const char *match_command(const char *line, const char *word)
 {
     while (*line == ' ' || *line == '\t') line++;
@@ -392,6 +436,27 @@ static void md_render(FILE *in, FILE *o, bool color)
     free(line);
 }
 
+/* evaluate code the REPL writes for itself (the tutor's calls): no echo,
+ * no history, diagnostics as usual */
+static void repl_eval_quiet(Interp *I, EnvObj *globals, Keep *keep, const char *code)
+{
+    char *src = strdup(code);
+    Arena *a = arena_new();
+    Parser p;
+    parser_init(&p, src, a);
+    AstNode *prog = parser_parse(&p);
+    if (p.had_error) {
+        print_diag(src, p.err_tok.line, p.err_tok.col, p.err_msg);
+        arena_free(a); free(src);
+        return;
+    }
+    Value r = vm_eval_program(I, prog, globals, /*echo=*/false);
+    if (I->had_error) print_diag(src, I->cur_line, I->cur_col, I->err);
+    value_release(r);
+    if (I->line_borrows_src) keep_push(keep, a, src);
+    else { arena_free(a); free(src); }
+}
+
 int repl_run(void)
 {
     Interp I;
@@ -415,7 +480,7 @@ int repl_run(void)
     }
     if (le_interactive()) {
         print_banner(out_is_tty() && !getenv("NO_COLOR"));
-        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels  \u00b7  Ctrl-R searches history\n\n", stdout);
+        fputs("  new here? type  tutor  \u00b7  help  lists everything  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels  \u00b7  Ctrl-R searches history\n\n", stdout);
     }
 
     struct sigaction sa; memset(&sa, 0, sizeof sa);
@@ -466,6 +531,41 @@ int repl_run(void)
                 le_history_add(line);
                 free(line);
                 continue;
+            }
+            if ((arg = match_command(q, "tutor"))) {
+                /* tutor | tutor N (lesson N) | tutor restart | tutor off */
+                char code[256];
+                bool ok = true;
+                if (!strcmp(arg, "off") || !strcmp(arg, "quit") || !strcmp(arg, "stop")) {
+                    if (tutor_active(globals)) snprintf(code, sizeof code, "tutor_stop()");
+                    else { fputs("tutor: not running (type tutor to start)\n", stdout); ok = false; }
+                } else if (!strcmp(arg, "restart")) snprintf(code, sizeof code, "load(\"tutor\"); tutor_start(1)");
+                else if (*arg == '\0') snprintf(code, sizeof code, "load(\"tutor\"); tutor_start(%ld)", tutor_saved() > 0 ? tutor_saved() : 1L);
+                else if (strspn(arg, "0123456789") == strlen(arg) && strlen(arg) < 6) snprintf(code, sizeof code, "load(\"tutor\"); tutor_lesson(%s, %ld)", arg, tutor_saved());
+                else { fputs("usage: tutor | tutor <lesson number> | tutor restart | tutor off\n", stderr); ok = false; }
+                le_history_add(line);
+                free(line);
+                if (ok) { repl_eval_quiet(&I, globals, &keep, code); tutor_save(globals); }
+                continue;
+            }
+            if (tutor_active(globals)) {
+                /* the tutor's own words, only while it runs */
+                static const char *words[] = { "hint", "skip", "back", "again", "lessons" };
+                for (size_t w = 0; w < sizeof words / sizeof *words; w++) {
+                    size_t wl = strlen(words[w]);
+                    const char *e = q + wl;
+                    while (*e == ' ' || *e == '\t') e++;
+                    if (!strncmp(q, words[w], wl) && *e == '\0') {
+                        char code[64];
+                        snprintf(code, sizeof code, "tutor_cmd(\"%s\")", words[w]);
+                        free(line);
+                        repl_eval_quiet(&I, globals, &keep, code);
+                        tutor_save(globals);
+                        line = nullptr;
+                        break;
+                    }
+                }
+                if (!line) continue;
             }
             if ((arg = match_command(q, "more"))) {
                 if (!strcmp(arg, "on") || !strcmp(arg, "1"))       g_more = true;
@@ -570,6 +670,11 @@ int repl_run(void)
                 value_release(dcv);
                 free(acc);
                 acc = strdup("next"); acclen = 4;
+            } else if (tutor_active(globals)) {      /* the tutor: Enter turns a page */
+                free(acc); acc = nullptr; acclen = 0; cont = false;
+                repl_eval_quiet(&I, globals, &keep, "tutor_cmd(\"enter\")");
+                tutor_save(globals);
+                continue;
             } else { free(acc); acc = nullptr; acclen = 0; cont = false; continue; }
         }
 
@@ -606,6 +711,16 @@ int repl_run(void)
                                                     the same newline SIGINT gives natively */
         else if (I.had_error)
             print_diag(acc, I.cur_line, I.cur_col, I.err);
+        /* the tutor sees the entry: its text, its value, its error */
+        bool tutor_after = !synthetic && tutor_active(globals);
+        if (tutor_after) {
+            Value vs = val_string(acc, (uint32_t)strlen(acc));
+            Value ve = val_string(I.had_error ? I.err : "", I.had_error ? (uint32_t)strlen(I.err) : 0);
+            env_define(globals, "tutor_src", 9, vs);
+            env_define(globals, "tutor_val", 9, r);
+            env_define(globals, "tutor_err", 9, ve);
+            value_release(vs); value_release(ve);
+        }
         value_release(r);
 
         if (paging) {
@@ -619,6 +734,11 @@ int repl_run(void)
             keep_push(&keep, a, acc);
         else { arena_free(a); free(acc); }
         acc = nullptr; acclen = 0; cont = false;
+        if (tutor_after) {
+            fflush(stdout); fflush(stderr);
+            repl_eval_quiet(&I, globals, &keep, "tutor_after()");
+            tutor_save(globals);
+        }
     }
 
     /* the history file is kept current after each line (isocline) */

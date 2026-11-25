@@ -10,6 +10,8 @@ all), compiled to WebAssembly and run on xterm.js, with the books built in.
 `cozy --workbench` opens the same page on the native engine.
 **[DSGE demos](https://micomrkaic.github.io/cozy/dsge.html)** — three macro
 models solved live in the page by the `dsge` package.
+**New to Cozy?** Start it and type `tutor`: sixteen short lessons at the
+prompt, in the manner of vimtutor, that check what you type as you go.
 **[Nowcast](https://micomrkaic.github.io/cozy/nowcast.html)** — drop in a
 spreadsheet of daily, weekly and monthly indicators and quarterly GDP and get nowcasts with
 standard errors and the news behind each data release, from the `nowcast`

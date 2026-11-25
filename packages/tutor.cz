@@ -1,0 +1,336 @@
+% tutor.cz — the Cozy tutor: learn the language at its own prompt.
+%
+%   tutor            start, or carry on where you stopped (kept in ~/.cozy_tutor)
+%   tutor 6          go to lesson 6          tutor restart   from the top
+%   tutor off        leave (your place is kept)
+%
+% Like vimtutor: you work at the ordinary prompt, with the real line editor,
+% history, completion and error messages; the tutor reads what you typed and
+% what it gave, says so, and moves on. While it runs, five words are its own:
+% hint (a nudge; twice: the answer), skip, back, again, lessons — and a bare
+% Enter turns a page. The REPL hands the tutor each entry (tutor_after, with
+% tutor_src, tutor_val and tutor_err) and saves tutor_step; the lessons and
+% their checks are below, in Cozy. tutor_solutions() prints the answer to
+% every step, one per line: tests/run_tutor.py plays the whole tutor with them.
+%
+% Helpers are prefixed tu_; keep() must spare them.
+
+let tutor_on = 0
+let tutor_step = 0
+let tutor_src = ""
+let tutor_val = null
+let tutor_err = ""
+let tu_S = {}
+let tu_n = 0
+let tu_titles = {}
+let tu_hints = 0
+
+% internal: a page to read (Enter turns it)
+let tu_page = fn lesson, text -> (
+  tu_n = tu_n + 1;
+  tu_S = setfield(tu_S, "s" + str(tu_n), {lesson = lesson, kind = "page", text = text, sol = "", hint = "", ok = "", check = 0});
+  null
+)
+
+% internal: a step to do — text, the answer, its check fn(src, val, err), a hint, and what to say when it is right
+let tu_do = fn lesson, text, sol, check, hint, ok = "" -> (
+  tu_n = tu_n + 1;
+  tu_S = setfield(tu_S, "s" + str(tu_n), {lesson = lesson, kind = "do", text = text, sol = sol, hint = hint, ok = ok, check = check});
+  null
+)
+
+% internal: step k
+let tu_get = fn k -> getfield(tu_S, "s" + str(k))
+
+% internal: checks — the value shown is x (compared as displayed, so as you see it)
+let tu_eq = fn x -> fn s, v, e -> (e == "") && (str(v) == str(x))
+
+% internal: the value is x, and the entry used pat
+let tu_eqs = fn x, pat -> fn s, v, e -> (e == "") && (str(v) == str(x)) && contains(s, pat)
+
+% internal: the value is within tol of x
+let tu_near = fn x, tol -> fn s, v, e -> (e == "") && (str(v) != "null") && !startswith(str(v), "\"") && !startswith(str(v), "{") && (abs(v - x) <= tol)
+
+% internal: name exists and shows as x
+let tu_def = fn name, x -> fn s, v, e -> (e == "") && (any(names("vars") == name) || any(names("funcs") == name)) && (str(eval(name)) == str(x))
+
+% internal: name exists and is a function
+let tu_fn = fn name -> fn s, v, e -> (e == "") && (any(names("vars") == name) || any(names("funcs") == name)) && startswith(str(eval(name)), "<fn")
+
+% internal: any entry that ran, using pat
+let tu_has = fn pat -> fn s, v, e -> (e == "") && contains(s, pat)
+
+% internal: an error whose message says pat
+let tu_err = fn pat -> fn s, v, e -> contains(e, pat)
+
+% internal: print one line of text, indented, wrapped at 76 columns (its own
+% leading spaces kept, and continued under them)
+let tu_wrap = fn line -> (
+  let words = strsplit(line, " ");
+  let ind = 0;
+  while (ind < numel(words)) && (words[ind + 1] == "") do ind = ind + 1 end;
+  let pad = "  "; for k = 1 : ind do pad = pad + " " end;
+  let cur = pad; let fresh = true;
+  for k = ind + 1 : numel(words) do (
+    let w = words[k];
+    if (!fresh) && (length(cur) + 1 + length(w) > 76) then (print("{}", cur); cur = pad + (if ind > 0 then "  " else "" end) + w)
+    elseif fresh then (cur = cur + w; fresh = false)
+    else (cur = cur + " " + w) end
+  ) end;
+  print("{}", cur);
+  null
+)
+
+% internal: print a block of text. Lines that continue a sentence are joined
+% and wrapped as one paragraph; a blank line ends a paragraph, a line that
+% starts with spaces (a bullet, code) stands alone, and what follows a triple
+% space is code to type, so it goes on a line of its own, unwrapped
+let tu_say = fn t -> (
+  let lines = strsplit(t, "\n");
+  let para = "";
+  let flush = fn p -> (
+    if p != "" then (
+      let parts = strsplit(p, "   ");
+      let rest = if numel(parts) > 1 then trim(strjoin(parts[2 : numel(parts)], "   ")) else "" end;
+      if (numel(parts) > 1) && (trim(parts[1]) != "") && (rest != "") then (tu_wrap(parts[1]); print("{}", "        " + rest))
+      else tu_wrap(p) end
+    ) end;
+    null
+  );
+  for k = 1 : numel(lines) do (
+    let l = lines[k];
+    if l == "" then (flush(para); para = ""; print(""))
+    elseif startswith(l, " ") then (flush(para); para = ""; flush(l))
+    elseif para == "" then (para = l)
+    elseif contains(para, "   ") then (flush(para); para = l)
+    else (para = para + " " + l) end
+  ) end;
+  flush(para);
+  null
+)
+
+% internal: show step k (its lesson's heading first, when it opens one)
+let tu_show = fn k -> (
+  let st = tu_get(k);
+  let first = (k == 1) || (tu_get(k - 1).lesson != st.lesson);
+  let inl = 0; let at = 0;
+  for j = 1 : tu_n do (if tu_get(j).lesson == st.lesson then (inl = inl + 1; if j <= k then (at = at + 1) end) end) end;
+  print("");
+  if first then (
+    print("{}", "  ━━ Lesson " + str(st.lesson) + " · " + getfield(tu_titles, "l" + str(st.lesson)) + " ━━");
+    print("")
+  ) end;
+  tu_say(st.text);
+  if st.kind == "page" then print("{}", "      [ Enter ]" + "   (" + str(at) + "/" + str(inl) + ")")
+  else print("{}", "      ↳ your turn" + "   (" + str(at) + "/" + str(inl) + " · hint, skip, back, again)") end;
+  null
+)
+
+% internal: on to step k (past the last: the end)
+let tu_go = fn k -> (
+  tu_hints = 0;
+  if k > tu_n then (
+    tutor_step = tu_n + 1; tutor_on = 0;
+    print("");
+    tu_say("━━ That is the tutor. ━━\n\nYou have used every part of the language that makes Cozy Cozy. Next: manual\n(the whole reference, in a pager), manual book (two hundred worked problems), demo\n(a guided tour), and the packages: load(\"ts\"), load(\"dsge\"), load(\"nowcast\").\ntutor restart goes round again. Happy computing.");
+    null
+  ) else (
+    tutor_step = max(k, 1);
+    tu_show(tutor_step)
+  ) end
+)
+
+% tutor_start(k): run the tutor from step k (the REPL's tutor command calls it)
+% e.g. tutor_start   % the REPL's `tutor` command; not for direct use
+let tutor_start = fn k = 1 -> (
+  if k > tu_n then (
+    tu_say("You finished the tutor. tutor restart goes round again; tutor N opens lesson N.");
+    null
+  ) else (
+    tutor_on = 1;
+    print("");
+    if k <= 1 then tu_say("Welcome to the Cozy tutor. It runs at the normal prompt: type what a step asks,\npress Enter, and it tells you how it went. hint helps, skip moves on, back goes\nback, again repeats, lessons lists them, and tutor off leaves — your place is kept.")
+    else tu_say("Welcome back: lesson " + str(tu_get(k).lesson) + ". (tutor restart starts over; lessons lists them all.)") end;
+    tu_go(k)
+  ) end
+)
+
+% tutor_lesson(n, here): go to the first step of lesson n (or stay at step here, the saved place, if there is no lesson n)
+% e.g. tutor_lesson   % the REPL's `tutor N`
+let tutor_lesson = fn n, here = 0 -> (
+  let k = 0;
+  for j = 1 : tu_n do (if (k == 0) && (tu_get(j).lesson == n) then (k = j) end) end;
+  if k == 0 then (
+    tu_say("There is no lesson " + str(n) + " — the lessons are 1 to " + str(tu_get(tu_n).lesson) + ".");
+    if (here > 0) && (here <= tu_n) then (tutor_on = 1; tutor_step = here) end;
+    null
+  ) else (tutor_on = 1; tu_go(k)) end
+)
+
+% tutor_stop(): leave the tutor (the place is kept)
+% e.g. tutor_stop   % the REPL's `tutor off`
+let tutor_stop = fn -> (
+  tutor_on = 0;
+  tu_say("Tutor paused at lesson " + str(tu_get(tutor_step).lesson) + ". Type tutor to carry on.");
+  null
+)
+
+% tutor_cmd(w): the tutor's words — enter, hint, skip, back, again, lessons
+% e.g. tutor_cmd   % the REPL's hint, skip, back, again, lessons and Enter
+let tutor_cmd = fn w -> (
+  let st = tu_get(tutor_step);
+  if w == "enter" then (
+    if st.kind == "page" then tu_go(tutor_step + 1)
+    else tu_say("      (your turn — type the expression above; hint, skip or again)") end
+  ) elseif w == "hint" then (
+    tu_hints = tu_hints + 1;
+    if st.kind == "page" then tu_say("Nothing to do here: press Enter.")
+    elseif (tu_hints == 1) && (st.hint != "") && (st.hint != st.sol) then tu_say("hint: " + st.hint + " (hint again shows the answer)")
+    elseif tu_hints == 1 then tu_say("hint: type the expression shown under the step exactly as it is: spaces don't matter, the symbols do. Then change it and see what happens. (hint again shows the answer)")
+    else tu_say("the answer:   " + st.sol) end
+  ) elseif w == "skip" then tu_go(tutor_step + 1)
+  elseif w == "back" then tu_go(max(tutor_step - 1, 1))
+  elseif w == "again" then tu_show(tutor_step)
+  elseif w == "lessons" then (
+    let n = numel(fields(tu_titles));
+    for l = 1 : n do print("{}", (if l < 10 then "     " else "    " end) + str(l) + "  " + getfield(tu_titles, "l" + str(l)) + (if l == st.lesson then "   ← you are here" else "" end)) end;
+    tu_say("tutor N opens lesson N.")
+  ) end;
+  null
+)
+
+% tutor_after(): the REPL calls this after every entry while the tutor runs
+% e.g. tutor_after   % the REPL's hook
+let tutor_after = fn -> (
+  let st = tu_get(tutor_step);
+  if st.kind == "page" then (
+    if tutor_err == "" then tu_say("      (try anything you like — Enter when you are ready to go on)") end
+  ) else (
+    let fnc = st.check;
+    if fnc(tutor_src, tutor_val, tutor_err) then (
+      tu_say("✓ " + (if st.ok == "" then "Right." else st.ok end));
+      tu_go(tutor_step + 1)
+    ) elseif tutor_err != "" then tu_say("✗ That raised an error — the message says what went wrong. Try again, or hint.")
+    else tu_say("✗ Not quite: that ran, but it is not what the step asks. Try again, or hint.") end
+  ) end;
+  null
+)
+
+% tutor_solutions(): the answer to every step, one per line (an empty line: Enter)
+% e.g. tutor_solutions   % prints them; tests/run_tutor.py plays the tutor with them
+let tutor_solutions = fn -> (for k = 1 : tu_n do print("{}", tu_get(k).sol) end; null)
+
+% ---------------------------------------------------------------- the lessons
+
+let tu_titles = {l1 = "Arithmetic, and the answer on the screen", l2 = "Names", l3 = "Arrays and matrices",
+  l4 = "Linear algebra", l5 = "Functions", l6 = "Pipes: data flowing left to right",
+  l7 = "Mathematics as it is written", l8 = "Control flow made of expressions", l9 = "Records and packages",
+  l10 = "Missing data", l11 = "Numbers beyond the reals", l12 = "Randomness and statistics",
+  l13 = "Text, dates and data files", l14 = "Solvers", l15 = "Finding your way", l16 = "Why Cozy"}
+
+tu_page(1, "Cozy is a calculator that grew into a language for numbers: matrices, statistics,\ndata, models. Everything you type is an expression and is evaluated at once — so\nyou learn it by typing. Each step says what to type; you can also try anything\nelse on the way.")
+tu_do(1, "Type this, and press Enter:   2 + 3 * 4", "2 + 3 * 4", tu_eq(14), "type it exactly as shown", "Multiplication binds tighter than addition, as on paper.")
+tu_do(1, "Parentheses group:   (2 + 3) * 4", "(2 + 3) * 4", tu_eq(20), "(2 + 3) * 4")
+tu_do(1, "The last value on the screen is called ans. Type   ans / 2", "ans / 2", tu_eqs(10, "ans"), "ans / 2 — ans is the 20 you just saw", "ans is whatever you just saw: chains of steps need no names.")
+tu_do(1, "Powers are ^ :   2 ^ 10", "2 ^ 10", tu_eq(1024), "2 ^ 10")
+tu_do(1, "-2 ^ 2 is -4: the minus applies after the power, as in mathematics.\nType   (-2) ^ 2", "(-2) ^ 2", tu_eq(4), "put the -2 in parentheses", "Whole numbers stay exact; 7 / 2 is 3.5, not 3.")
+
+tu_page(2, "let x = 3 binds a name. A bare x = 4 changes a name that exists — and only one\nthat exists. That one rule catches a whole family of bugs, as you will see.")
+tu_do(2, "Type   let rate = 0.05", "let rate = 0.05", tu_def("rate", 0.05), "let rate = 0.05")
+tu_do(2, "Change it, without let:   rate = 0.04", "rate = 0.04", fn s, v, e -> (e == "") && !startswith(trim(s), "let") && (str(eval("rate")) == "0.04"), "rate = 0.04")
+tu_do(2, "Now a typo, on purpose:   rte = 1", "rte = 1", tu_err("undefined name"), "type rte = 1 (with the typo)", "That error is a feature. Where assignment creates names, rte = 1 runs\n  silently and your model goes on using the old rate. Cozy stops and says so.")
+tu_do(2, "A ; at the end keeps a statement quiet:   let years = 10;", "let years = 10;", fn s, v, e -> (e == "") && contains(s, ";") && (str(eval("years")) == "10"), "let years = 10;", "Nothing printed, but years is there.")
+tu_do(2, "Use them:   1000 * (1 + rate) ^ years", "1000 * (1 + rate) ^ years", tu_eq(1000 * 1.04 ^ 10), "1000 * (1 + rate) ^ years", "Compound interest at 4% for ten years.")
+
+tu_page(3, "Numbers come in arrays. [1, 2, 3] is a row, [1; 2; 3] a column, [1, 2; 3, 4] a\nmatrix: commas separate columns, semicolons rows. Indexes start at 1, the way\nmathematics counts, and end means the last.")
+tu_do(3, "let v = [3, 1, 4, 1, 5]", "let v = [3, 1, 4, 1, 5]", tu_def("v", [3, 1, 4, 1, 5]), "let v = [3, 1, 4, 1, 5]")
+tu_do(3, "The last element:   v[end]", "v[end]", tu_eqs(5, "end"), "v[end]")
+tu_do(3, "Ranges: 1:5, or 0:0.25:1 with a step. Add up a hundred numbers:   sum(1:100)", "sum(1:100)", tu_eq(5050), "sum(1:100)", "Gauss did it in his head; you have a range.")
+tu_do(3, "The dot operators work element by element:   v .^ 2", "v .^ 2", tu_eq([9, 1, 16, 1, 25]), "v .^ 2 — a dot before the ^")
+tu_do(3, "A comparison gives a mask, and a mask selects:   v[v > 2]", "v[v > 2]", tu_eq([3, 4, 5]), "v[v > 2]", "No loop: say which elements, get them.")
+tu_do(3, "A matrix:   let A = [2, 1; 1, 3]", "let A = [2, 1; 1, 3]", tu_def("A", [2, 1; 1, 3]), "let A = [2, 1; 1, 3]")
+tu_do(3, "* is the matrix product:   A * A", "A * A", tu_eq([5, 5; 5, 10]), "A * A")
+tu_do(3, "... and .* multiplies element by element:   A .* A", "A .* A", tu_eq([4, 1; 1, 9]), "A .* A", "The dot always means 'element by element': .* ./ .^ — the rest is linear algebra.")
+
+tu_page(4, "Linear algebra is built in — on LAPACK when your build has it (buildinfo says\nwhich) — and written the way the textbook writes it.")
+tu_do(4, "Solve A x = b with a backslash:   A \\ [1; 2]", "A \\ [1; 2]", tu_eq([0.2; 0.6]), "A \\ [1; 2] — a backslash, then the column b", "Backslash solves the system; it never forms the inverse: faster, and more accurate.")
+tu_do(4, "' transposes. Is A symmetric?   A == A'", "A == A'", tu_eq([2, 1; 1, 3] == [2, 1; 1, 3]'), "A == A' — an apostrophe after the A")
+tu_do(4, "Eigenvalues:   eig(A).values", "eig(A).values", tu_eq(eig([2, 1; 1, 3]).values), "eig(A).values — eig returns a record of values and vectors")
+tu_do(4, "det(A)", "det(A)", tu_eq(5), "det(A)")
+
+tu_page(5, "Functions are values: fn x -> expression. Bind them to names, pass them to other\nfunctions, return them from functions.")
+tu_do(5, "let sq = fn x -> x ^ 2", "let sq = fn x -> x ^ 2", tu_fn("sq"), "let sq = fn x -> x ^ 2")
+tu_do(5, "sq(12)", "sq(12)", tu_eq(144), "sq(12)")
+tu_do(5, "Pass a function to another:   map(sq, [1, 2, 3])", "map(sq, [1, 2, 3])", tu_eq([1, 4, 9]), "map(sq, [1, 2, 3])")
+tu_do(5, "Trailing parameters can have defaults:   let grow = fn x, r = 0.05 -> x * (1 + r)", "let grow = fn x, r = 0.05 -> x * (1 + r)", tu_fn("grow"), "let grow = fn x, r = 0.05 -> x * (1 + r)")
+tu_do(5, "grow(100)", "grow(100)", tu_eq(105), "grow(100)")
+tu_do(5, "grow(100, 0.1)", "grow(100, 0.1)", tu_eq(110), "grow(100, 0.1)", "The default stands in when you leave an argument out.")
+tu_do(5, "An expression with _ in parentheses is a function (a section):   (_ * 2)(21)", "(_ * 2)(21)", tu_eqs(42, "_"), "(_ * 2)(21)", "(_ * 2) is fn x -> x * 2, written as fast as you think it.")
+tu_do(5, "Functions that make functions:   let adder = fn a -> fn b -> a + b; adder(2)(5)", "let adder = fn a -> fn b -> a + b; adder(2)(5)", tu_eq(7), "let adder = fn a -> fn b -> a + b; adder(2)(5)", "adder(2) remembers its a: a closure.")
+
+tu_page(6, "A long calculation reads best as a pipeline: start with the data, then say what\nhappens to it, left to right. |> passes the whole value on; ~> passes each\nelement. They are Cozy's signature.")
+tu_do(6, "[1, 4, 9] |> sum |> sqrt", "[1, 4, 9] |> sum |> sqrt", tu_eqs(sqrt(14), "|>"), "[1, 4, 9] |> sum |> sqrt")
+tu_do(6, "@ is the value flowing in:   10 |> @ * 2 + 1", "10 |> @ * 2 + 1", tu_eqs(21, "@"), "10 |> @ * 2 + 1")
+tu_do(6, "~> goes element by element:   [1, 4, 9] ~> sqrt", "[1, 4, 9] ~> sqrt", tu_eqs([1, 2, 3], "~>"), "[1, 4, 9] ~> sqrt — a tilde, then >")
+tu_do(6, "|>> is |> that shows what passes — debugging without taking the pipeline apart:\n  [3, 1, 2] |>> sort |> sum", "[3, 1, 2] |>> sort |> sum", tu_eqs(6, "|>>"), "[3, 1, 2] |>> sort |> sum")
+tu_do(6, "Fan out into a record of results:   [2, 4, 9] |> {n = length, mu = mean, top = max}", "[2, 4, 9] |> {n = length, mu = mean, top = max}", tu_eqs({n = 3, mu = 5, top = 9}, "{"), "[2, 4, 9] |> {n = length, mu = mean, top = max}", "A summary table, composed from syntax.")
+
+tu_page(7, "Cozy borrows notation from the blackboard, so a formula reads like the paper it\ncame from — and a paper's formula can be checked by typing it.")
+tu_do(7, "Sigma notation:   sum[k = 1:100] k", "sum[k = 1:100] k", tu_eqs(5050, "sum["), "sum[k = 1:100] k")
+tu_do(7, "The Basel problem:   sum[k = 1:1000] 1 / k ^ 2", "sum[k = 1:1000] 1 / k ^ 2", tu_eqs(sum[k = 1:1000] 1 / k ^ 2, "sum["), "sum[k = 1:1000] 1 / k ^ 2", "π²/6 = 1.64493: the sum creeps up to it. prod, max, mean work the same way.")
+tu_do(7, "Name the constants after the formula, with where:   a * x + b where a = 2, b = 1, x = 10", "a * x + b where a = 2, b = 1, x = 10", tu_eqs(21, "where"), "a * x + b where a = 2, b = 1, x = 10", "where names never leak: a, b and x are not left behind.")
+tu_do(7, "Comparisons chain the way mathematics writes them:   let z = [-1, 0.5, 2]; 0 < z < 1", "let z = [-1, 0.5, 2]; 0 < z < 1", tu_eq([false, true, false]), "let z = [-1, 0.5, 2]; 0 < z < 1")
+tu_do(7, "So a count is one sum:   sum(0 < z < 1)", "sum(0 < z < 1)", tu_eq(1), "sum(0 < z < 1)")
+
+tu_page(8, "if, for and while look familiar. The difference: if is an expression, with a\nvalue, so it goes anywhere a value goes.")
+tu_do(8, "if 3 > 2 then \"yes\" else \"no\" end", "if 3 > 2 then \"yes\" else \"no\" end", tu_eq("yes"), "if 3 > 2 then \"yes\" else \"no\" end")
+tu_do(8, "A loop:   let s = 0; for i = 1:10 do s = s + i end; s", "let s = 0; for i = 1:10 do s = s + i end; s", tu_eq(55), "let s = 0; for i = 1:10 do s = s + i end; s", "s = s + i (no let) updates the s outside the loop.")
+tu_do(8, "A block runs statements and gives the last value:   (let a = 3; let b = 4; sqrt(a ^ 2 + b ^ 2))", "(let a = 3; let b = 4; sqrt(a ^ 2 + b ^ 2))", tu_eq(5), "(let a = 3; let b = 4; sqrt(a ^ 2 + b ^ 2))", "The block's a and b stay inside it — the shape of a function's body.")
+tu_do(8, "A condition must be true or false — a number is not one:   if 1 then 2 end", "if 1 then 2 end", tu_err("must be Bool"), "type if 1 then 2 end, and read the error", "Another bug class gone: if count then ... cannot mean 'if count is not zero' by accident.")
+
+tu_page(9, "A record holds named fields: {name = \"boron\", Z = 5}. Records are also how the\npackages offer their functions: norm.cdf, dsge.solve, nowcast.fit.")
+tu_do(9, "let p = {name = \"boron\", Z = 5}", "let p = {name = \"boron\", Z = 5}", tu_def("p", {name = "boron", Z = 5}), "let p = {name = \"boron\", Z = 5}")
+tu_do(9, "p.Z * 2", "p.Z * 2", tu_eq(10), "p.Z * 2")
+tu_do(9, "fields(p)", "fields(p)", tu_eq(fields({name = "boron", Z = 5})), "fields(p)")
+tu_do(9, "Load a package:   load(\"dist\")", "load(\"dist\")", tu_has("load"), "load(\"dist\")", "dist is written in Cozy; packages/ holds a dozen more.")
+tu_do(9, "norm is a record of functions:   norm.cdf(1.96, 0, 1)", "norm.cdf(1.96, 0, 1)", tu_eq(0.975002), "norm.cdf(1.96, 0, 1)")
+tu_do(9, "help tells you about anything — a builtin, a package, your own function:   help(norm)", "help(norm)", tu_has("help"), "help(norm)", "Quotes are optional: help(norm) and help(\"norm\") are the same.")
+
+tu_page(10, "Real data have holes. NaN marks a missing value (0/0 makes one), and the\nfunctions say what they do with it rather than guessing.")
+tu_do(10, "let y = [1.5, 0/0, 2.5]", "let y = [1.5, 0/0, 2.5]", tu_def("y", [1.5, 0 / 0, 2.5]), "let y = [1.5, 0/0, 2.5]")
+tu_do(10, "mean(y)", "mean(y)", tu_eq(0 / 0), "mean(y)", "One missing value makes the mean missing: a gap is not a zero.")
+tu_do(10, "Say what you want:   mean(y, \"omit\")", "mean(y, \"omit\")", tu_eq(2), "mean(y, \"omit\")")
+tu_do(10, "Where are they?   isnan(y)", "isnan(y)", tu_eq([false, true, false]), "isnan(y)", "The nowcast package handles NaN everywhere: ragged edges, gaps, late starts.")
+
+tu_page(11, "Complex numbers and dual numbers are values like any other. A dual carries a\nderivative through every operation: exact derivatives of any formula you can\nwrite, with no step size and no approximation.")
+tu_do(11, "sqrt(-4)", "sqrt(-4)", tu_eq(sqrt(-4)), "sqrt(-4)")
+tu_do(11, "(1 + 2i) * (3 - 1i)", "(1 + 2i) * (3 - 1i)", tu_eq((1 + 2i) * (3 - 1i)), "(1 + 2i) * (3 - 1i)")
+tu_do(11, "let f = fn x -> x ^ 3 + sin(x)", "let f = fn x -> x ^ 3 + sin(x)", tu_fn("f"), "let f = fn x -> x ^ 3 + sin(x)")
+tu_do(11, "dual(2, 1) is x = 2 carrying dx = 1. Type   f(dual(2, 1))", "f(dual(2, 1))", tu_eq((fn x -> x ^ 3 + sin(x))(dual(2, 1))), "f(dual(2, 1))", "The eps part is f'(2) = 3·2² + cos 2 — computed exactly, alongside the value.")
+tu_do(11, "Read the derivative off:   dualeps(f(dual(2, 1)))", "dualeps(f(dual(2, 1)))", tu_eq(12 + cos(2)), "dualeps(f(dual(2, 1)))", "load(\"autodiff\") turns this into grad and hess for whole models.")
+
+tu_page(12, "rng(seed) makes random numbers reproducible: the same seed gives the same draws,\non every machine — results you can publish and someone else can rerun.")
+tu_do(12, "rng(42); let x = randn(1, 10000);", "rng(42); let x = randn(1, 10000);", fn s, v, e -> (e == "") && (any(names("vars") == "x")) && (numel(eval("x")) == 10000), "rng(42); let x = randn(1, 10000);")
+tu_do(12, "mean(x)", "mean(x)", tu_near(0, 0.05), "mean(x)", "Close to 0, as a standard normal should be.")
+tu_do(12, "std(x)", "std(x)", tu_near(1, 0.05), "std(x)")
+tu_do(12, "The share within ±1.96:   sum(-1.96 < x < 1.96) / 10000", "sum(-1.96 < x < 1.96) / 10000", tu_near(0.95, 0.02), "sum(-1.96 < x < 1.96) / 10000", "A chained comparison, a mask, a sum: 95%, as the textbook says.")
+
+tu_page(13, "Strings, dates and tables are values too, so data work stays in the language.")
+tu_do(13, "Format a number:   fmt(\"{:.2f} percent\", 12.345)", "fmt(\"{:.2f} percent\", 12.345)", tu_eq("12.35 percent"), "fmt(\"{:.2f} percent\", 12.345)", "{} is a hole; {:.2f} a number with two decimals. print takes the same template.")
+tu_do(13, "Dates have arithmetic:   date(2025, 3, 31) + 1", "date(2025, 3, 31) + 1", tu_eq(date(2025, 4, 1)), "date(2025, 3, 31) + 1", "The day after the 31st of March: the calendar knows.")
+tu_do(13, "Subtract dates for days:   date(2025, 12, 25) - date(2025, 1, 1)", "date(2025, 12, 25) - date(2025, 1, 1)", tu_eq(358), "date(2025, 12, 25) - date(2025, 1, 1)")
+tu_do(13, "Read a table:   let t = readtable(\"data/gdpq.csv\"); fields(t)", "let t = readtable(\"data/gdpq.csv\"); fields(t)", tu_eq(["date"; "gdp"]), "let t = readtable(\"data/gdpq.csv\"); fields(t)", "Each column is a field, its dates are dates, and an empty cell is NaN.")
+tu_do(13, "The column:   mean(t.gdp, \"omit\")", "mean(t.gdp, \"omit\")", tu_near(105.854545, 0.0001), "mean(t.gdp, \"omit\")")
+
+tu_page(14, "The solvers take functions, so the problem is written as mathematics and handed\nover: a root, a minimum, an integral.")
+tu_do(14, "A root of x² - 2 between 0 and 2:   fzero(fn x -> x ^ 2 - 2, 0, 2)", "fzero(fn x -> x ^ 2 - 2, 0, 2)", tu_near(sqrt(2), 1e-6), "fzero(fn x -> x ^ 2 - 2, 0, 2)")
+tu_do(14, "A minimum:   fminbnd(fn x -> (x - 1) ^ 2, -5, 5).x", "fminbnd(fn x -> (x - 1) ^ 2, -5, 5).x", tu_near(1, 1e-4), "fminbnd(fn x -> (x - 1) ^ 2, -5, 5).x")
+tu_do(14, "An integral:   integral(fn x -> exp(-x ^ 2), -5, 5)", "integral(fn x -> exp(-x ^ 2), -5, 5)", tu_near(sqrt(pi), 1e-6), "integral(fn x -> exp(-x ^ 2), -5, 5)", "√π, the Gaussian integral. nlmin (with NLopt) and the optim package go further.")
+
+tu_page(15, "Everything you defined is in the workspace. A few commands keep you oriented.")
+tu_do(15, "What have you made?   who", "who", tu_has("who"), "who")
+tu_do(15, "Ask about a builtin:   help(fzero)", "help(fzero)", tu_has("help"), "help(fzero)", "Every builtin has a signature, a description and an example that the test suite runs.")
+tu_page(15, "Three more, for after the tutor: manual pages the whole reference (q leaves it),\nmanual book is a book of two hundred worked problems, and demo is a guided tour.\nThe up arrow recalls history, Ctrl-R searches it, Tab completes names and file\npaths, and !cmd runs a shell command.")
+
+tu_page(16, "Why Cozy, in five lines:\n\n  · it reads like the mathematics: sum[k = 1:n], where, 0 < x < 1, A \\ b;\n  · it says no early: typos, non-Bool conditions and shape mismatches are errors;\n  · data flow left to right in pipelines you can watch (|>>);\n  · numbers go beyond the reals: complex, and duals for exact derivatives;\n  · it is small: one binary, no dependencies, the same in the browser and the terminal.")
+tu_page(16, "And it is a working tool: the packages solve DSGE models, filter time series,\nprice bonds and nowcast GDP from FRED data — all written in Cozy, all readable,\nall yours to change.")
