@@ -1,0 +1,13 @@
+# help(name) is help("name") (0.1.56): a bare name inside help(...) is looked
+# up, not evaluated — a package, an undefined name, a zero-argument function
+# (not run) — while a local variable or parameter is still handed as a value.
+help(nosuch)
+=>   no name or loaded package called 'nosuch' (who lists both)
+help(dist)
+=>   'dist' is a package that is not loaded: load("dist"), then help(dist)
+let A = ones(2, 3); help(A)
+=>   a 2x3 Float array
+.. let hc = fn -> help(A); hc()
+=>   a 2x3 Float array
+let hb = fn x -> help(x); hb(eye(2))
+=>   a 2x2 Int array

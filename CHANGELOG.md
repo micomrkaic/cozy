@@ -1,5 +1,22 @@
 # Cozy changelog
 
+## 0.1.56 — help(dist): quotes optional everywhere
+
+### Changed
+- **`help(name)` is `help("name")`.** A name written bare inside
+  `help(...)` is now looked up, not evaluated. Before, `help(dist)` failed
+  with `undefined name 'dist'` (a package is a file, not a value), and
+  `help(tic)` started the timer instead of describing it, so the quoted
+  form was the only one that always worked (the 0.1.29 rule). Now
+  `help(dist)`, `help(ts)`, `help(norm)`, `help(norm.cdf)`, `help(tic)` and
+  `help(nosuch)` all answer, with or without quotes. Inside a function,
+  `help(x)` on a local variable or parameter still describes its value.
+- **A package that is not loaded yet says how to load it:**
+  `help(dist)` before loading answers
+  `'dist' is a package that is not loaded: load("dist"), then help(dist)`.
+- **Asked by name, a variable's help shows its shape** (`a 2x3 Float
+  array`) as the bare form always did, not just its type.
+
 ## 0.1.55 — no more `make clean` between configurations
 
 ### Fixed

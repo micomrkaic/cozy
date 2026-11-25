@@ -600,6 +600,19 @@ static void compile_node(Interp *I, Compiler *cc, AstNode *n)
     case AST_CALL: {
         uint32_t argc = n->as.call.args.count;
         compile_node(I, cc, n->as.call.callee);
+        /* help(NAME) asks about the name, as help("NAME") does (0.1.56): a
+         * package is not a value (help(dist)), and a zero-argument function
+         * would run (help(tic)). A local or captured variable stays a value:
+         * the by-name lookup only sees globals. */
+        AstNode *cal = n->as.call.callee, *a0 = argc == 1 ? n->as.call.args.items[0] : nullptr;
+        if (a0 && cal->kind == AST_IDENT && cal->as.lit.len == 4 && !memcmp(cal->as.lit.text, "help", 4) &&
+            a0->kind == AST_IDENT && !(a0->as.lit.len == 1 && a0->as.lit.text[0] == '@') &&
+            resolve_local(cc, a0->as.lit.text, a0->as.lit.len) < 0 &&
+            resolve_upvalue(cc, a0->as.lit.text, a0->as.lit.len) < 0) {
+            emit_const(c, val_string(a0->as.lit.text, a0->as.lit.len), L);
+            chunk_emit(c, OP_CALL, L); chunk_emit(c, 1, L);
+            break;
+        }
         for (uint32_t i = 0; i < argc; i++) compile_node(I, cc, n->as.call.args.items[i]);
         chunk_emit(c, OP_CALL, L); chunk_emit(c, (uint8_t)argc, L);
         break;

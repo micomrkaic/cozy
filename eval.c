@@ -5923,8 +5923,20 @@ static Value bi_help(Interp *I, Value *args, uint32_t n)
                 }
                 fprintf(vout(), "  help(\"name\") or help(name) for any one of them\n");
             }
+            else if (found && found->kind != VAL_STRING) { Value a2 = *found; bi_help(I, &a2, 1); }   /* x = an array: its shape */
             else if (found) fprintf(vout(), "  %.*s: a %s value\n", (int)s->len, s->data, type_name(found->kind));
-            else fprintf(vout(), "  no name or loaded package called '%.*s' (who lists both)\n", (int)s->len, s->data);
+            else {
+                /* not loaded, but a package by that name exists: say how to load it */
+                char nm[256], pth[1200], tried[16][1024]; int nt = 0;
+                snprintf(nm, sizeof nm, "%.*s", (int)s->len, s->data);
+                size_t pl;
+                if (s->len < sizeof nm && !memchr(s->data, '/', s->len) &&
+                    load_resolve(nm, pth, sizeof pth, tried, &nt) &&
+                    (pl = strlen(pth)) > 3 && !strcmp(pth + pl - 3, ".cz"))
+                    fprintf(vout(), "  '%s' is a package that is not loaded: load(\"%s\"), then help(%s)\n", nm, nm, nm);
+                else
+                    fprintf(vout(), "  no name or loaded package called '%.*s' (who lists both)\n", (int)s->len, s->data);
+            }
         } else if (v.kind == VAL_ARRAY) {
             ArrObj *a = as_arr(v);
             fprintf(vout(), "  a %ux%u %s array\n", a->rows, a->cols, elt_name(a->elt));
