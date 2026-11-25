@@ -1,0 +1,37 @@
+% A simulated weekly panel for tests/87_nowcast.test: a weekly factor, two
+% weekly indicators, two monthly ones (averages of their weeks), quarterly GDP
+% (the growth of its quarter's average log level, from true weekly growth g),
+% a monthly series that starts late and has a gap, and a ragged edge.
+load("nowcast");
+rng(11);
+let T = 300;                                   % weeks
+let dates = date(2019, 1, 6) + 7 * (0 : T - 1)';
+let f = zeros(1, T); for t = 2 : T do f[t] = 0.8 * f[t - 1] + randn() end;
+let g = 0.05 + 0.04 * f;                      % true weekly GDP growth, % per week (log x 100)
+let lv = cumsum(g);                           % log level x 100
+% the calendar: month of each week's middle day, quarter
+let mid = (year(dates - 3) * 12 + month(dates - 3) - 1)';
+let qid = floor(mid / 3);
+let Y = (0 / 0) * ones(6, T);
+Y[1, :] = f + 0.5 * randn(1, T);              % weekly claims-like
+Y[2, :] = 0.7 * f + 0.6 * randn(1, T);        % weekly
+% monthly: average of the month's weeks of a noisy signal, at the month's last week
+let sig = 0.9 * f + 0.3 * randn(1, T);
+for t = 1 : T - 1 do (if mid[t + 1] != mid[t] then (let k = find(mid == mid[t]); Y[3, t] = mean(sig[k]) + 0.2 * randn()) end) end;
+let sig2 = -0.6 * f + 0.4 * randn(1, T);
+for t = 1 : T - 1 do (if mid[t + 1] != mid[t] then (let k = find(mid == mid[t]); Y[4, t] = mean(sig2[k])) end) end;
+% quarterly GDP: growth of the quarter's average log level, at the quarter's last week
+let truth = (0 / 0) * ones(1, T);
+for t = 30 : T - 1 do (if qid[t + 1] != qid[t] then (
+  let c = find(qid == qid[t]); let p = find(qid == qid[t] - 1);
+  if numel(p) > 0 then (truth[t] = mean(lv[c]) - mean(lv[p])) end) end) end;
+Y[5, :] = truth + 0.05 * randn(1, T);
+% a monthly series that starts late and has a gap
+Y[6, :] = Y[3, :] * 0.5 + 0.1; Y[6, 1 : 120] = 0 / 0; Y[6, 200 : 230] = 0 / 0;
+% the ragged edge: GDP's last quarter not out, monthly last month not out
+let lastq = find(!isnan(Y[5, :])); Y[5, lastq[numel(lastq)]] = 0 / 0;
+let d = nowcast.data(Y, {freq = "weekly", dates = dates, names = ["claims"; "spend"; "ip"; "unemp"; "gdp"; "sales"],
+                         freqs = ["weekly"; "weekly"; "monthly"; "monthly"; "quarterly"; "monthly"]});
+let wagg = ["mean"; "mean"; "mean"; "mean"; "mm"; "mean"];
+let e = lastq[numel(lastq)];                 % the quarter not yet out
+

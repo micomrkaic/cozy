@@ -176,7 +176,7 @@
   <label class="btn">upload<input type="file" id="upload" multiple></label>
   <button class="btn" id="dl" title="download files your session created (saves, CSVs, plots)">download new files</button>
   <a href="dsge.html" title="three macro models solved live by the dsge package">DSGE demos</a>
-  <a href="nowcast.html" title="nowcast GDP from monthly data: a dynamic factor model in your browser">Nowcast</a>
+  <a href="nowcast.html" title="nowcast GDP from daily, weekly and monthly data: a dynamic factor model in your browser">Nowcast</a>
   <a href="https://github.com/micomrkaic/cozy" target="_blank" rel="noopener">GitHub</a>
 </header>
 <div id="main">
@@ -251,7 +251,7 @@
 
 /* the bundle the worker loads, with its content hash: a cached older engine
    can never meet this page. Stamped by tools/gen_dsge_page.py; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=5fa6d99e1957";
+var COZY_BUNDLE = "cozy.js?v=7ddb5f91ed4f";
 
 var $ = function (id) { return document.getElementById(id); };
 var HISTKEY = 'cozy_history_v2', EDKEY = 'cozy_editor_v1';

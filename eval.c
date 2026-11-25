@@ -6578,8 +6578,9 @@ static Value bi_ksmooth(Interp *I, Value *args, uint32_t nargs)
     if (ks_smooth(&M, &res) != 0) ks_raise(I, &bag, "%s", res.msg);
     ksbag_free(&bag);
 
-    static const char *lagkey[KS_MAXLAG] = { "P1","P2","P3","P4","P5","P6","P7","P8","P9","P10","P11","P12",
-        "P13","P14","P15","P16","P17","P18","P19","P20","P21","P22","P23","P24" };
+    static char lagkey[KS_MAXLAG][8];                  /* "P1" .. "P<KS_MAXLAG>", static like literals */
+    if (!lagkey[0][0])
+        for (int k = 0; k < KS_MAXLAG; k++) snprintf(lagkey[k], sizeof lagkey[k], "P%d", k + 1);
     uint32_t nf = (M.want_cov ? 7 + res.b : 4) + (M.want_stats ? 1 : 0) + (M.want_fit ? (M.want_cov ? 2 : 1) : 0);
     uint32_t np = n * (M.p + 1);
     Value out = val_record(nf); RecObj *o = as_rec(out);

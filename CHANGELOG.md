@@ -1,5 +1,62 @@
 # Cozy changelog
 
+## 0.1.59 — nowcasting with weekly and daily data, GDP week by week, and a convergence report
+
+### Added
+- **Weekly nowcasting models.** `nowcast.cz` takes a panel at a weekly
+  base (one column per week, dated by its last day) as well as a monthly
+  one. Monthly and quarterly series sit in their period's last week and
+  load on exactly its weeks: four or five to a month, thirteen or fourteen
+  to a quarter, each pattern a measurement row sharing the series' loading
+  and variance, so the M-step pools them and stays exact. The aggregation is
+  per series: `"mm"` (growth of the period's average level, from a growth per
+  base period; Mariano and Murasawa's weights, built for any calendar) or
+  `"mean"`. A series' mean is per base period, so periods of different
+  lengths get the right intercept. `nowcast.panel` reads the base frequency
+  from the dates and each series' frequency from where its values sit;
+  `nowcast.data` takes `freq`, `freqs` and `dates`; `nowcast.transform`
+  takes the panel, so a monthly series in a weekly panel changes on its
+  previous month. Monthly panels give the same results as before.
+- **`nowcast.path(f, name, freq)`: the target at any frequency** from the
+  panel's own up, with standard errors: GDP week by week, month by month,
+  quarter by quarter beside the published values. Brute-force checked in
+  the suite: the monthly and quarterly paths are the growth of each
+  period's average level rebuilt from the weekly path and the dates alone.
+- **How the EM ended.** `fit` records `status` (`"converged"`, `"maxit"`,
+  `"failed"`), `message`, `change` and `warnings`. It stops and keeps the
+  last good parameters when the log-likelihood falls or stops being
+  finite, or an M-step breaks the model (a non-finite parameter, a factor
+  covariance that is not positive definite). It warns of factors that are
+  not stationary and of a series fitted exactly. `nowcast.report(f)` prints
+  it all.
+- **The nowcast page, at any frequency.** Daily, weekly, monthly and
+  quarterly files (each series' frequency from its own dates). A weekly or
+  monthly model (daily data averaged to it). Lower-frequency series
+  aggregated by their transformation (changes as changes, levels as
+  averages). A tracker chart of the target at every finer frequency
+  (weekly and monthly GDP, optionally annualized). A convergence report
+  that says plainly when EM did not converge or failed, and why.
+- **Three examples on the page**: the monthly one; a weekly tracker
+  (daily market data, weekly claims, card spending and rail traffic, five
+  monthly indicators, quarterly GDP, each ending where its release
+  calendar puts it); and a missing-data panel (a late start, a suspended
+  survey, a discontinued series, irregular releases, a second quarterly
+  series starting late). They are generated from a known model by
+  `tools/gen_nowcast_examples.py` (pure Python, checked by `make test`),
+  which also writes them to `data/` for scripts, with the weekly example's
+  true GDP growth. The browser test runs both new examples, and the
+  weekly one's exported script reproduces the page's nowcast exactly.
+
+### Changed
+- **`ksmooth` accepts up to 400 measurement lags** (was 24), enough for a
+  quarter of weeks by Mariano and Murasawa's weights (27) with room to
+  spare; the `P1`, `P2`, … field names are generated.
+- A lower-frequency observation whose period reaches back before the
+  panel's first period is no longer used (the smoother treated the missing
+  earlier states as zero). The default `nowcast(f, name)` of such a series
+  is the whole period holding the panel's last base period, past the end of
+  the data if need be.
+
 ## 0.1.58 — small matrix products on one thread too
 
 ### Fixed

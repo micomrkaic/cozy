@@ -101,3 +101,57 @@ load("nowcast"); nowcast.transform([1, 2], ["pct"; "pct"], [0])
 # --- EM in pieces (the page's progress bar) ends exactly where one run does ---
 load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1]}); let one = nowcast.fit(d, {r = 2, tol = 1e-6}); let a = nowcast.fit(d, {r = 2, tol = 1e-6, maxit = 4}); let b = nowcast.fit(d, {r = 2, tol = 1e-6, params = a.params, P0 = a.P0, last = a.loglik[4]}); [a.iterations + b.iterations == one.iterations, norm(b.params.Lam - one.params.Lam) < 1e-12, abs(b.loglik[b.iterations] - one.loglik[one.iterations]) < 1e-9]
 => [true, true, true]
+
+# --- weekly panels (0.1.59): exact calendar weights, monthly and quarterly series ---
+# the simulation: tests/data/nowcast_weekly.cz (300 weeks from 2019; GDP from true weekly growth g)
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); [fit.status, fit.freq]
+=> ["converged", "weekly"]
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); abs(corr(fit.state.f[1, 2 : T + 1]', f')) > 0.9
+=> true
+# the nowcast of the quarter not yet out, against the truth it was built from
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); let n = nowcast.nowcast(fit, "gdp", e); [abs(n.value - truth[e]) < 3 * n.sd + 0.05, n.t == e, isnan(n.actual)]
+=> [true, true, true]
+# months of four and five weeks, quarters of thirteen and fourteen: one row per pattern
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.model(d, {agg = wagg}); let k = find(fit.st.rser == 3); [numel(k) >= 2, numel(find(fit.st.rser == 1)) == 1]
+=> [true, true]
+# the calendar weights, checked by brute force: the monthly path is the growth of each
+# month's average level, rebuilt from the weekly path and the dates alone
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg, maxit = 20}); let pw = nowcast.path(fit, "gdp", "weekly"); let pm = nowcast.path(fit, "gdp", "monthly"); let L = cumsum(pw.value'); let mo = (year(pw.dates - 3) * 12 + month(pw.dates - 3))'; let err = 0; for q = 3 : numel(pm.t) do (let t = pm.t[q]; let c = find(mo == mo[t]); let p = find(mo == mo[t] - 1); err = max(err, abs(mean(L[c]) - mean(L[p]) - pm.value[q]))) end; err < 1e-10
+=> true
+# the same for quarters, and the quarterly path agrees with what was published
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg, maxit = 20}); let pw = nowcast.path(fit, "gdp", "weekly"); let pq = nowcast.path(fit, "gdp", "quarterly"); let L = cumsum(pw.value'); let qq = floor((year(pw.dates - 3) * 12 + month(pw.dates - 3) - 1) / 3)'; let err = 0; for q = 3 : numel(pq.t) do (let t = pq.t[q]; let c = find(qq == qq[t]); let p = find(qq == qq[t] - 1); err = max(err, abs(mean(L[c]) - mean(L[p]) - pq.value[q]))) end; let ok = find(!isnan(pq.actual)); [err < 1e-10, corr(pq.value[ok], pq.actual[ok]) > 0.95]
+=> [true, true]
+# the weekly path is the weekly growth that built GDP
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); let pw = nowcast.path(fit, "gdp"); [numel(pw.value) == T, corr(pw.value, g') > 0.9, pw.freq == "weekly"]
+=> [true, true, true]
+# a path runs through the period holding the last week (the panel is extended)
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.model(d, {agg = wagg}); let Y2 = Y[:, 1 : 290]; let g2 = nowcast.update(fit, Y2); let pq = nowcast.path(g2, "gdp", "quarterly"); [pq.t[numel(pq.t)] > 290, datestr(pq.dates[numel(pq.dates)]) == "2024-09-29"]
+=> [true, true]
+# news on a weekly panel: exact and additive
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg, maxit = 20}); let Yo = Y; Yo[:, T - 5 : T] = 0 / 0; let n = nowcast.news(nowcast.update(fit, Yo), Y, "gdp"); abs(n.old + sum(n.news) + sum(n.revisions) - n.new) < 1e-12
+=> true
+# a weekly panel read from a table: frequencies from where the values sit
+load("nowcast"); let w = nowcast.panel({date = date(2024, 1, 7) + 7 * (0 : 12)', claims = (1.0 : 13)', ip = [0/0; 0/0; 0/0; 4; 0/0; 0/0; 0/0; 0/0; 6; 0/0; 0/0; 0/0; 0/0], gdp = [0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 0/0; 3]}); [w.freq, w.freqs']
+=> ["weekly", "weekly", "monthly", "quarterly"]
+load("nowcast"); nowcast.panel({date = [date(2024, 1, 7); date(2024, 1, 14); date(2024, 1, 22)], x = [1.0; 2; 3]})
+=> !a weekly panel needs one row per week, seven days apart
+load("nowcast"); nowcast.data([1, 2, 3], {freq = "weekly"}) |> nowcast.model
+=> !a weekly panel needs dates
+load("tests/data/nowcast_weekly.cz"); let Y2 = Y; Y2[3, 10] = 1; nowcast.model(nowcast.data(Y2, {freq = "weekly", dates = dates, freqs = d.freqs, names = d.names}))
+=> !series ip (monthly) has a value in period 10 that is not the last week of its month
+load("nowcast"); nowcast.data([1, 2, 3], {freq = "monthly", freqs = ["weekly"]})
+=> !series y1 is weekly, more frequent than the monthly panel
+load("nowcast"); let f = nowcast.model(nowcast.data([1, 2, 3, 4; 2, 4, 5, 3])); nowcast.path(f, "y1", "weekly")
+=> !the panel is monthly; weekly is finer than its periods
+# a monthly series' transformation steps by its own months inside a weekly panel
+load("tests/data/nowcast_weekly.cz"); let Z = nowcast.transform(Y, ["level"; "diff"; "diff"; "level"; "level"; "level"], d); let k = find(!isnan(Y[3, :])); [abs(Z[3, k[5]] - (Y[3, k[5]] - Y[3, k[4]])) < 1e-12, Z[2, 7] == Y[2, 7] - Y[2, 6]]
+=> [true, true]
+
+# --- how the EM ended: status, message, report ---
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1]}); let f = nowcast.fit(d, {agg = "mean", maxit = 3}); [f.status == "maxit", f.converged, startswith(f.message, "stopped at the limit of 3 iterations")]
+=> [true, false, true]
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1]}); let f = nowcast.fit(d, {agg = "mean"}); [f.status == "converged", startswith(f.message, "converged after"), numel(f.warnings) == 0]
+=> [true, true, true]
+# a series that is the factor itself: its variance hits the floor, and the fit says so
+rng(3); load("nowcast"); let x = cumsum(randn(1, 80)) / 4; let Y = [x; x; 0.5 * x + 0.3 * randn(1, 80)]; let f = nowcast.fit(nowcast.data(Y, {names = ["a"; "b"; "c"]}), {maxit = 200}); [numel(f.warnings) > 0, contains(f.warnings[numel(f.warnings)], "exactly")]
+=> [true, true]

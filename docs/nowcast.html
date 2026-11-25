@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nowcast — Cozy</title>
-<meta name="description" content="Nowcast GDP from monthly indicators in your browser: a mixed-frequency dynamic factor model estimated by EM, nowcasts with standard errors, and the news decomposition of each data release. Your data never leave your computer.">
+<meta name="description" content="Nowcast GDP from daily, weekly and monthly indicators in your browser: a mixed-frequency dynamic factor model estimated by EM, nowcasts with standard errors, and the news decomposition of each data release. Your data never leave your computer.">
 <meta property="og:title" content="Nowcast — Cozy">
 <meta property="og:image" content="og-card.png">
 <style>
@@ -144,14 +144,20 @@
   <section class="step" id="s-data">
     <h2><span class="n">1</span>Data</h2>
     <p class="hint">A table with dates in the first column (or a column called <code>date</code>) and one column per
-      series: CSV, TSV, or Excel. Monthly and quarterly series can share one file or come in several; dates like
+      series: CSV, TSV, or Excel. Daily, weekly, monthly and quarterly series can share one file or come in several; dates like
       <code>2024-03-31</code>, <code>2024-03</code>, <code>2024M03</code>, <code>2024Q1</code> or <code>Mar 2024</code>
-      all work. Leave a cell empty when there is no value.</p>
+      all work, and each series' frequency is read from its own dates. Leave a cell empty when there is no value —
+      late starts, gaps and discontinued series are fine.</p>
     <div id="drop">
       <div><strong>Drop files here</strong> or</div>
       <div class="row">
         <label class="btn" for="file">Choose files…</label>
         <input id="file" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" multiple hidden>
+        <select id="exsel" aria-label="example">
+          <option value="monthly">Example: monthly indicators</option>
+          <option value="weekly">Example: weekly tracker (daily, weekly, monthly, quarterly)</option>
+          <option value="missing">Example: missing data</option>
+        </select>
         <button id="example" type="button">Use example data</button>
         <button id="clear" type="button" class="hidden">Clear</button>
       </div>
@@ -168,16 +174,22 @@
 
   <section class="step hidden" id="s-model">
     <h2><span class="n">2</span>Model</h2>
-    <p class="hint">A few common factors drive all series; a quarterly series loads on its quarter's months. The
-      defaults are the standard choices — estimate first, adjust later.</p>
+    <p class="hint">A few common factors drive all series at the model's frequency; a series observed less often loads
+      on exactly the weeks or months of its period. The defaults are the standard choices — estimate first, adjust later.</p>
     <div class="card">
       <div class="grid-controls">
         <label class="f">Target to nowcast <select id="target"></select></label>
         <label class="f">Number of factors <select id="r"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label>
-        <label class="f">Quarterly series are
+        <label class="f hidden" id="basewrap">Model frequency
+          <select id="base">
+            <option value="W">weekly (daily data averaged to weeks)</option>
+            <option value="M">monthly (daily and weekly data averaged to months)</option>
+          </select></label>
+        <label class="f">Lower-frequency series are
           <select id="agg">
-            <option value="mm">growth rates (Mariano–Murasawa)</option>
-            <option value="mean">averages of their months</option>
+            <option value="auto">by transformation: changes aggregate as changes, levels as averages</option>
+            <option value="mm">all growth rates (Mariano–Murasawa)</option>
+            <option value="mean">all averages of their periods</option>
           </select></label>
       </div>
       <details class="adv"><summary>Estimation settings</summary>
@@ -203,6 +215,13 @@
     <p class="chart-sub">Model estimate with 68% and 90% bands; dots are published values.</p>
     <div class="chart" id="fan"></div>
     <div class="legend" id="fan-legend"></div>
+    <div id="trackwrap" class="hidden">
+      <div class="chart-title" id="track-title"></div>
+      <p class="chart-sub">The target inside its periods, from the higher-frequency data, with 68% and 90% bands —
+        <label>frequency <select id="trackfreq"></select></label>
+        <label id="annwrap"><input type="checkbox" id="annual"> annualized</label></p>
+      <div class="chart" id="tracker"></div>
+    </div>
     <div class="two">
       <div>
         <div class="chart-title">Common factor</div>
@@ -211,11 +230,12 @@
       </div>
       <div>
         <div class="chart-title">The ragged edge</div>
-        <p class="chart-sub">Which series have data in the last two years (filled) and which months are still out.</p>
+        <p class="chart-sub">Which series have data lately (filled) and which periods are still out, through the current quarter.</p>
         <div class="chart" id="cover"></div>
       </div>
     </div>
-    <div class="chart-title">Estimation</div>
+    <div class="chart-title">Estimation: convergence report</div>
+    <div id="emreport"></div>
     <p class="chart-sub" id="emsub"></p>
     <div class="chart" id="llchart"></div>
   </section>
@@ -232,7 +252,7 @@
             <option value="hold">the same data, latest months held back</option>
             <option value="file">upload an earlier file…</option>
           </select></label>
-        <label class="f" id="holdwrap">Months held back <select id="hold"><option>1</option><option selected>2</option><option>3</option><option>6</option></select></label>
+        <label class="f" id="holdwrap">Periods held back <select id="hold"><option>1</option><option selected>2</option><option>3</option><option>6</option></select></label>
         <label class="btn hidden" id="oldfilebtn" for="oldfile">Choose earlier file…</label>
         <input id="oldfile" type="file" accept=".csv,.tsv,.txt,.xlsx,.xls" multiple hidden>
         <button id="newsrun" type="button" class="primary" style="align-self:flex-end">Decompose</button>
@@ -261,10 +281,12 @@
   </section>
 
   <footer>
-    <p><strong>The model.</strong> On standardized data, r factors follow a VAR(1); each monthly series is a factor
-      loading times the factors plus its own noise; a quarterly series sits in its quarter's third month and loads on
-      the months of its quarter, with the weights 1, 2, 3, 2, 1 (Mariano and Murasawa, for growth rates) or 1, 1, 1
-      (for averages). Estimation is the EM algorithm of Bańbura and Modugno (2014) with independent idiosyncratic
+    <p><strong>The model.</strong> On standardized data, r factors follow a VAR(1) at the model's frequency (weekly or
+      monthly); each series at that frequency is a factor loading times the factors plus its own noise; a series
+      observed less often sits in its period's last week or month and loads on exactly the weeks or months of its period —
+      four or five weeks to a month, thirteen or fourteen to a quarter — as the growth of the period's average level
+      (Mariano and Murasawa's weights, 1, 2, 3, 2, 1 for a quarter of months, built the same way for any calendar) or as
+      its average. Daily series are averaged to the model's periods. Estimation is the EM algorithm of Bańbura and Modugno (2014) with independent idiosyncratic
       errors, started from principal components; the news decomposition is theirs, computed exactly. The smoother
       underneath solves for the whole factor path as one sparse linear system — Cozy's <code>ksmooth</code> — and the
       model is Cozy's <code>nowcast</code> package, running here as WebAssembly.</p>
@@ -288,6 +310,16 @@ const qLabel = ym => yearOf(ym) + " Q" + Math.ceil(monthOf(ym) / 3);
 const ymISO = ym => yearOf(ym) + "-" + String(monthOf(ym)).padStart(2, "0") + "-01";
 const isQEnd = ym => monthOf(ym) % 3 === 0;
 const fin = v => typeof v === "number" && isFinite(v);
+/* days: day numbers since 1970-01-01 (UTC), the calendar of daily and weekly data */
+const DAY = 86400000;
+const dayOf = (y, m, d) => Math.round(Date.UTC(y, m - 1, d) / DAY);
+const dayDate = dn => new Date(dn * DAY);
+const dayISO = dn => dayDate(dn).toISOString().slice(0, 10);
+const ymOfDay = dn => { const d = dayDate(dn); return ymOf(d.getUTCFullYear(), d.getUTCMonth() + 1); };
+const dowOf = dn => dayDate(dn).getUTCDay();                 // 0 Sunday .. 6 Saturday
+const dayLabel = dn => { const d = dayDate(dn); return d.getUTCDate() + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCFullYear(); };
+const FREQNAME = { D: "daily", W: "weekly", M: "monthly", Q: "quarterly", A: "annual" };
+const FREQRANK = { D: 0, W: 1, M: 2, Q: 3, A: 4 };
 function fmt(v, d = 3) {
   if (!fin(v)) return "—";
   const a = Math.abs(v);
@@ -334,7 +366,7 @@ function cozyName(raw, idx) {
 /* the bundle the worker loads, with its content hash: a browser or CDN
    cache can never pair this page with an older engine. Stamped by
    tools/gen_dsge_page.py whenever docs/cozy.js changes; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=5fa6d99e1957";
+var COZY_BUNDLE = "cozy.js?v=7ddb5f91ed4f";
 const Engine = (() => {
   const WORKER = `
     self.window = self;
@@ -474,31 +506,34 @@ async function readFile(file) {
 }
 
 /* dates -> {ym, q} (q: the label named a quarter) or null */
+/* dates -> {ym, q, day} or null: ym the month, q whether the label named a
+   quarter, day the day number when the date names a day (null for a month) */
 function parseDate(v) {
-  if (v instanceof Date && !isNaN(v)) return { ym: ymOf(v.getFullYear(), v.getMonth() + 1), q: false };
+  const mk = (y, m, d) => (m >= 1 && m <= 12 ? { ym: ymOf(y, m), q: false, day: d ? dayOf(y, m, d) : null } : null);
+  if (v instanceof Date && !isNaN(v)) return mk(v.getFullYear(), v.getMonth() + 1, v.getDate());
   if (typeof v === "number") {                               // an Excel serial day
-    if (v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return { ym: ymOf(d.getUTCFullYear(), d.getUTCMonth() + 1), q: false }; }
-    if (v >= 1800 && v <= 2200 && Number.isInteger(v)) return null;   // a bare year: annual, unsupported
-    return null;
+    if (v > 20000 && v < 80000) { const d = new Date(Math.round((v - 25569) * 86400000)); return mk(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()); }
+    return null;                                             // a bare year (annual) or anything else
   }
   const s = String(v).trim();
   let m;
-  if ((m = s.match(/^(\d{4})\s*[-\/. ]?\s*[Qq]([1-4])$/))) return { ym: ymOf(+m[1], 3 * (+m[2]) - 2), q: true };
-  if ((m = s.match(/^[Qq]([1-4])\s*[-\/. ]?\s*(\d{4})$/))) return { ym: ymOf(+m[2], 3 * (+m[1]) - 2), q: true };
-  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?(?:[ T].*)?$/))) return +m[2] >= 1 && +m[2] <= 12 ? { ym: ymOf(+m[1], +m[2]), q: false } : null;
-  if ((m = s.match(/^(\d{4})[Mm](\d{1,2})$/))) return { ym: ymOf(+m[1], +m[2]), q: false };
-  if ((m = s.match(/^(\d{4})(\d{2})$/)) && +m[2] >= 1 && +m[2] <= 12) return { ym: ymOf(+m[1], +m[2]), q: false };
+  if ((m = s.match(/^(\d{4})\s*[-\/. ]?\s*[Qq]([1-4])$/))) return { ym: ymOf(+m[1], 3 * (+m[2]) - 2), q: true, day: null };
+  if ((m = s.match(/^[Qq]([1-4])\s*[-\/. ]?\s*(\d{4})$/))) return { ym: ymOf(+m[2], 3 * (+m[1]) - 2), q: true, day: null };
+  if ((m = s.match(/^(\d{4})[-\/.](\d{1,2})(?:[-\/.](\d{1,2}))?(?:[ T].*)?$/))) return mk(+m[1], +m[2], m[3] ? +m[3] : null);
+  if ((m = s.match(/^(\d{4})[Mm](\d{1,2})$/))) return mk(+m[1], +m[2], null);
+  if ((m = s.match(/^(\d{4})(\d{2})(\d{2})?$/))) return mk(+m[1], +m[2], m[3] ? +m[3] : null);
   if ((m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/))) {          // 03/31/2024 or 31.03.2024
     let a = +m[1], b = +m[2];
-    const month = s.includes(".") ? b : (a > 12 ? b : a);
-    return month >= 1 && month <= 12 ? { ym: ymOf(+m[3], month), q: false } : null;
+    const dot = s.includes(".");
+    const month = dot ? b : (a > 12 ? b : a), day = dot ? a : (a > 12 ? a : b);
+    return mk(+m[3], month, day);
   }
   let name = null, year = null;
   if ((m = s.match(/^([A-Za-z]{3,9})\.?[-\/. ]+(\d{4})$/))) { name = m[1]; year = +m[2]; }
   else if ((m = s.match(/^(\d{4})[-\/. ]+([A-Za-z]{3,9})$/))) { name = m[2]; year = +m[1]; }
   if (name) {
     const k = MONTHS.findIndex(x => name.slice(0, 3).toLowerCase() === x.toLowerCase());
-    return k >= 0 ? { ym: ymOf(year, k + 1), q: false } : null;
+    return k >= 0 ? mk(year, k + 1, null) : null;
   }
   return null;
 }
@@ -514,10 +549,13 @@ function parseNumber(v, decimalComma) {
 }
 
 /* a table -> series {name, freq, obs: Map(ym -> value), notes} */
+/* a table -> series {name, freq, obs: Map(key -> value), notes}: freq D, W, M,
+   Q or A from the spacing of the column's own dates; keys are day numbers
+   (D, W), months (M) or a quarter's third month (Q) */
 function tableToSeries(rows, fileName) {
   if (rows.length < 3) throw new Error(fileName + ": needs a header row and at least two rows of data");
   const head = rows[0].map(String);
-  let dc = head.findIndex(h => /^(date|time|period|month|quarter|observation_date|dates)$/i.test(h.trim()));
+  let dc = head.findIndex(h => /^(date|time|period|day|week|week_?ending|month|quarter|observation_date|dates)$/i.test(h.trim()));
   if (dc < 0) dc = 0;
   const dates = rows.slice(1).map(r => parseDate(r[dc]));
   const good = dates.filter(Boolean).length;
@@ -525,39 +563,40 @@ function tableToSeries(rows, fileName) {
     const bad = rows.slice(1).find((r, i) => !dates[i]);
     throw new Error(fileName + ": could not read the dates in column \"" + head[dc] + "\" (for example \"" + (bad ? bad[dc] : "") + "\"). Use 2024-03-31, 2024-03, 2024M03, 2024Q1 or Mar 2024.");
   }
+  const med = a => { const g = a.slice(1).map((k, i) => k - a[i]).sort((x, y) => x - y); return g.length ? g[Math.floor(g.length / 2)] : 1; };
   const out = [];
   for (let j = 0; j < head.length; j++) {
     if (j === dc) continue;
-    const sums = new Map(), counts = new Map(); let qLabels = 0, n = 0, nonnum = 0;
+    const vals = []; let qLabels = 0, nonnum = 0, withDay = 0;
     for (let i = 1; i < rows.length; i++) {
       const d = dates[i - 1]; if (!d) continue;
       const cell = rows[i][j];
       const x = parseNumber(cell == null ? "" : cell, rows.decimalComma);
       if (!fin(x)) { if (cell !== "" && cell != null) nonnum++; continue; }
-      n++; if (d.q) qLabels++;
-      sums.set(d.ym, (sums.get(d.ym) || 0) + x); counts.set(d.ym, (counts.get(d.ym) || 0) + 1);
+      vals.push([d, x]); if (d.q) qLabels++; if (d.day != null) withDay++;
     }
+    const n = vals.length;
     if (n === 0) continue;                                // empty, or text: not a series
-    const obs = new Map(); let averaged = false;
-    for (const [ym, s] of sums) { const c = counts.get(ym); if (c > 1) averaged = true; obs.set(ym, s / c); }
-    const keys = [...obs.keys()].sort((a, b) => a - b);
     let freq = "M", notes = [];
-    const gaps = keys.slice(1).map((k, i) => k - keys[i]);
-    const med = gaps.length ? gaps.slice().sort((a, b) => a - b)[Math.floor(gaps.length / 2)] : 1;
-    if (qLabels === n || (med === 3 && new Set(keys.map(k => k % 3)).size === 1)) freq = "Q";
-    else if (med >= 12) { notes.push("annual — not used"); freq = "A"; }
-    if (averaged) notes.push("averaged to monthly");
-    let aligned = obs;
-    if (freq === "Q") {                                   // to the quarter's third month
-      aligned = new Map();
-      for (const [ym, v] of obs) aligned.set(ym - (ym % 3) + 2, v);
-    }
-    out.push({ raw: head[j] || ("column " + (j + 1)), freq, obs: aligned, notes, file: fileName });
+    const byDay = withDay === n && n > 1 ? med([...new Set(vals.map(v => v[0].day))].sort((a, b) => a - b)) : null;
+    const months = [...new Set(vals.map(v => v[0].ym))].sort((a, b) => a - b);
+    const gm = med(months);
+    if (qLabels === n) freq = "Q";
+    else if (byDay != null && byDay <= 4) freq = "D";
+    else if (byDay != null && byDay <= 10) freq = "W";
+    else if (gm === 3 && new Set(months.map(k => k % 3)).size === 1) freq = "Q";
+    else if (gm >= 12) { notes.push("annual — not used"); freq = "A"; }
+    const key = d => freq === "D" || freq === "W" ? d.day : freq === "Q" ? d.ym - (d.ym % 3) + 2 : d.ym;
+    const sums = new Map(), counts = new Map(); let averaged = false;
+    for (const [d, x] of vals) { const k = key(d); sums.set(k, (sums.get(k) || 0) + x); counts.set(k, (counts.get(k) || 0) + 1); }
+    const obs = new Map();
+    for (const [k, v] of sums) { const c = counts.get(k); if (c > 1) averaged = true; obs.set(k, v / c); }
+    if (averaged) notes.push("repeated dates averaged");
+    out.push({ raw: head[j] || ("column " + (j + 1)), freq, obs, notes, file: fileName });
   }
   if (!out.length) throw new Error(fileName + ": no numeric columns found");
   return out;
 }
-
 /* ================================================================== */
 /* state                                                              */
 /* ================================================================== */
@@ -604,17 +643,44 @@ async function loadFiles(files) {
   } catch (e) { message("datamsg", "err", e.message); }
   renderSeries();
 }
-function loadExample() {
+const EXAMPLE_TRANSFORMS = {
+  stock_index: "logdiff", credit_spread: "level", initial_claims: "level", card_spending: "logdiff", rail_traffic: "logdiff",
+  industrial_production: "pct", retail_sales: "pct", payrolls: "diff", pmi: "level", unemployment_rate: "diff", gdp: "pct"
+};
+function loadExample(kind) {
+  kind = typeof kind === "string" ? kind : $("exsel").value;
   S.series = [];
-  addSeries(tableToSeries(parseDelimited(EXAMPLE_CSV), "example"));
-  $("agg").value = "mean";                                   // the example's GDP is the mean of its months
-  message("datamsg", "info", "Example: five monthly indicators and quarterly GDP growth, ten years, simulated from a " +
-    "one-factor model in which GDP is the average of its quarter's months (the nowcasting application of the " +
-    "Kalman-smoother teaching package). The last month of two indicators is not yet out, and the current " +
-    "quarter's GDP is not published.");
+  $("base").dataset.touched = ""; $("r").dataset.touched = "";
+  if (kind === "weekly") {
+    for (const f of EXAMPLE_FILES.weekly) addSeries(tableToSeries(parseDelimited(f.csv), f.name));
+    S.series.forEach(s => { if (EXAMPLE_TRANSFORMS[s.name]) s.transform = EXAMPLE_TRANSFORMS[s.name]; });
+    $("agg").value = "auto";
+    message("datamsg", "info", "Example: a weekly tracker, as of Thursday 20 November 2025. Daily market data (a stock index and a credit " +
+      "spread), three weekly indicators, five monthly ones and quarterly GDP, in four files, simulated from a one-factor model with a " +
+      "recession in 2020. Each series ends where its release calendar puts it: daily data to yesterday, claims to last week, card spending " +
+      "a week later, October's monthly data, GDP to the third quarter. The model runs weekly: daily series are averaged to weeks, monthly and " +
+      "quarterly ones aggregate exactly the weeks of their months and quarters — so the results also track GDP week by week and month by month.");
+  } else if (kind === "missing") {
+    addSeries(tableToSeries(parseDelimited(EXAMPLE_FILES.missing[0].csv), EXAMPLE_FILES.missing[0].name));
+    S.series.forEach(s => { s.transform = "level"; });
+    $("agg").value = "auto";
+    message("datamsg", "info", "Example: the missing data a real panel has, all handled by the model as it stands — consumer confidence " +
+      "starts in 2019, housing starts were suspended for six months in 2020, exports were discontinued after 2022, the business survey misses " +
+      "one release in five, investment (quarterly) starts in 2016, and the last month is ragged. Monthly data and quarterly GDP and investment, " +
+      "already in growth rates; the quarterly series are averages of their months.");
+  } else {
+    addSeries(tableToSeries(parseDelimited(EXAMPLE_CSV), "example"));
+    $("agg").value = "mean";                                   // the example's GDP is the mean of its months
+    message("datamsg", "info", "Example: five monthly indicators and quarterly GDP growth, ten years, simulated from a " +
+      "one-factor model in which GDP is the average of its quarter's months (the nowcasting application of the " +
+      "Kalman-smoother teaching package). The last month of two indicators is not yet out, and the current " +
+      "quarter's GDP is not published.");
+  }
   renderSeries();
 }
-
+function keyLabel(s, k) {
+  return s.freq === "D" ? dayLabel(k) : s.freq === "W" ? "w/e " + dayLabel(k) : s.freq === "Q" ? qLabel(k) : ymLabel(k);
+}
 function renderSeries() {
   const body = $("series").tBodies[0]; body.innerHTML = "";
   $("serieswrap").classList.toggle("hidden", !S.series.length);
@@ -624,26 +690,28 @@ function renderSeries() {
     const keys = [...s.obs.keys()].sort((a, b) => a - b);
     const on = el("input", { type: "checkbox" }); on.checked = s.on; on.disabled = s.freq === "A";
     on.onchange = () => { s.on = on.checked; tr.classList.toggle("off", !s.on); refreshTargets(); };
-    const fq = el("select", {}, el("option", { value: "M" }, "monthly"), el("option", { value: "Q" }, "quarterly"));
-    fq.value = s.freq === "A" ? "M" : s.freq; fq.disabled = s.freq === "A";
-    fq.onchange = () => {
-      if (fq.value === "Q") {
-        const m = new Map(); for (const [ym, v] of s.obs) m.set(ym - (ym % 3) + 2, v); s.obs = m;
-      }
-      s.freq = fq.value; renderSeries();
-    };
+    let fq;
+    if (s.freq === "M" || s.freq === "Q") {
+      fq = el("select", {}, el("option", { value: "M" }, "monthly"), el("option", { value: "Q" }, "quarterly"));
+      fq.value = s.freq;
+      fq.onchange = () => {
+        if (fq.value === "Q") { const m = new Map(); for (const [ym, v] of s.obs) m.set(ym - (ym % 3) + 2, v); s.obs = m; }
+        s.freq = fq.value; renderSeries();
+      };
+    } else fq = FREQNAME[s.freq];
     const tf = el("select", {}, ...TRANSFORMS.map(([v, l]) => el("option", { value: v }, l)));
     tf.value = s.transform; tf.onchange = () => { s.transform = tf.value; };
     const last = keys[keys.length - 1];
+    const tag = s.freq === "Q" ? el("span", { class: "tag q" }, "Q") : s.freq === "D" ? el("span", { class: "tag t", title: "averaged to the model's periods" }, "D")
+      : s.freq === "W" ? el("span", { class: "tag t" }, "W") : null;
     const tr = el("tr", { class: s.on ? "" : "off" },
       el("td", {}, on),
-      el("td", { title: s.raw + (s.file ? " (" + s.file + ")" : "") }, s.name, " ",
-        s.freq === "Q" ? el("span", { class: "tag q" }, "Q") : null,
+      el("td", { title: s.raw + (s.file ? " (" + s.file + ")" : "") }, s.name, " ", tag,
         s.notes.length ? el("span", { class: "tag", title: s.notes.join("; ") }, s.notes[0]) : null),
-      el("td", {}, s.freq === "A" ? "annual" : fq),
+      el("td", {}, fq),
       el("td", {}, tf),
-      el("td", {}, s.freq === "Q" ? qLabel(keys[0]) : ymLabel(keys[0])),
-      el("td", {}, s.freq === "Q" ? qLabel(last) : ymLabel(last)),
+      el("td", {}, keyLabel(s, keys[0])),
+      el("td", {}, keyLabel(s, last)),
       el("td", { class: "num" }, String(keys.length)),
       el("td", { class: "num" }, fmt(s.obs.get(last))));
     body.append(tr);
@@ -653,64 +721,112 @@ function renderSeries() {
 function refreshTargets() {
   const sel = $("target"), prev = sel.value;
   sel.innerHTML = "";
-  const use = S.series.filter(s => s.on);
+  const use = S.series.filter(s => s.on && s.freq !== "A");
+  const order = [...use].sort((a, b) => FREQRANK[b.freq] - FREQRANK[a.freq]);
+  for (const s of order) sel.append(el("option", { value: s.name }, s.name + (s.freq === "M" ? "" : " (" + FREQNAME[s.freq] + ")")));
   const q = use.filter(s => s.freq === "Q");
-  for (const s of [...q, ...use.filter(s => s.freq === "M")]) sel.append(el("option", { value: s.name }, s.name + (s.freq === "Q" ? " (quarterly)" : "")));
   const gdp = q.find(s => /gdp|gnp|output|product/i.test(s.name));
-  sel.value = use.some(s => s.name === prev) ? prev : (gdp || q[0] || use[0] || {}).name || "";
-  const nm = use.filter(s => s.freq === "M").length;
-  if (!$("r").dataset.touched) $("r").value = nm >= 12 ? "2" : "1";
+  sel.value = use.some(s => s.name === prev) ? prev : (gdp || q[0] || order[0] || {}).name || "";
+  const hf = use.some(s => s.freq === "D" || s.freq === "W");
+  $("basewrap").classList.toggle("hidden", !hf);
+  if (!hf) $("base").value = "M";
+  else if (!$("base").dataset.touched) $("base").value = "W";
+  const base = $("base").value;
+  const nb = use.filter(s => base === "W" ? (s.freq === "D" || s.freq === "W") : s.freq !== "Q").length;
+  if (!$("r").dataset.touched) $("r").value = nb >= 12 ? "2" : "1";
   $("run").disabled = !use.length;
 }
-
 /* ================================================================== */
 /* the panel: series x months, with months to nowcast into            */
 /* ================================================================== */
-function buildPanel(list) {
-  let lo = Infinity, hi = -Infinity, lastM = -Infinity;
-  for (const s of list) for (const ym of s.obs.keys()) {
-    lo = Math.min(lo, ym); hi = Math.max(hi, ym); if (s.freq === "M") lastM = Math.max(lastM, ym);
-  }
-  if (!isFinite(lastM)) lastM = hi;
-  const endQ = lastM - (lastM % 3) + 2;                      // the current quarter's third month
-  const end = Math.max(hi - (hi % 3) + 2, endQ + 3);         // one more quarter: the forecast
-  const T = end - lo + 1, m = list.length;
+/* the panel: series x base periods (months, or weeks ending on one weekday),
+   through the end of the period after the current one of the coarsest series */
+function weekEndDay(list) {
+  const count = new Array(7).fill(0);
+  for (const s of list) if (s.freq === "W") for (const k of s.obs.keys()) count[dowOf(k)]++;
+  const best = count.indexOf(Math.max(...count));
+  return count[best] > 0 ? best : 6;                         // Saturday, as weekly claims
+}
+function buildPanel(list, base) {
+  const W = base === "W", E = W ? weekEndDay(list) : null;
+  const weekEnd = dn => dn + ((E - dowOf(dn) + 7) % 7);
+  const lastDayOfMonth = ym => dayOf(yearOf(ym + 1), monthOf(ym + 1), 1) - 1;
+  const lastWeekOfMonth = ym => { let e = weekEnd(lastDayOfMonth(ym)); if (ymOfDay(e - 3) !== ym) e -= 7; return e; };
+  // each series as {unit -> value} at the base frequency (daily averaged; weekly averaged to months in a monthly model)
+  const unitOf = (s, k) => {
+    if (W) return s.freq === "D" || s.freq === "W" ? weekEnd(k) : lastWeekOfMonth(k);
+    return s.freq === "D" ? ymOfDay(k) : s.freq === "W" ? ymOfDay(k - 3) : k;
+  };
+  const aligned = list.map(s => {
+    const sums = new Map(), cnt = new Map();
+    for (const [k, v] of s.obs) { const u = unitOf(s, k); sums.set(u, (sums.get(u) || 0) + v); cnt.set(u, (cnt.get(u) || 0) + 1); }
+    const m = new Map(); for (const [u, v] of sums) m.set(u, v / cnt.get(u)); return m;
+  });
+  const isBase = s => W ? s.freq === "D" || s.freq === "W" : s.freq !== "Q";
+  let lo = Infinity, hi = -Infinity, lastB = -Infinity;
+  aligned.forEach((m, i) => { for (const u of m.keys()) { lo = Math.min(lo, u); hi = Math.max(hi, u); if (isBase(list[i])) lastB = Math.max(lastB, u); } });
+  if (!isFinite(lastB)) lastB = hi;
+  const step = W ? 7 : 1;
+  const monthOfKey = k => W ? ymOfDay(k - 3) : k;
+  const coarse = list.some(s => s.freq === "Q") ? "Q" : (W && list.some(s => s.freq === "M")) ? "M" : base;
+  const pid = k => coarse === "Q" ? Math.floor(monthOfKey(k) / 3) : coarse === "M" ? monthOfKey(k) : k;
+  // the end of the coarsest period holding the last base observation, and of the one after it
+  let endCur = lastB; while (pid(endCur + step) === pid(lastB)) endCur += step;
+  let end = endCur + step; while (pid(end + step) === pid(endCur + step)) end += step;
+  end = Math.max(end, hi);
+  while (pid(end + step) === pid(end)) end += step;
+  const T = Math.round((end - lo) / step) + 1, m = list.length;
+  const key = Array.from({ length: T }, (_, t) => lo + t * step);
   const Y = new Float64Array(m * T).fill(NaN);
-  list.forEach((s, i) => { for (const [ym, v] of s.obs) Y[i * T + (ym - lo)] = v; });
-  return { lo, T, m, Y, names: list.map(s => s.name), q: list.map(s => s.freq === "Q" ? 1 : 0),
-           codes: list.map(s => s.transform), lastM, endQ, end };
+  aligned.forEach((mp, i) => { for (const [u, v] of mp) Y[i * T + Math.round((u - lo) / step)] = v; });
+  const cz = list.map(s => isBase(s) ? (W ? "weekly" : "monthly") : s.freq === "Q" ? "quarterly" : "monthly");
+  const growth = c => c === "pct" || c === "logdiff" || c === "diff";
+  const aggMode = $("agg").value;
+  const aggs = list.map(s => aggMode === "auto" ? (growth(s.transform) ? "mm" : "mean") : aggMode);
+  const P = { base, W, E, lo, step, T, m, Y, key, names: list.map(s => s.name), freqs: list.map(s => isBase(s) ? base : s.freq), cz,
+              codes: list.map(s => s.transform), aggs, q: list.map(s => s.freq === "Q" ? 1 : 0),
+              lastB: Math.round((lastB - lo) / step), endCur: Math.round((endCur - lo) / step), coarse };
+  P.day = key.map(k => W ? k : dayOf(yearOf(k), monthOf(k), 1));
+  P.month = key.map(monthOfKey);
+  P.label = (t, F) => {                                       // the period of frequency F ending at base period t
+    const k = lo + t * step;
+    if (F === "Q") return qLabel(monthOfKey(k));
+    if (F === "M") return ymLabel(monthOfKey(k));
+    return W ? "w/e " + dayLabel(k) : ymLabel(k);
+  };
+  P.iso = t => dayISO(P.day[t]);
+  return P;
 }
 function cozyStrings(a) { return "[" + a.map(x => JSON.stringify(x)).join("; ") + "]"; }
 function cozyCol(a) { return "[" + a.join("; ") + "]"; }
 
 function scriptText(P, o) {
   const now = new Date().toISOString().slice(0, 10);
-  const ti = P.names.indexOf(o.target);
-  const tmonth = P.endQ - P.lo + 1;
   return [
     "% Nowcast script, written by Cozy's nowcast page on " + now + ".",
     "% Data: nowcast_data.csv, saved by the page — one column per series, one row",
-    "% per month; a quarterly series in its quarter's third month.",
+    "% per " + (P.W ? "week (dated by its last day)" : "month") + "; a series observed less often in its period's last " + (P.W ? "week" : "month") + ".",
     "load(\"nowcast\");",
     "let t = readtable(\"nowcast_data.csv\");",
-    "let d = nowcast.panel(t);",
-    "let d = setfield(d, \"quarterly\", " + cozyCol(P.q) + ");",
-    "let d = setfield(d, \"Y\", nowcast.transform(d.Y, " + cozyStrings(P.codes) + ", d.quarterly));",
-    "let f = nowcast.fit(d, {r = " + o.r + ", agg = \"" + o.agg + "\", maxit = " + o.maxit + ", tol = " + o.tol + "});",
-    "% the target, " + o.target + ", in " + qLabel(P.endQ) + " (month " + tmonth + " of the panel, " + ymISO(P.endQ) + ")",
-    "let n = nowcast.nowcast(f, \"" + o.target + "\", " + tmonth + ")",
+    "let d = nowcast.panel(t, {freq = \"" + (P.W ? "weekly" : "monthly") + "\"});",
+    "let d = setfield(d, \"freqs\", " + cozyStrings(P.cz) + ");",
+    "let d = setfield(d, \"Y\", nowcast.transform(d.Y, " + cozyStrings(P.codes) + ", d));",
+    "let f = nowcast.fit(d, {r = " + o.r + ", agg = " + cozyStrings(P.aggs) + ", maxit = " + o.maxit + ", tol = " + o.tol + "});",
+    "nowcast.report(f);",
+    "% the target, " + o.target + ", in " + P.label(o.tidx, o.tfreq) + " (period " + (o.tidx + 1) + " of the panel, " + P.iso(o.tidx) + ")",
+    "let n = nowcast.nowcast(f, \"" + o.target + "\", " + (o.tidx + 1) + ")",
+    "% the target period by period at every frequency the panel has: nowcast.path(f, \"" + o.target + "\", \"" + (P.W ? "weekly" : "monthly") + "\")",
     ""].join("\n");
 }
 function cleanCSV(P) {
   const lines = ["date," + P.names.join(",")];
   for (let t = 0; t < P.T; t++) {
-    const row = [ymISO(P.lo + t)];
+    const row = [P.iso(t)];
     for (let i = 0; i < P.m; i++) { const v = P.Y[i * P.T + t]; row.push(fin(v) ? String(v) : ""); }
     lines.push(row.join(","));
   }
   return lines.join("\n") + "\n";
 }
-
 /* ================================================================== */
 /* estimation                                                         */
 /* ================================================================== */
@@ -720,46 +836,73 @@ function options() {
   return { target: $("target").value, r: +$("r").value, agg: $("agg").value, maxit,
            tol: fin(tol) && tol >= 0 ? tol : 1e-5 };
 }
+const FREQ_CZ = { W: "weekly", M: "monthly", Q: "quarterly" };
+/* the frequencies the target can be tracked at: its own and every finer one down to the base */
+function trackFreqs(P, tf) { return ["W", "M", "Q"].filter(F => FREQRANK[F] >= FREQRANK[P.base] && FREQRANK[F] <= FREQRANK[tf]); }
 async function estimate() {
   const list = S.series.filter(s => s.on && s.freq !== "A");
   if (!list.length) return;
   const o = options();
-  const P = buildPanel(list);
-  message("modelmsg", "", "");
+  const P = buildPanel(list, $("basewrap").classList.contains("hidden") ? "M" : $("base").value);
+  const ti = P.names.indexOf(o.target);
+  o.tfreq = P.freqs[ti];
+  message("modelmsg", "", ""); $("emreport").innerHTML = "";
   $("run").disabled = true; $("prog").classList.remove("hidden");
   const bar = $("prog").firstElementChild; bar.style.width = "0%";
   setEngine("estimating…", "busy");
   const t0 = performance.now();
   try {
     await Engine.set("nc_Yraw", P.Y, P.m, P.T);
-    await Engine.run("let nc_d = nowcast.data(nc_Yraw, {names = " + cozyStrings(P.names) + ", quarterly = " + cozyCol(P.q) + "});" +
-                     "let nc_d = setfield(nc_d, \"Y\", nowcast.transform(nc_d.Y, " + cozyStrings(P.codes) + ", nc_d.quarterly));");
-    const base = "{r = " + o.r + ", agg = \"" + o.agg + "\", tol = " + o.tol;
-    let done = 0, conv = false, ll = [];
+    await Engine.set("nc_days", P.day, P.T, 1);
+    await Engine.run("let nc_d = nowcast.data(nc_Yraw, {names = " + cozyStrings(P.names) + ", freq = \"" + (P.W ? "weekly" : "monthly") +
+                     "\", freqs = " + cozyStrings(P.cz) + ", dates = date(1970, 1, 1) + nc_days});" +
+                     "let nc_d = setfield(nc_d, \"Y\", nowcast.transform(nc_d.Y, " + cozyStrings(P.codes) + ", nc_d));");
+    const base = "{r = " + o.r + ", agg = " + cozyStrings(P.aggs) + ", tol = " + o.tol;
+    let done = 0, conv = false, failed = false, ll = [];
     const CH = 10;
-    while (done < o.maxit && !conv) {
+    while (done < o.maxit && !conv && !failed) {
       const k = Math.min(CH, o.maxit - done);
       const resume = done ? ", params = nc_f.params, P0 = nc_f.P0, last = " + ll[ll.length - 1].toPrecision(17) : "";
-      await Engine.run("let nc_f = nowcast.fit(nc_d, " + base + ", maxit = " + k + resume + "}); " +
-                       "let nc_ll = nc_f.loglik; let nc_cv = nc_f.converged;");
-      const g = await Engine.get("nc_ll", "nc_cv");
-      ll = ll.concat(Array.from(g.nc_ll.data)); conv = g.nc_cv.data[0] === 1; done += g.nc_ll.data.length;
-      bar.style.width = (conv ? 100 : Math.min(98, 100 * done / o.maxit)) + "%";
-      $("fitstatus").textContent = "EM iteration " + done + " · log-likelihood " + ll[ll.length - 1].toFixed(2);
+      await Engine.run("let nc_f = nowcast.fit(nc_d, " + base + ", maxit = " + k + ", offset = " + done + resume + "}); " +
+                       "let nc_ll = nc_f.loglik; let nc_sc = if nc_f.status == \"failed\" then 2 elseif nc_f.converged then 1 else 0 end;");
+      const g = await Engine.get("nc_ll", "nc_sc");
+      ll = ll.concat(Array.from(g.nc_ll.data)); done += g.nc_ll.data.length;
+      conv = g.nc_sc.data[0] === 1; failed = g.nc_sc.data[0] === 2;
+      if (failed && !g.nc_ll.data.length) break;
+      bar.style.width = (conv || failed ? 100 : Math.min(98, 100 * done / o.maxit)) + "%";
+      $("fitstatus").textContent = "EM iteration " + done + (ll.length ? " · log-likelihood " + ll[ll.length - 1].toFixed(2) : "");
     }
-    await Engine.run("let nc_T = size(nc_f.Y)[2]; let nc_one = ones(1, nc_T);" +
-      "let nc_yv = nc_f.mu * nc_one + (nc_f.sd * nc_one) .* nc_f.state.yhat;" +
-      "let nc_ys = (nc_f.sd * nc_one) .* nc_f.state.ysd; let nc_yd = nc_f.Y;" +
-      "let nc_fx = nc_f.state.f; let nc_fs = nc_f.state.fsd;");
-    const R = await Engine.get("nc_yv", "nc_ys", "nc_yd", "nc_fx", "nc_fs");
+    // how it ended: the package's own words, and its warnings
+    const txt = await Engine.run("print(\"{}\", nc_f.message); for nc_k = 1 : numel(nc_f.warnings) do print(\"{}\", nc_f.warnings[nc_k]) end;");
+    const lines = txt.split("\n").map(x => x.trim());
+    const pkgMsg = lines[0] || "";
+    const warnings = lines.slice(1).filter(Boolean);
+    const status = failed ? "failed" : conv ? "converged" : "maxit";
+    // the target: the period holding the last data, its path at its own frequency and every finer one
+    const tf = o.tfreq;
+    const curEnd = (() => { let t = P.lastB; const id = x => tf === "Q" ? Math.floor(P.month[x] / 3) : tf === "M" ? P.month[x] : x;
+      while (t + 1 < P.T && id(t + 1) === id(P.lastB)) t++; return t; })();
+    o.tidx = curEnd;
+    const tq = cozyStrings([o.target]).slice(1, -1);
+    await Engine.run("let nc_now = nowcast.nowcast(nc_f, " + tq + ", " + (curEnd + 1) + "); let nc_nv = [nc_now.value, nc_now.sd];");
+    const paths = {};
+    for (const F of trackFreqs(P, tf)) {
+      await Engine.run("let nc_p = nowcast.path(nc_f, " + tq + ", \"" + FREQ_CZ[F] + "\"); let nc_pt = nc_p.t; let nc_pv = nc_p.value; let nc_ps = nc_p.sd; let nc_pa = nc_p.actual;");
+      const g = await Engine.get("nc_pt", "nc_pv", "nc_ps", "nc_pa");
+      paths[F] = { t: Array.from(g.nc_pt.data, x => x - 1), v: Array.from(g.nc_pv.data), sd: Array.from(g.nc_ps.data), a: Array.from(g.nc_pa.data) };
+    }
+    await Engine.run("let nc_fx = nc_f.state.f; let nc_fs = nc_f.state.fsd;");
+    const R = await Engine.get("nc_nv", "nc_fx", "nc_fs");
     const secs = (performance.now() - t0) / 1000;
-    S.fit = { P, o, ll, conv, iters: done, secs, yv: R.nc_yv, ys: R.nc_ys, yd: R.nc_yd, fx: R.nc_fx, fs: R.nc_fs };
+    S.fit = { P, o, ll, conv, failed, status, pkgMsg, warnings, iters: done, secs, paths,
+              now: { value: R.nc_nv.data[0], sd: R.nc_nv.data[1], t: curEnd }, fx: R.nc_fx, fs: R.nc_fs };
     S.lastScript = scriptText(P, o);
-    $("fitstatus").textContent = (conv ? "converged" : "stopped at the iteration limit") + " after " + done +
-      " iterations · " + (secs < 1 ? Math.round(secs * 1000) + " ms" : secs.toFixed(1) + " s");
+    $("fitstatus").textContent = { converged: "converged", maxit: "stopped at the iteration limit", failed: "EM failed" }[status] +
+      " after " + done + " iterations · " + (secs < 1 ? Math.round(secs * 1000) + " ms" : secs.toFixed(1) + " s");
     bar.style.width = "100%";
     renderResults();
-    if (!conv) message("modelmsg", "warn", "EM stopped at " + o.maxit + " iterations before reaching the tolerance; the estimates are usable, but raise the limit for a converged fit.");
+    if (status === "maxit") message("modelmsg", "warn", "EM stopped at " + o.maxit + " iterations before reaching the tolerance; the estimates are usable, but raise the limit for a converged fit. See the convergence report below.");
+    if (status === "failed") message("modelmsg", "err", "EM failed: " + pkgMsg + ". The results below use the last good estimates — see the convergence report.");
   } catch (e) {
     message("modelmsg", "err", e.message);
     $("fitstatus").textContent = "";
@@ -768,7 +911,6 @@ async function estimate() {
     setTimeout(() => $("prog").classList.add("hidden"), 800);
   }
 }
-
 /* ================================================================== */
 /* charts (inline SVG)                                                */
 /* ================================================================== */
@@ -815,9 +957,9 @@ function timeChart(box, xs, layers, opt = {}) {
   const ticks = [];
   if (opt.index) niceTicks(x0, x1, 6).forEach(v => { if (Number.isInteger(v)) ticks.push([v, String(v)]); });
   else {
-    const years = []; for (let ym = x0; ym <= x1; ym++) if (monthOf(ym) === 1) years.push(ym);
+    const years = (opt.years || []).filter(([x]) => x >= x0 && x <= x1);
     const every = Math.max(1, Math.ceil(years.length / (W < 700 ? 6 : 10)));
-    years.forEach((ym, k) => { if (!(k % every)) ticks.push([ym, String(yearOf(ym))]); });
+    years.forEach((y, k) => { if (!(k % every)) ticks.push(y); });
   }
   for (const [v, lab] of ticks) {
     svg.append(svgEl("line", { x1: X(v), x2: X(v), y1: H - B, y2: H - B + 4, class: "axisline" }));
@@ -858,7 +1000,7 @@ function timeChart(box, xs, layers, opt = {}) {
       `<span style="color:${l.color}">●</span> ${esc(l.name)}: <b>${fmt(l.y[best])}</b>` + (l.tipExtra ? l.tipExtra(best) : ""));
     if (!lines.length) { tip.style.display = "none"; guide.setAttribute("visibility", "hidden"); return; }
     guide.setAttribute("x1", X(xs[best])); guide.setAttribute("x2", X(xs[best])); guide.setAttribute("visibility", "visible");
-    const head = opt.index ? (opt.indexName || "") + " " + xs[best] : opt.quarterly ? qLabel(xs[best]) : ymLabel(xs[best]);
+    const head = opt.index ? (opt.indexName || "") + " " + xs[best] : opt.xlabel ? opt.xlabel(xs[best]) : String(xs[best]);
     tip.innerHTML = `<div style="color:var(--muted)">${head}</div>` + lines.join("<br>");
     tip.style.display = "block";
     const left = (X(xs[best]) / W) * r.width;
@@ -870,31 +1012,34 @@ function timeChart(box, xs, layers, opt = {}) {
 
 function coverChart(box, P) {
   box.innerHTML = "";
-  const show = Math.min(24, P.T), first = P.T - show;
+  const stop = Math.min(P.T, P.endCur + 1);                 // through the current period of the coarsest series
+  const show = Math.min(P.W ? 26 : 24, stop), first = stop - show;
   const W = Math.max(340, Math.min(520, box.clientWidth || 520)), rows = P.m, nameW = Math.min(130, W * 0.3), cw = (W - nameW) / show, ch = Math.min(18, 320 / Math.max(rows, 1));
   const H = rows * ch + 24;
   const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "data coverage" });
   const stride = Math.max(1, Math.ceil(13 / ch)), inset = ch >= 6 ? 1 : 0;
+  const ends = (t, F) => F === P.base || t + 1 >= P.T ? true : F === "Q" ? Math.floor(P.month[t + 1] / 3) !== Math.floor(P.month[t] / 3) : P.month[t + 1] !== P.month[t];
   for (let i = 0; i < rows; i++) {
     const y = i * ch;
     if (i % stride === 0) { const t = svgEl("text", { x: nameW - 6, y: y + Math.max(ch, 10) * 0.75, "text-anchor": "end" }); t.textContent = P.names[i]; svg.append(t); }
     for (let k = 0; k < show; k++) {
-      const t = first + k, ym = P.lo + t, v = P.Y[i * P.T + t];
-      const due = P.q[i] ? isQEnd(ym) : true;
-      if (!due) continue;
-      const future = ym > S.fit.P.lastM;
-      svg.append(svgEl("rect", { x: nameW + k * cw + 1, y: y + inset, width: cw - 2, height: ch - 2 * inset, rx: inset ? 2 : 0,
+      const t = first + k, v = P.Y[i * P.T + t];
+      if (!ends(t, P.freqs[i])) continue;
+      const future = t > P.lastB;
+      svg.append(svgEl("rect", { x: nameW + k * cw + 1, y: y + inset, width: Math.max(1, cw - 2), height: ch - 2 * inset, rx: inset ? 2 : 0,
         fill: fin(v) ? cssVar("--have") : cssVar(future ? "--future" : "--miss"),
         stroke: fin(v) || !inset ? "none" : cssVar("--grid") }));
     }
   }
   for (let k = 0; k < show; k++) {
-    const ym = P.lo + first + k;
-    if (monthOf(ym) === 1 || k === 0) { const t = svgEl("text", { x: nameW + k * cw + 1, y: H - 6 }); t.textContent = MONTHS[monthOf(ym) - 1] + " " + String(yearOf(ym)).slice(2); svg.append(t); }
+    const t = first + k, mo = P.month[t];
+    const newMonth = k === 0 || P.month[t - 1] !== mo;
+    if (P.W ? newMonth && (monthOf(mo) % 3 === 1 || k === 0) : (monthOf(mo) === 1 || k === 0)) {
+      const tx = svgEl("text", { x: nameW + k * cw + 1, y: H - 6 }); tx.textContent = MONTHS[monthOf(mo) - 1] + " " + String(yearOf(mo)).slice(2); svg.append(tx);
+    }
   }
   box.append(svg);
 }
-
 function waterfall(box, items, start, end) {
   box.innerHTML = "";
   const rows = [{ label: "earlier nowcast", kind: "total", a: 0, b: start }];
@@ -935,73 +1080,115 @@ function waterfall(box, items, start, end) {
 /* ================================================================== */
 /* results                                                            */
 /* ================================================================== */
+
 function row(M, i) { return Array.from(M.data.subarray(i * M.cols, (i + 1) * M.cols)); }
+function yearTicks(P) {
+  const out = []; for (let t = 0; t < P.T; t++) if (monthOf(P.month[t]) === 1 && (t === 0 || P.month[t - 1] !== P.month[t])) out.push([t, String(yearOf(P.month[t]))]);
+  return out;
+}
+const PERIODWORD = { W: "week", M: "month", Q: "quarter" };
 function renderResults() {
   const F = S.fit, P = F.P, o = F.o;
   ["s-results", "s-news", "s-export"].forEach(id => $(id).classList.remove("hidden"));
-  const ti = P.names.indexOf(o.target), tq = P.q[ti] === 1;
-  const ser = S.series.find(s => s.name === o.target);
+  const ti = P.names.indexOf(o.target), tf = o.tfreq;
   const unit = TLABEL[P.codes[ti]];
-  const yv = row(F.yv, ti), ys = row(F.ys, ti), yd = row(F.yd, ti);
-  const xs = Array.from({ length: P.T }, (_, t) => P.lo + t);
-  $("asof").textContent = "Data through " + ymLabel(P.lastM) + " · " + P.m + " series · " + o.r + " factor" + (o.r > 1 ? "s" : "") +
-    " · target " + o.target + (unit ? " (" + unit + ")" : "");
-  // the quarters (or months) not yet published, up to the forecast
-  let lastPub = -1; yd.forEach((v, t) => { if (fin(v)) lastPub = t; });
-  const step = tq ? 3 : 1;
-  let firstOut = lastPub >= 0 ? lastPub + step : 0;
-  while (tq && firstOut < P.T && !isQEnd(P.lo + firstOut)) firstOut++;
+  $("asof").textContent = "Data through " + P.label(P.lastB, P.base) + " · " + P.m + " series · " + (P.W ? "weekly" : "monthly") + " model · " +
+    o.r + " factor" + (o.r > 1 ? "s" : "") + " · target " + o.target + (unit ? " (" + unit + ")" : "");
+  // the target's periods not yet published, up to the forecast
+  const p = F.paths[tf];
+  let lastPub = -1; p.a.forEach((v, k) => { if (fin(v)) lastPub = k; });
   const cards = $("cards"); cards.innerHTML = "";
-  const z90 = 1.6449, z68 = 0.9945;
-  for (let t = firstOut; t < P.T; t += step) {
-    const ym = P.lo + t;
-    if (tq && !isQEnd(ym)) continue;
-    const kind = ym < P.endQ - (tq ? 2 : 0) ? "backcast" : (ym <= P.endQ ? "nowcast" : "forecast");
-    const kinds = { backcast: "Backcast — published soon", nowcast: "Nowcast — the current " + (tq ? "quarter" : "month"), forecast: "Forecast — next " + (tq ? "quarter" : "month") };
+  const z90 = 1.6449;
+  for (let k = lastPub + 1; k < p.t.length; k++) {
+    const t = p.t[k];
+    const kind = t < o.tidx ? "backcast" : t === o.tidx ? "nowcast" : "forecast";
+    const w = PERIODWORD[tf] || "period";
+    const kinds = { backcast: "Backcast — published soon", nowcast: "Nowcast — the current " + w, forecast: "Forecast — the next " + w };
+    const v = kind === "nowcast" ? F.now.value : p.v[k], sd = kind === "nowcast" ? F.now.sd : p.sd[k];
     cards.append(el("div", { class: "nc" + (kind === "nowcast" ? " main" : "") },
       el("div", { class: "k" }, kinds[kind]),
-      el("div", { class: "q" }, (tq ? qLabel(ym) : ymLabel(ym)) + " · " + o.target),
-      el("div", { class: "v" }, fmt(yv[t], 2)),
-      el("div", { class: "ci" }, "90% band " + fmt(yv[t] - z90 * ys[t], 2) + " to " + fmt(yv[t] + z90 * ys[t], 2) + " · sd " + fmt(ys[t], 2)),
+      el("div", { class: "q" }, P.label(t, tf) + " · " + o.target),
+      el("div", { class: "v" }, fmt(v, 2)),
+      el("div", { class: "ci" }, "90% band " + fmt(v - z90 * sd, 2) + " to " + fmt(v + z90 * sd, 2) + " · sd " + fmt(sd, 2)),
       unit ? el("div", { class: "act" }, unit) : null));
   }
-  if (!cards.children.length) cards.append(el("div", { class: "msg info" }, "Every period of the target is already published; add months beyond the data to forecast."));
+  if (!cards.children.length) cards.append(el("div", { class: "msg info" }, "Every period of the target is already published."));
+  // the trackers: the target at every finer frequency
+  const finer = trackFreqs(P, tf).filter(x => x !== tf);
+  const tsel = $("trackfreq"); tsel.innerHTML = "";
+  finer.forEach(x => tsel.append(el("option", { value: x }, FREQNAME[x])));
+  $("trackwrap").classList.toggle("hidden", !finer.length);
+  if (finer.length) tsel.value = finer[0];
+  const ag = P.aggs[ti];
+  $("annwrap").classList.toggle("hidden", ag !== "mm");
+  renderReport();
   drawCharts();
   $("script").textContent = S.lastScript;
   S.news = null; $("newsout").classList.add("hidden"); message("newsmsg", "", "");
 }
+function renderReport() {
+  const F = S.fit, box = $("emreport"); box.innerHTML = "";
+  const cls = { converged: "info", maxit: "warn", failed: "err" }[F.status];
+  const head = { converged: "EM converged", maxit: "EM did not converge", failed: "EM FAILED" }[F.status];
+  const msg = F.status === "failed" ? F.pkgMsg :
+    F.status === "converged" ? "after " + F.iters + " iterations: the log-likelihood changed by less than the tolerance (" + F.o.tol + ")" :
+    "stopped at the limit of " + F.o.maxit + " iterations before the log-likelihood settled — raise the limit, or loosen the tolerance";
+  const d = el("div", { class: "msg " + cls, id: "emstatus", "data-status": F.status }, el("strong", {}, head), " — " + msg + ".");
+  box.append(d);
+  if (F.ll.length) box.append(el("div", { class: "msg info" }, "Log-likelihood " + fmt(F.ll[0], 2) + " at the start, " + fmt(F.ll[F.ll.length - 1], 2) + " at the end."));
+  if (F.warnings.length) for (const w of F.warnings) box.append(el("div", { class: "msg warn" }, "Warning: " + w + "."));
+  else if (F.status !== "failed") box.append(el("div", { class: "msg info" }, "No warnings: the factors are stationary and no series is fitted exactly."));
+  if (F.status === "failed") box.append(el("div", { class: "msg info" }, "Try fewer factors, fewer series, different transformations (non-stationary levels are a common cause), or check the data for outliers."));
+}
 function drawCharts() {
   const F = S.fit; if (!F) return;
   const P = F.P, o = F.o;
-  const ti = P.names.indexOf(o.target), tq = P.q[ti] === 1;
+  const ti = P.names.indexOf(o.target), tf = o.tfreq;
   const unit = TLABEL[P.codes[ti]];
-  const yv = row(F.yv, ti), ys = row(F.ys, ti), yd = row(F.yd, ti);
-  const xs = Array.from({ length: P.T }, (_, t) => P.lo + t);
   const z90 = 1.6449, z68 = 0.9945;
-  // fan chart over the last eight years
-  const from = Math.max(0, P.T - 96);
-  const idx = []; for (let t = from; t < P.T; t++) if (!tq || isQEnd(xs[t])) idx.push(t);
-  const xsZ = idx.map(t => xs[t]);
-  const sl = a => idx.map(t => a[t]);
-  const est = sl(yv), sd = sl(ys);
+  const years = yearTicks(P);
+  const xl = F_ => t => P.label(t, F_);
+  // fan chart at the target's own frequency, the last eight years
+  const p = F.paths[tf];
+  const from = P.T - (P.W ? 8 * 52 : 96);
+  const idx = p.t.map((t, k) => k).filter(k => p.t[k] >= from);
+  const xs = idx.map(k => p.t[k]), est = idx.map(k => p.v[k]), sd = idx.map(k => p.sd[k]);
   const band = z => [est.map((v, i) => v - z * sd[i]), est.map((v, i) => v + z * sd[i])];
   const b90 = band(z90), b68 = band(z68);
   $("fan-title").textContent = o.target + (unit ? " — " + unit : "");
-  timeChart($("fan"), xsZ, [
+  timeChart($("fan"), xs, [
     { y: est, color: cssVar("--series-1"), width: 2, name: "model", bands: [[b90[0], b90[1], cssVar("--band-2")], [b68[0], b68[1], cssVar("--band")]],
       tipExtra: i => ` <span style="color:var(--muted)">± ${fmt(z90 * sd[i], 2)}</span>` },
-    { y: sl(yd), color: cssVar("--series-2"), dots: true, name: "published" }
-  ], { zero: true, quarterly: tq, markFrom: P.lastM + 1, markText: "beyond the data", label: "nowcast fan chart" });
+    { y: idx.map(k => p.a[k]), color: cssVar("--series-2"), dots: true, name: "published" }
+  ], { zero: true, years, xlabel: xl(tf), markFrom: P.lastB + 1, markText: "beyond the data", label: "nowcast fan chart" });
   $("fan-legend").innerHTML = `<span style="--c:var(--series-1)">model estimate</span><span class="box" style="--c:var(--band)">68% / 90% bands</span><span class="dot" style="--c:var(--series-2)">published</span>`;
+  // the tracker: the target at a finer frequency
+  if (!$("trackwrap").classList.contains("hidden")) {
+    const Fq = $("trackfreq").value, q = F.paths[Fq];
+    const ann = !$("annwrap").classList.contains("hidden") && $("annual").checked;
+    const per = { W: 52, M: 12, Q: 4 };
+    const scale = ann ? per[Fq] : 1;
+    const from2 = P.T - (P.W ? 3 * 52 : 60);
+    const k2 = q.t.map((t, k) => k).filter(k => q.t[k] >= from2);
+    const xs2 = k2.map(k => q.t[k]), e2 = k2.map(k => scale * q.v[k]), s2 = k2.map(k => scale * q.sd[k]);
+    const ag = P.aggs[ti];
+    $("track-title").textContent = o.target + ", " + FREQNAME[Fq] + (ag === "mm" ? (ann ? " — growth, annualized (× " + per[Fq] + ")" : " — growth over the " + PERIODWORD[Fq]) : " — " + FREQNAME[Fq] + " reading, in the target's units");
+    timeChart($("tracker"), xs2, [
+      { y: e2, color: cssVar("--series-1"), width: 1.6, name: o.target + " (" + FREQNAME[Fq] + ")",
+        bands: [[e2.map((v, i) => v - z90 * s2[i]), e2.map((v, i) => v + z90 * s2[i]), cssVar("--band-2")],
+                [e2.map((v, i) => v - z68 * s2[i]), e2.map((v, i) => v + z68 * s2[i]), cssVar("--band")]] }
+    ], { zero: true, years, xlabel: xl(Fq), markFrom: P.lastB + 1, markText: "beyond the data", label: "tracker" });
+  }
   // the first factor
   const f1 = row(F.fx, 0).slice(1), s1 = row(F.fs, 0).slice(1);
-  timeChart($("factor"), xs, [{ y: f1, color: cssVar("--series-3"), name: "factor 1",
+  const xsF = f1.map((_, t) => t);
+  timeChart($("factor"), xsF, [{ y: f1, color: cssVar("--series-3"), name: "factor 1",
     bands: [[f1.map((v, i) => v - z90 * s1[i]), f1.map((v, i) => v + z90 * s1[i]), cssVar("--band-2")]] }],
-    { zero: true, width: 520, height: 260, markFrom: P.lastM + 1, label: "common factor" });
+    { zero: true, width: 520, height: 260, years, xlabel: xl(P.base), markFrom: P.lastB + 1, label: "common factor" });
   coverChart($("cover"), P);
-  timeChart($("llchart"), F.ll.map((_, i) => i + 1), [{ y: F.ll, color: cssVar("--series-1"), name: "log-likelihood" }],
+  timeChart($("llchart"), F.ll.map((_, i) => i + 1), [{ y: F.ll, color: cssVar(F.status === "failed" ? "--neg" : "--series-1"), name: "log-likelihood" }],
     { height: 150, label: "EM log-likelihood", index: true, indexName: "iteration" });
-  $("emsub").textContent = "Log-likelihood by EM iteration: " + F.iters + " iterations, " + (F.conv ? "converged" : "not converged") +
+  $("emsub").textContent = "Log-likelihood by EM iteration: " + F.iters + " iterations, " + { converged: "converged", maxit: "not converged", failed: "failed" }[F.status] +
     ", " + (F.secs < 1 ? Math.round(F.secs * 1000) + " ms" : F.secs.toFixed(1) + " s") + " in your browser.";
 }
 let lastW = 0;
@@ -1016,29 +1203,33 @@ window.addEventListener("resize", () => {
 async function oldVintagePanel() {
   const P = S.fit.P;
   const Yo = Float64Array.from(P.Y);
+  const unit = P.W ? "week" : "month";
   if ($("vintage").value === "hold") {
     const h = +$("hold").value;
-    for (let i = 0; i < P.m; i++) {                  // each series' edge moved back h months
+    for (let i = 0; i < P.m; i++) {                  // each series' edge moved back h base periods
       let last = -1;
       for (let t = 0; t < P.T; t++) if (fin(Yo[i * P.T + t])) last = t;
       for (let t = Math.max(0, last - h + 1); t <= last; t++) Yo[i * P.T + t] = NaN;
     }
-    return { Y: Yo, label: "the same data with each series' latest " + h + " month" + (h > 1 ? "s" : "") + " held back" };
+    return { Y: Yo, label: "the same data with each series' latest " + h + " " + unit + (h > 1 ? "s" : "") + " held back" };
   }
   const files = $("oldfile").files;
   if (!files.length) throw new Error("Choose the earlier file first.");
   const old = [];
   for (const f of files) old.push(...tableToSeries(await readFile(f), f.name));
-  const byName = new Map();
-  old.forEach((s, j) => { s.name = cozyName(s.raw, j); byName.set(s.name, s); });
-  const Y = new Float64Array(P.m * P.T).fill(NaN);
-  let matched = 0;
-  P.names.forEach((n, i) => {
-    const s = byName.get(n); if (!s) return; matched++;
-    const obs = P.q[i] && s.freq !== "Q" ? new Map([...s.obs].map(([ym, v]) => [ym - (ym % 3) + 2, v])) : s.obs;
-    for (const [ym, v] of obs) { const t = ym - P.lo; if (t >= 0 && t < P.T) Y[i * P.T + t] = v; }
-  });
+  old.forEach((s, j) => { s.name = cozyName(s.raw, j); });
+  const cur = S.series.filter(s => s.on && s.freq !== "A");
+  const list = P.names.map(n => { const o = old.find(s => s.name === n); const c = cur.find(s => s.name === n);
+    return o ? Object.assign({}, o, { freq: c.freq === "Q" || o.freq === "Q" ? c.freq : o.freq, transform: c.transform }) : null; });
+  const matched = list.filter(Boolean).length;
   if (!matched) throw new Error("None of the earlier file's series match the current ones by name.");
+  // the earlier data on the current panel's periods
+  const Pold = buildPanel(list.map((s, i) => s || Object.assign({}, cur.find(c => c.name === P.names[i]), { obs: new Map() })), P.base);
+  const Y = new Float64Array(P.m * P.T).fill(NaN);
+  for (let i = 0; i < P.m; i++) for (let t = 0; t < Pold.T; t++) {
+    const key = Pold.key[t], tt = Math.round((key - P.lo) / P.step);
+    if (tt >= 0 && tt < P.T) Y[i * P.T + tt] = Pold.Y[i * Pold.T + t];
+  }
   // a value the earlier file had that the current one lacks cannot be a release: keep the current blank
   for (let k = 0; k < Y.length; k++) if (fin(Y[k]) && !fin(P.Y[k])) Y[k] = NaN;
   return { Y, label: files[0].name + (matched < P.m ? " (" + matched + " of " + P.m + " series matched)" : "") };
@@ -1051,9 +1242,9 @@ async function runNews() {
   try {
     const { Y, label } = await oldVintagePanel();
     const P = F.P, o = F.o;
-    const tmonth = P.endQ - P.lo + 1;
+    const tmonth = o.tidx + 1;
     await Engine.set("nc_Yold", Y, P.m, P.T);
-    await Engine.run("let nc_fo = nowcast.update(nc_f, nowcast.transform(nc_Yold, " + cozyStrings(P.codes) + ", nc_d.quarterly));" +
+    await Engine.run("let nc_fo = nowcast.update(nc_f, nowcast.transform(nc_Yold, " + cozyStrings(P.codes) + ", nc_d));" +
       "let nc_n = nowcast.news(nc_fo, nc_d.Y, \"" + o.target + "\", " + tmonth + ");" +
       "let nc_nn = nc_n.news; let nc_nr = nc_n.revisions; let nc_su = nc_n.surprise; let nc_on = [nc_n.old, nc_n.new];");
     const R = await Engine.get("nc_nn", "nc_nr", "nc_su", "nc_on");
@@ -1068,7 +1259,7 @@ async function runNews() {
     if (rest.length) bars.push({ label: rest.length + " other series", value: rest.reduce((a, it) => a + it.value + it.rev, 0) });
     $("newsout").classList.remove("hidden");
     message("newsmsg", "info", "Earlier vintage: " + label + ".");
-    $("wf-title").textContent = o.target + ", " + qLabel(P.endQ) + ": " + fmt(oldv) + " → " + fmt(newv) +
+    $("wf-title").textContent = o.target + ", " + P.label(o.tidx, o.tfreq) + ": " + fmt(oldv) + " → " + fmt(newv) +
       " (" + (newv - oldv >= 0 ? "+" : "") + fmt(newv - oldv) + ")";
     S.news = { oldv, newv, items, bars };
     drawWaterfall();
@@ -1096,24 +1287,3115 @@ async function runNews() {
 /* exports                                                            */
 /* ================================================================== */
 function resultsCSV() {
-  const F = S.fit, P = F.P;
+  const F = S.fit, P = F.P, o = F.o;
   const head = ["date"];
-  P.names.forEach(n => head.push(n, n + "_model", n + "_sd"));
+  const fq = Object.keys(F.paths);
+  fq.forEach(x => head.push(o.target + "_" + FREQNAME[x], o.target + "_" + FREQNAME[x] + "_sd", o.target + "_" + FREQNAME[x] + "_published"));
   const lines = [head.join(",")];
+  const at = fq.map(x => { const m = new Map(); F.paths[x].t.forEach((t, k) => m.set(t, k)); return m; });
   for (let t = 0; t < P.T; t++) {
-    const r = [ymISO(P.lo + t)];
-    for (let i = 0; i < P.m; i++) {
-      const g = M => { const v = M.data[i * M.cols + t]; return fin(v) ? String(v) : ""; };
-      r.push(g(F.yd), g(F.yv), g(F.ys));
-    }
+    const r = [P.iso(t)];
+    fq.forEach((x, j) => { const k = at[j].get(t), p = F.paths[x];
+      const g = a => k == null || !fin(a[k]) ? "" : String(a[k]); r.push(g(p.v), g(p.sd), g(p.a)); });
     lines.push(r.join(","));
   }
   return lines.join("\n") + "\n";
 }
-
 /* ================================================================== */
 /* wiring                                                             */
 /* ================================================================== */
+/* EXAMPLES-BEGIN (tools/gen_nowcast_examples.py) */
+const EXAMPLE_FILES = {
+  weekly: [{ name: "markets_daily.csv", csv: `date,stock_index,credit_spread
+2017-01-02,2291.34,146.3
+2017-01-03,2303.15,148.3
+2017-01-04,2307.75,149.8
+2017-01-05,2358.00,145.4
+2017-01-06,2363.46,145.8
+2017-01-09,2358.65,145.9
+2017-01-10,2365.25,143.3
+2017-01-11,2390.87,140.0
+2017-01-12,2387.58,136.8
+2017-01-13,2403.11,137.3
+2017-01-16,2393.72,130.7
+2017-01-17,2401.16,123.8
+2017-01-18,2371.44,119.8
+2017-01-19,2380.01,113.7
+2017-01-20,2451.25,112.7
+2017-01-23,2403.93,114.3
+2017-01-24,2386.18,114.5
+2017-01-25,2380.81,116.0
+2017-01-26,2361.28,115.7
+2017-01-27,2377.81,114.4
+2017-01-30,2341.73,116.2
+2017-01-31,2338.31,119.1
+2017-02-01,2332.59,123.1
+2017-02-02,2330.50,126.8
+2017-02-03,2366.23,131.6
+2017-02-06,2357.78,135.1
+2017-02-07,2352.73,136.6
+2017-02-08,2392.64,138.3
+2017-02-09,2391.05,137.0
+2017-02-10,2413.69,136.7
+2017-02-13,2386.44,142.2
+2017-02-14,2354.98,146.3
+2017-02-15,2349.05,144.3
+2017-02-16,2341.10,146.8
+2017-02-17,2395.51,152.4
+2017-02-20,2406.91,155.4
+2017-02-21,2432.03,157.3
+2017-02-22,2435.72,155.8
+2017-02-23,2429.72,151.2
+2017-02-24,2431.45,155.1
+2017-02-27,2464.08,156.0
+2017-02-28,2459.61,156.7
+2017-03-01,2447.44,158.9
+2017-03-02,2423.55,163.1
+2017-03-03,2409.89,163.2
+2017-03-06,2469.19,166.3
+2017-03-07,2489.90,167.5
+2017-03-08,2506.70,162.9
+2017-03-09,2494.06,164.6
+2017-03-10,2493.28,168.8
+2017-03-13,2504.57,173.4
+2017-03-14,2514.59,174.0
+2017-03-15,2513.94,177.9
+2017-03-16,2529.11,178.3
+2017-03-17,2536.71,175.7
+2017-03-20,2514.66,176.6
+2017-03-21,2521.37,175.5
+2017-03-22,2491.81,172.9
+2017-03-23,2482.95,173.5
+2017-03-24,2527.52,171.9
+2017-03-27,2533.23,173.7
+2017-03-28,2514.51,176.8
+2017-03-29,2489.08,176.1
+2017-03-30,2477.60,176.2
+2017-03-31,2451.67,179.2
+2017-04-03,2445.34,173.6
+2017-04-04,2416.46,173.3
+2017-04-05,2417.50,171.7
+2017-04-06,2385.62,173.3
+2017-04-07,2421.09,169.6
+2017-04-10,2452.90,170.1
+2017-04-11,2462.25,171.2
+2017-04-12,2463.57,167.6
+2017-04-13,2486.13,171.7
+2017-04-14,2504.37,172.1
+2017-04-17,2476.32,166.8
+2017-04-18,2420.98,163.6
+2017-04-19,2402.12,162.2
+2017-04-20,2405.54,156.6
+2017-04-21,2401.55,154.1
+2017-04-24,2414.50,156.5
+2017-04-25,2433.23,158.0
+2017-04-26,2468.23,156.3
+2017-04-27,2443.26,158.3
+2017-04-28,2463.66,157.6
+2017-05-01,2450.63,156.1
+2017-05-02,2417.07,155.2
+2017-05-03,2393.47,157.3
+2017-05-04,2406.86,154.7
+2017-05-05,2392.78,155.8
+2017-05-08,2410.13,152.5
+2017-05-09,2401.70,154.4
+2017-05-10,2394.48,152.8
+2017-05-11,2431.73,150.8
+2017-05-12,2425.34,148.8
+2017-05-15,2409.15,148.4
+2017-05-16,2386.99,143.3
+2017-05-17,2413.49,139.6
+2017-05-18,2408.43,141.0
+2017-05-19,2403.33,139.7
+2017-05-22,2354.00,139.7
+2017-05-23,2379.10,143.0
+2017-05-24,2375.48,144.2
+2017-05-25,2377.95,143.8
+2017-05-26,2419.05,148.9
+2017-05-29,2449.03,148.4
+2017-05-30,2433.26,146.9
+2017-05-31,2430.20,145.3
+2017-06-01,2429.14,145.6
+2017-06-02,2445.66,145.8
+2017-06-05,2456.58,146.5
+2017-06-06,2407.39,147.7
+2017-06-07,2405.84,148.8
+2017-06-08,2398.83,151.4
+2017-06-09,2422.07,149.4
+2017-06-12,2417.13,149.8
+2017-06-13,2441.97,149.1
+2017-06-14,2459.09,148.2
+2017-06-15,2448.82,144.9
+2017-06-16,2452.69,144.9
+2017-06-19,2453.05,140.2
+2017-06-20,2409.66,138.2
+2017-06-21,2433.22,134.6
+2017-06-22,2454.01,133.3
+2017-06-23,2511.60,131.3
+2017-06-26,2516.99,129.2
+2017-06-27,2520.58,130.0
+2017-06-28,2507.02,130.1
+2017-06-29,2498.45,129.3
+2017-06-30,2490.21,128.1
+2017-07-03,2495.97,126.1
+2017-07-04,2490.40,125.5
+2017-07-05,2494.53,123.5
+2017-07-06,2495.99,123.4
+2017-07-07,2481.11,124.1
+2017-07-10,2497.55,128.8
+2017-07-11,2494.67,130.3
+2017-07-12,2507.14,130.3
+2017-07-13,2577.21,129.0
+2017-07-14,2583.16,128.4
+2017-07-17,2546.31,132.2
+2017-07-18,2555.29,131.6
+2017-07-19,2548.48,132.4
+2017-07-20,2545.73,131.3
+2017-07-21,2565.25,133.8
+2017-07-24,2579.81,137.0
+2017-07-25,2575.44,136.9
+2017-07-26,2571.86,136.0
+2017-07-27,2546.83,137.4
+2017-07-28,2567.00,140.2
+2017-07-31,2561.98,138.3
+2017-08-01,2570.49,136.2
+2017-08-02,2568.94,137.8
+2017-08-03,2584.64,138.3
+2017-08-04,2612.66,137.4
+2017-08-07,2575.31,141.8
+2017-08-08,2575.66,145.6
+2017-08-09,2555.15,149.8
+2017-08-10,2554.74,153.2
+2017-08-11,2554.38,155.5
+2017-08-14,2554.17,157.0
+2017-08-15,2586.24,156.1
+2017-08-16,2586.25,158.6
+2017-08-17,2574.76,160.3
+2017-08-18,2562.26,162.6
+2017-08-21,2583.78,164.2
+2017-08-22,2570.31,159.2
+2017-08-23,2531.70,159.3
+2017-08-24,2533.92,160.3
+2017-08-25,2520.32,160.7
+2017-08-28,2541.40,163.5
+2017-08-29,2575.68,165.0
+2017-08-30,2574.41,165.0
+2017-08-31,2559.29,164.2
+2017-09-01,2554.53,164.6
+2017-09-04,2559.58,161.1
+2017-09-05,2555.59,159.7
+2017-09-06,2547.57,159.2
+2017-09-07,2540.44,160.2
+2017-09-08,2575.65,163.0
+2017-09-11,2602.30,163.2
+2017-09-12,2644.60,165.9
+2017-09-13,2671.35,163.5
+2017-09-14,2678.47,164.6
+2017-09-15,2721.94,163.0
+2017-09-18,2734.13,161.6
+2017-09-19,2716.39,160.9
+2017-09-20,2732.19,161.3
+2017-09-21,2700.63,162.6
+2017-09-22,2669.23,164.6
+2017-09-25,2704.89,162.4
+2017-09-26,2665.30,158.2
+2017-09-27,2658.34,158.4
+2017-09-28,2623.99,155.7
+2017-09-29,2644.28,157.1
+2017-10-02,2633.95,156.6
+2017-10-03,2601.49,153.7
+2017-10-04,2587.27,150.1
+2017-10-05,2600.25,148.6
+2017-10-06,2616.34,147.4
+2017-10-09,2600.64,146.4
+2017-10-10,2654.67,147.4
+2017-10-11,2650.93,147.1
+2017-10-12,2662.49,146.4
+2017-10-13,2690.56,143.9
+2017-10-16,2645.95,147.5
+2017-10-17,2652.45,142.9
+2017-10-18,2662.99,141.1
+2017-10-19,2675.67,141.2
+2017-10-20,2670.21,143.4
+2017-10-23,2636.99,140.7
+2017-10-24,2616.86,138.9
+2017-10-25,2653.73,139.1
+2017-10-26,2674.13,137.9
+2017-10-27,2668.16,137.9
+2017-10-30,2705.33,138.4
+2017-10-31,2686.25,138.4
+2017-11-01,2675.88,137.4
+2017-11-02,2666.27,137.2
+2017-11-03,2676.83,134.5
+2017-11-06,2689.86,133.4
+2017-11-07,2718.23,128.4
+2017-11-08,2758.18,127.0
+2017-11-09,2742.06,123.5
+2017-11-10,2766.17,120.1
+2017-11-13,2759.12,119.3
+2017-11-14,2724.14,116.6
+2017-11-15,2777.95,118.5
+2017-11-16,2788.50,122.2
+2017-11-17,2768.35,120.3
+2017-11-20,2822.92,119.3
+2017-11-21,2846.80,120.8
+2017-11-22,2825.82,121.2
+2017-11-23,2835.58,120.2
+2017-11-24,2803.26,116.8
+2017-11-27,2790.22,114.9
+2017-11-28,2845.52,114.0
+2017-11-29,2847.15,117.1
+2017-11-30,2845.57,113.0
+2017-12-01,2844.94,112.3
+2017-12-04,2902.17,115.1
+2017-12-05,2901.82,117.2
+2017-12-06,2924.31,116.4
+2017-12-07,2897.00,118.6
+2017-12-08,2904.26,123.5
+2017-12-11,2884.45,124.6
+2017-12-12,2908.45,128.2
+2017-12-13,2948.13,133.4
+2017-12-14,2934.40,137.8
+2017-12-15,3000.94,140.8
+2017-12-18,2987.40,145.4
+2017-12-19,3000.02,148.8
+2017-12-20,2971.82,151.0
+2017-12-21,2918.43,157.0
+2017-12-22,2927.48,159.3
+2017-12-26,2957.52,159.8
+2017-12-27,2962.46,161.6
+2017-12-28,2963.79,159.9
+2017-12-29,2920.54,159.0
+2018-01-02,2911.40,160.4
+2018-01-03,2895.50,160.6
+2018-01-04,2898.78,160.6
+2018-01-05,2886.29,159.5
+2018-01-08,2852.22,159.8
+2018-01-09,2829.98,154.3
+2018-01-10,2883.00,156.0
+2018-01-11,2914.73,157.8
+2018-01-12,2922.86,156.2
+2018-01-15,2920.94,151.5
+2018-01-16,2913.66,152.2
+2018-01-17,2892.32,153.1
+2018-01-18,2878.66,150.9
+2018-01-19,2838.79,147.7
+2018-01-22,2834.48,144.8
+2018-01-23,2819.94,144.3
+2018-01-24,2866.56,143.6
+2018-01-25,2878.50,143.3
+2018-01-26,2858.21,141.0
+2018-01-29,2860.54,141.7
+2018-01-30,2939.48,141.2
+2018-01-31,2968.47,136.8
+2018-02-01,2952.36,137.0
+2018-02-02,2987.78,136.3
+2018-02-05,3021.14,133.5
+2018-02-06,3060.15,131.6
+2018-02-07,3091.87,128.5
+2018-02-08,3114.69,129.6
+2018-02-09,3084.22,128.7
+2018-02-12,3061.65,121.8
+2018-02-13,2979.94,117.5
+2018-02-14,2976.63,117.4
+2018-02-15,2982.54,116.3
+2018-02-16,2960.35,111.8
+2018-02-19,2939.02,116.9
+2018-02-20,2940.40,118.2
+2018-02-21,2911.04,120.8
+2018-02-22,2905.61,118.9
+2018-02-23,2870.24,120.1
+2018-02-26,2874.73,116.3
+2018-02-27,2870.93,112.2
+2018-02-28,2850.93,111.9
+2018-03-01,2887.47,108.2
+2018-03-02,2893.01,108.3
+2018-03-05,2879.50,107.1
+2018-03-06,2884.37,107.9
+2018-03-07,2826.35,108.4
+2018-03-08,2812.55,105.7
+2018-03-09,2769.49,102.4
+2018-03-12,2778.57,103.1
+2018-03-13,2794.66,102.9
+2018-03-14,2792.17,105.1
+2018-03-15,2806.09,104.5
+2018-03-16,2794.67,105.6
+2018-03-19,2796.16,106.8
+2018-03-20,2838.01,109.2
+2018-03-21,2814.10,105.2
+2018-03-22,2785.53,106.7
+2018-03-23,2785.72,105.9
+2018-03-26,2824.67,109.6
+2018-03-27,2817.99,109.8
+2018-03-28,2795.18,111.5
+2018-03-29,2806.99,111.3
+2018-03-30,2803.44,109.6
+2018-04-02,2851.52,110.7
+2018-04-03,2865.89,116.6
+2018-04-04,2817.65,120.4
+2018-04-05,2856.43,122.0
+2018-04-06,2824.28,120.8
+2018-04-09,2832.29,122.2
+2018-04-10,2865.29,121.2
+2018-04-11,2871.07,118.1
+2018-04-12,2881.22,116.8
+2018-04-13,2922.04,114.6
+2018-04-16,2935.03,118.5
+2018-04-17,2948.55,122.0
+2018-04-18,2992.15,124.2
+2018-04-19,2969.61,124.6
+2018-04-20,2946.78,127.6
+2018-04-23,2960.55,130.8
+2018-04-24,3008.83,130.2
+2018-04-25,2976.00,129.4
+2018-04-26,2978.17,128.2
+2018-04-27,3034.99,127.6
+2018-04-30,3033.38,129.9
+2018-05-01,3031.25,127.7
+2018-05-02,3010.79,129.9
+2018-05-03,3010.98,129.3
+2018-05-04,3003.02,130.4
+2018-05-07,2990.14,134.2
+2018-05-08,2967.38,134.2
+2018-05-09,2973.45,128.3
+2018-05-10,2955.09,130.1
+2018-05-11,2981.92,125.1
+2018-05-14,3008.82,123.9
+2018-05-15,3017.06,121.6
+2018-05-16,3040.00,120.8
+2018-05-17,3069.64,121.0
+2018-05-18,3067.48,118.3
+2018-05-21,3088.58,112.2
+2018-05-22,3123.88,110.6
+2018-05-23,3112.63,111.5
+2018-05-24,3136.09,109.5
+2018-05-25,3140.01,111.0
+2018-05-28,3107.51,115.2
+2018-05-29,3128.69,114.5
+2018-05-30,3184.74,118.9
+2018-05-31,3202.14,118.5
+2018-06-01,3223.77,119.9
+2018-06-04,3224.66,118.1
+2018-06-05,3257.37,117.8
+2018-06-06,3282.68,118.6
+2018-06-07,3260.98,119.3
+2018-06-08,3261.65,120.3
+2018-06-11,3281.50,118.1
+2018-06-12,3311.01,119.1
+2018-06-13,3306.06,114.4
+2018-06-14,3272.21,116.1
+2018-06-15,3253.04,116.0
+2018-06-18,3286.47,115.0
+2018-06-19,3278.03,116.9
+2018-06-20,3298.25,115.3
+2018-06-21,3270.55,113.8
+2018-06-22,3266.49,112.5
+2018-06-25,3234.47,114.7
+2018-06-26,3218.77,118.9
+2018-06-27,3250.50,119.4
+2018-06-28,3249.31,120.2
+2018-06-29,3222.14,120.4
+2018-07-02,3244.27,115.9
+2018-07-03,3269.15,117.0
+2018-07-04,3237.98,116.0
+2018-07-05,3256.29,116.5
+2018-07-06,3304.89,114.8
+2018-07-09,3331.41,114.8
+2018-07-10,3358.72,116.8
+2018-07-11,3350.73,119.4
+2018-07-12,3365.79,122.5
+2018-07-13,3422.04,124.4
+2018-07-16,3444.08,125.9
+2018-07-17,3490.89,128.1
+2018-07-18,3505.49,127.0
+2018-07-19,3472.71,128.4
+2018-07-20,3485.97,127.6
+2018-07-23,3432.54,126.0
+2018-07-24,3428.35,126.2
+2018-07-25,3396.02,126.0
+2018-07-26,3376.70,128.9
+2018-07-27,3362.98,127.1
+2018-07-30,3319.01,126.3
+2018-07-31,3391.71,125.7
+2018-08-01,3421.21,123.0
+2018-08-02,3425.26,123.3
+2018-08-03,3392.51,124.2
+2018-08-06,3392.13,129.9
+2018-08-07,3404.39,129.6
+2018-08-08,3407.09,130.8
+2018-08-09,3409.55,128.7
+2018-08-10,3407.36,128.3
+2018-08-13,3348.69,132.9
+2018-08-14,3317.21,132.0
+2018-08-15,3360.48,130.6
+2018-08-16,3370.45,133.5
+2018-08-17,3390.33,133.6
+2018-08-20,3350.49,134.8
+2018-08-21,3362.57,133.2
+2018-08-22,3352.11,131.9
+2018-08-23,3365.44,135.2
+2018-08-24,3374.29,136.5
+2018-08-27,3374.12,135.2
+2018-08-28,3337.18,135.7
+2018-08-29,3331.29,132.9
+2018-08-30,3388.11,131.1
+2018-08-31,3374.41,133.7
+2018-09-03,3306.70,132.7
+2018-09-04,3290.08,134.1
+2018-09-05,3312.99,130.5
+2018-09-06,3333.82,131.6
+2018-09-07,3388.97,130.7
+2018-09-10,3384.02,131.6
+2018-09-11,3416.12,131.9
+2018-09-12,3377.68,134.8
+2018-09-13,3340.61,137.2
+2018-09-14,3359.31,139.6
+2018-09-17,3326.47,140.6
+2018-09-18,3278.06,141.6
+2018-09-19,3266.98,143.3
+2018-09-20,3322.77,143.9
+2018-09-21,3287.62,145.8
+2018-09-24,3275.91,142.5
+2018-09-25,3263.86,140.7
+2018-09-26,3268.17,143.2
+2018-09-27,3218.80,142.8
+2018-09-28,3237.04,140.6
+2018-10-01,3222.95,137.5
+2018-10-02,3189.76,137.7
+2018-10-03,3256.41,138.0
+2018-10-04,3292.75,137.6
+2018-10-05,3271.18,136.9
+2018-10-08,3182.13,136.9
+2018-10-09,3152.44,132.7
+2018-10-10,3119.72,132.8
+2018-10-11,3162.71,134.5
+2018-10-12,3204.76,138.6
+2018-10-15,3272.01,137.2
+2018-10-16,3325.37,139.6
+2018-10-17,3339.86,138.6
+2018-10-18,3319.95,138.0
+2018-10-19,3294.87,141.7
+2018-10-22,3281.10,137.7
+2018-10-23,3272.94,136.0
+2018-10-24,3232.86,134.8
+2018-10-25,3262.42,136.0
+2018-10-26,3259.22,137.8
+2018-10-29,3280.08,136.8
+2018-10-30,3287.73,133.6
+2018-10-31,3226.27,134.8
+2018-11-01,3235.42,136.3
+2018-11-02,3267.71,139.1
+2018-11-05,3340.61,134.7
+2018-11-06,3329.98,135.9
+2018-11-07,3310.43,134.0
+2018-11-08,3287.48,132.6
+2018-11-09,3262.73,131.8
+2018-11-12,3312.52,136.3
+2018-11-13,3256.16,138.1
+2018-11-14,3310.03,140.5
+2018-11-15,3304.55,142.7
+2018-11-16,3328.07,141.5
+2018-11-19,3313.97,138.8
+2018-11-20,3259.96,141.5
+2018-11-21,3285.65,143.8
+2018-11-22,3316.97,145.9
+2018-11-23,3306.38,148.0
+2018-11-26,3346.28,147.3
+2018-11-27,3344.78,142.4
+2018-11-28,3318.03,140.9
+2018-11-29,3288.34,137.9
+2018-11-30,3270.52,134.9
+2018-12-03,3269.22,133.4
+2018-12-04,3218.82,133.5
+2018-12-05,3205.87,132.2
+2018-12-06,3229.21,132.5
+2018-12-07,3167.17,133.6
+2018-12-10,3179.66,136.8
+2018-12-11,3207.82,138.9
+2018-12-12,3250.40,142.0
+2018-12-13,3262.81,143.0
+2018-12-14,3207.76,147.0
+2018-12-17,3188.72,146.7
+2018-12-18,3197.70,148.8
+2018-12-19,3190.91,147.9
+2018-12-20,3209.51,145.4
+2018-12-21,3202.47,145.7
+2018-12-24,3187.87,148.8
+2018-12-26,3191.10,149.2
+2018-12-27,3213.30,147.3
+2018-12-28,3213.28,144.8
+2018-12-31,3191.18,145.6
+2019-01-02,3182.05,147.7
+2019-01-03,3183.46,146.9
+2019-01-04,3148.42,146.0
+2019-01-07,3180.91,145.3
+2019-01-08,3185.91,148.0
+2019-01-09,3201.77,147.2
+2019-01-10,3143.09,151.4
+2019-01-11,3133.24,153.1
+2019-01-14,3117.03,153.5
+2019-01-15,3101.17,154.7
+2019-01-16,3112.74,158.0
+2019-01-17,3085.07,160.5
+2019-01-18,3074.42,164.4
+2019-01-21,3049.00,167.5
+2019-01-22,3055.68,169.7
+2019-01-23,3048.49,172.3
+2019-01-24,3030.53,172.2
+2019-01-25,3056.65,175.3
+2019-01-28,3041.08,172.0
+2019-01-29,3047.71,169.6
+2019-01-30,3136.84,170.8
+2019-01-31,3156.48,169.3
+2019-02-01,3136.58,167.2
+2019-02-04,3136.31,163.5
+2019-02-05,3140.49,153.3
+2019-02-06,3158.69,152.2
+2019-02-07,3211.76,149.1
+2019-02-08,3214.53,149.3
+2019-02-11,3227.48,150.1
+2019-02-12,3243.30,151.7
+2019-02-13,3249.67,157.9
+2019-02-14,3260.98,159.7
+2019-02-15,3233.78,161.6
+2019-02-18,3212.02,163.9
+2019-02-19,3171.02,165.5
+2019-02-20,3210.66,163.6
+2019-02-21,3194.01,164.5
+2019-02-22,3179.55,166.9
+2019-02-25,3195.47,162.7
+2019-02-26,3243.33,162.5
+2019-02-27,3223.98,165.7
+2019-02-28,3176.77,165.0
+2019-03-01,3159.62,162.2
+2019-03-04,3138.72,164.7
+2019-03-05,3139.97,166.3
+2019-03-06,3138.03,165.8
+2019-03-07,3141.01,162.2
+2019-03-08,3211.57,165.1
+2019-03-11,3251.37,159.8
+2019-03-12,3222.00,158.3
+2019-03-13,3227.62,156.1
+2019-03-14,3191.01,155.5
+2019-03-15,3173.93,154.8
+2019-03-18,3178.83,154.8
+2019-03-19,3180.91,149.7
+2019-03-20,3200.30,147.1
+2019-03-21,3157.59,145.4
+2019-03-22,3157.55,145.1
+2019-03-25,3171.19,152.6
+2019-03-26,3141.19,155.5
+2019-03-27,3162.19,158.7
+2019-03-28,3117.75,158.5
+2019-03-29,3116.24,160.5
+2019-04-01,3051.12,158.3
+2019-04-02,3057.28,156.5
+2019-04-03,3012.71,160.2
+2019-04-04,2995.59,156.5
+2019-04-05,3017.29,160.0
+2019-04-08,3053.51,157.4
+2019-04-09,3101.17,157.6
+2019-04-10,3086.59,157.6
+2019-04-11,3066.10,157.6
+2019-04-12,2982.77,157.1
+2019-04-15,3000.40,154.9
+2019-04-16,2988.35,151.2
+2019-04-17,3002.82,150.0
+2019-04-18,3033.48,148.9
+2019-04-19,3117.01,148.1
+2019-04-22,3141.05,149.6
+2019-04-23,3161.81,149.3
+2019-04-24,3206.81,149.6
+2019-04-25,3201.72,150.4
+2019-04-26,3200.34,149.3
+2019-04-29,3120.04,155.3
+2019-04-30,3116.47,158.2
+2019-05-01,3109.10,161.3
+2019-05-02,3099.76,165.2
+2019-05-03,3105.02,166.2
+2019-05-06,3152.25,164.5
+2019-05-07,3115.89,160.4
+2019-05-08,3152.51,156.2
+2019-05-09,3122.40,157.9
+2019-05-10,3086.75,157.5
+2019-05-13,3113.13,157.8
+2019-05-14,3123.95,157.9
+2019-05-15,3130.46,157.2
+2019-05-16,3058.94,157.9
+2019-05-17,3049.70,159.3
+2019-05-20,3051.15,164.7
+2019-05-21,3053.58,167.7
+2019-05-22,3073.34,171.9
+2019-05-23,3092.51,170.7
+2019-05-24,3145.13,171.1
+2019-05-27,3172.35,167.0
+2019-05-28,3198.08,162.3
+2019-05-29,3191.59,162.6
+2019-05-30,3176.81,160.6
+2019-05-31,3156.40,159.1
+2019-06-03,3212.89,158.2
+2019-06-04,3214.91,153.8
+2019-06-05,3200.98,153.6
+2019-06-06,3190.25,154.1
+2019-06-07,3168.12,152.6
+2019-06-10,3137.83,156.1
+2019-06-11,3126.19,157.2
+2019-06-12,3105.51,156.5
+2019-06-13,3111.16,155.5
+2019-06-14,3107.13,157.3
+2019-06-17,3110.00,159.2
+2019-06-18,3143.60,161.9
+2019-06-19,3111.77,157.1
+2019-06-20,3107.76,157.4
+2019-06-21,3090.11,157.0
+2019-06-24,3051.85,158.3
+2019-06-25,3066.08,156.4
+2019-06-26,3046.66,157.5
+2019-06-27,3037.88,154.9
+2019-06-28,3035.72,155.1
+2019-07-01,3027.94,159.3
+2019-07-02,3002.40,156.6
+2019-07-03,2973.24,155.2
+2019-07-04,2967.84,154.9
+2019-07-05,2961.44,159.0
+2019-07-08,2981.30,162.2
+2019-07-09,2973.56,162.6
+2019-07-10,2984.38,163.5
+2019-07-11,2944.02,166.4
+2019-07-12,2942.93,170.3
+2019-07-15,2912.54,173.2
+2019-07-16,2853.03,174.3
+2019-07-17,2862.45,172.9
+2019-07-18,2851.56,171.2
+2019-07-19,2870.73,171.2
+2019-07-22,2920.77,169.5
+2019-07-23,2912.94,170.7
+2019-07-24,2930.03,170.6
+2019-07-25,2958.14,174.3
+2019-07-26,2961.85,176.1
+2019-07-29,2929.44,176.1
+2019-07-30,2935.90,172.4
+2019-07-31,2912.63,167.4
+2019-08-01,2956.97,164.7
+2019-08-02,2912.46,163.5
+2019-08-05,2856.92,162.4
+2019-08-06,2855.92,162.3
+2019-08-07,2855.25,159.3
+2019-08-08,2857.96,159.6
+2019-08-09,2882.01,161.5
+2019-08-12,2929.58,155.5
+2019-08-13,2967.85,154.0
+2019-08-14,2995.01,152.0
+2019-08-15,2987.95,152.4
+2019-08-16,2981.01,153.3
+2019-08-19,2996.96,147.9
+2019-08-20,2944.61,147.2
+2019-08-21,2956.56,145.7
+2019-08-22,2984.53,144.1
+2019-08-23,2992.68,143.5
+2019-08-26,3022.50,143.0
+2019-08-27,3016.77,143.7
+2019-08-28,3020.65,140.5
+2019-08-29,3040.18,142.0
+2019-08-30,3094.07,143.4
+2019-09-02,3114.16,145.3
+2019-09-03,3129.94,149.1
+2019-09-04,3168.09,152.6
+2019-09-05,3114.30,157.7
+2019-09-06,3134.02,156.2
+2019-09-09,3136.88,155.0
+2019-09-10,3114.07,153.3
+2019-09-11,3128.40,152.0
+2019-09-12,3189.48,151.3
+2019-09-13,3217.33,150.0
+2019-09-16,3148.53,150.3
+2019-09-17,3144.41,155.0
+2019-09-18,3173.46,154.7
+2019-09-19,3174.35,151.4
+2019-09-20,3180.35,154.3
+2019-09-23,3185.00,155.0
+2019-09-24,3195.74,155.0
+2019-09-25,3216.49,153.6
+2019-09-26,3162.99,153.1
+2019-09-27,3205.50,155.1
+2019-09-30,3204.37,154.5
+2019-10-01,3160.71,154.4
+2019-10-02,3152.05,151.1
+2019-10-03,3135.18,150.3
+2019-10-04,3181.05,152.7
+2019-10-07,3129.41,148.5
+2019-10-08,3066.45,146.6
+2019-10-09,3072.57,144.1
+2019-10-10,3095.41,141.7
+2019-10-11,3088.34,138.7
+2019-10-14,3090.07,133.3
+2019-10-15,3027.83,128.8
+2019-10-16,3037.18,127.4
+2019-10-17,3024.92,124.1
+2019-10-18,3047.75,122.3
+2019-10-21,3058.34,122.8
+2019-10-22,3070.54,124.2
+2019-10-23,3075.61,123.9
+2019-10-24,3095.22,124.4
+2019-10-25,3080.83,120.9
+2019-10-28,3103.61,120.6
+2019-10-29,3129.29,124.6
+2019-10-30,3155.66,123.4
+2019-10-31,3151.54,125.2
+2019-11-01,3161.50,126.4
+2019-11-04,3124.96,124.7
+2019-11-05,3113.87,124.7
+2019-11-06,3106.84,123.5
+2019-11-07,3116.24,124.4
+2019-11-08,3143.84,128.4
+2019-11-11,3130.72,129.8
+2019-11-12,3114.06,134.0
+2019-11-13,3147.06,137.9
+2019-11-14,3115.71,139.3
+2019-11-15,3117.44,141.4
+2019-11-18,3104.62,145.4
+2019-11-19,3095.53,148.1
+2019-11-20,3090.59,149.9
+2019-11-21,3052.10,154.0
+2019-11-22,3077.60,156.1
+2019-11-25,3068.03,160.8
+2019-11-26,3076.30,165.0
+2019-11-27,3061.42,166.8
+2019-11-28,3057.86,169.7
+2019-11-29,3023.93,171.3
+2019-12-02,2988.71,169.8
+2019-12-03,3017.74,169.1
+2019-12-04,3055.72,168.1
+2019-12-05,3079.81,170.5
+2019-12-06,3090.40,170.9
+2019-12-09,3125.91,171.8
+2019-12-10,3123.28,171.4
+2019-12-11,3156.57,166.5
+2019-12-12,3142.80,164.6
+2019-12-13,3181.25,161.0
+2019-12-16,3132.12,162.5
+2019-12-17,3099.67,163.0
+2019-12-18,3099.99,159.6
+2019-12-19,3111.13,162.2
+2019-12-20,3147.75,164.2
+2019-12-23,3145.48,164.3
+2019-12-24,3153.35,164.8
+2019-12-26,3083.99,164.9
+2019-12-27,3074.76,163.3
+2019-12-30,3143.69,159.2
+2019-12-31,3148.75,155.1
+2020-01-02,3186.70,154.2
+2020-01-03,3201.76,153.2
+2020-01-06,3205.30,148.7
+2020-01-07,3230.99,148.2
+2020-01-08,3290.21,145.6
+2020-01-09,3303.44,145.2
+2020-01-10,3336.47,146.0
+2020-01-13,3320.00,143.5
+2020-01-14,3298.99,139.9
+2020-01-15,3321.74,140.2
+2020-01-16,3296.77,139.4
+2020-01-17,3340.85,139.0
+2020-01-20,3390.53,139.9
+2020-01-21,3379.25,140.7
+2020-01-22,3348.00,138.1
+2020-01-23,3311.59,139.2
+2020-01-24,3347.40,138.2
+2020-01-27,3394.91,136.9
+2020-01-28,3381.66,133.5
+2020-01-29,3412.04,132.8
+2020-01-30,3412.54,134.3
+2020-01-31,3416.57,136.7
+2020-02-03,3394.51,140.9
+2020-02-04,3435.98,142.9
+2020-02-05,3452.29,145.1
+2020-02-06,3513.28,145.7
+2020-02-07,3559.96,145.7
+2020-02-10,3534.50,142.7
+2020-02-11,3533.77,141.7
+2020-02-12,3537.02,138.4
+2020-02-13,3558.48,135.3
+2020-02-14,3563.95,139.0
+2020-02-17,3498.52,141.3
+2020-02-18,3503.46,140.8
+2020-02-19,3550.38,140.0
+2020-02-20,3553.91,144.7
+2020-02-21,3523.95,145.0
+2020-02-24,3525.22,139.8
+2020-02-25,3568.78,138.7
+2020-02-26,3579.63,136.2
+2020-02-27,3570.76,132.6
+2020-02-28,3603.34,131.2
+2020-03-02,3503.13,127.1
+2020-03-03,3556.12,123.6
+2020-03-04,3598.46,119.8
+2020-03-05,3634.00,116.5
+2020-03-06,3651.18,117.5
+2020-03-09,3640.62,124.5
+2020-03-10,3598.94,130.8
+2020-03-11,3643.49,133.6
+2020-03-12,3673.40,138.3
+2020-03-13,3702.63,140.6
+2020-03-16,3705.02,147.7
+2020-03-17,3709.87,154.9
+2020-03-18,3684.04,158.1
+2020-03-19,3726.62,162.4
+2020-03-20,3724.43,164.1
+2020-03-23,3748.44,170.8
+2020-03-24,3742.32,176.3
+2020-03-25,3714.46,184.7
+2020-03-26,3694.68,184.9
+2020-03-27,3678.85,187.5
+2020-03-30,3709.96,194.3
+2020-03-31,3700.55,199.1
+2020-04-01,3694.03,200.2
+2020-04-02,3699.88,205.8
+2020-04-03,3688.86,204.5
+2020-04-06,3664.20,212.9
+2020-04-07,3625.96,220.2
+2020-04-08,3563.09,225.8
+2020-04-09,3542.18,231.5
+2020-04-10,3563.62,233.1
+2020-04-13,3478.24,241.0
+2020-04-14,3392.53,248.2
+2020-04-15,3412.00,254.5
+2020-04-16,3431.40,260.2
+2020-04-17,3411.70,262.6
+2020-04-20,3414.07,272.3
+2020-04-21,3418.45,277.7
+2020-04-22,3416.13,286.7
+2020-04-23,3368.87,291.7
+2020-04-24,3415.42,294.0
+2020-04-27,3431.10,292.8
+2020-04-28,3392.61,293.9
+2020-04-29,3434.58,297.6
+2020-04-30,3351.41,300.5
+2020-05-01,3325.69,298.1
+2020-05-04,3324.85,295.6
+2020-05-05,3343.14,294.2
+2020-05-06,3387.58,293.5
+2020-05-07,3320.84,289.1
+2020-05-08,3272.94,286.9
+2020-05-11,3330.31,281.5
+2020-05-12,3286.51,276.0
+2020-05-13,3288.54,270.3
+2020-05-14,3307.43,268.4
+2020-05-15,3312.24,266.9
+2020-05-18,3303.41,257.4
+2020-05-19,3271.60,251.3
+2020-05-20,3262.93,243.7
+2020-05-21,3232.16,237.8
+2020-05-22,3234.94,234.4
+2020-05-25,3234.14,225.9
+2020-05-26,3231.95,215.5
+2020-05-27,3230.90,204.7
+2020-05-28,3188.45,197.7
+2020-05-29,3199.71,193.6
+2020-06-01,3227.08,182.7
+2020-06-02,3196.95,174.2
+2020-06-03,3207.30,167.8
+2020-06-04,3225.01,160.7
+2020-06-05,3191.36,157.9
+2020-06-08,3188.64,149.7
+2020-06-09,3220.85,141.4
+2020-06-10,3238.91,133.0
+2020-06-11,3243.16,130.8
+2020-06-12,3235.30,126.6
+2020-06-15,3257.37,120.8
+2020-06-16,3257.19,116.5
+2020-06-17,3277.25,113.4
+2020-06-18,3245.17,110.7
+2020-06-19,3205.10,108.7
+2020-06-22,3237.18,102.4
+2020-06-23,3201.83,98.1
+2020-06-24,3195.48,95.6
+2020-06-25,3207.13,93.6
+2020-06-26,3220.53,92.1
+2020-06-29,3229.03,82.6
+2020-06-30,3247.79,80.1
+2020-07-01,3290.33,76.2
+2020-07-02,3276.46,73.9
+2020-07-03,3289.27,67.2
+2020-07-06,3338.75,67.7
+2020-07-07,3327.17,70.0
+2020-07-08,3348.41,71.0
+2020-07-09,3327.56,74.8
+2020-07-10,3368.80,73.7
+2020-07-13,3448.42,78.0
+2020-07-14,3479.22,75.6
+2020-07-15,3474.61,75.4
+2020-07-16,3410.83,75.5
+2020-07-17,3399.61,76.6
+2020-07-20,3399.98,81.1
+2020-07-21,3424.46,79.3
+2020-07-22,3403.81,78.0
+2020-07-23,3387.95,79.5
+2020-07-24,3388.22,80.6
+2020-07-27,3436.31,81.1
+2020-07-28,3432.04,83.1
+2020-07-29,3380.21,85.4
+2020-07-30,3396.83,86.0
+2020-07-31,3399.17,86.0
+2020-08-03,3459.12,86.0
+2020-08-04,3455.65,88.4
+2020-08-05,3506.85,89.1
+2020-08-06,3545.90,90.6
+2020-08-07,3557.10,86.8
+2020-08-10,3539.74,91.8
+2020-08-11,3565.77,93.8
+2020-08-12,3608.59,95.6
+2020-08-13,3582.70,95.8
+2020-08-14,3632.16,97.5
+2020-08-17,3617.02,98.7
+2020-08-18,3595.69,97.2
+2020-08-19,3578.21,97.3
+2020-08-20,3573.40,95.3
+2020-08-21,3551.17,97.0
+2020-08-24,3482.23,97.6
+2020-08-25,3377.87,99.4
+2020-08-26,3417.67,100.3
+2020-08-27,3415.49,100.2
+2020-08-28,3403.32,103.3
+2020-08-31,3373.57,107.4
+2020-09-01,3399.83,110.8
+2020-09-02,3381.73,115.1
+2020-09-03,3401.28,119.5
+2020-09-04,3366.67,119.8
+2020-09-07,3385.03,120.5
+2020-09-08,3387.55,117.2
+2020-09-09,3382.62,117.0
+2020-09-10,3436.56,118.0
+2020-09-11,3411.94,115.2
+2020-09-14,3392.74,116.8
+2020-09-15,3408.52,115.5
+2020-09-16,3447.44,116.6
+2020-09-17,3461.35,115.5
+2020-09-18,3420.95,112.9
+2020-09-21,3422.54,119.7
+2020-09-22,3456.35,128.3
+2020-09-23,3438.95,132.6
+2020-09-24,3406.06,132.5
+2020-09-25,3423.03,136.9
+2020-09-28,3410.34,140.7
+2020-09-29,3392.34,143.9
+2020-09-30,3381.27,144.8
+2020-10-01,3370.89,145.8
+2020-10-02,3383.80,147.0
+2020-10-05,3413.13,146.6
+2020-10-06,3386.79,145.9
+2020-10-07,3389.88,147.1
+2020-10-08,3409.15,145.1
+2020-10-09,3390.57,145.6
+2020-10-12,3410.24,143.9
+2020-10-13,3404.24,141.7
+2020-10-14,3386.54,142.0
+2020-10-15,3406.02,140.1
+2020-10-16,3421.87,138.2
+2020-10-19,3379.53,136.7
+2020-10-20,3339.45,138.8
+2020-10-21,3334.75,136.6
+2020-10-22,3352.80,135.9
+2020-10-23,3430.05,135.4
+2020-10-26,3426.65,132.8
+2020-10-27,3383.76,132.3
+2020-10-28,3378.69,131.6
+2020-10-29,3322.77,130.2
+2020-10-30,3315.72,127.5
+2020-11-02,3360.99,124.7
+2020-11-03,3364.26,121.0
+2020-11-04,3356.19,122.1
+2020-11-05,3330.16,120.3
+2020-11-06,3322.56,121.1
+2020-11-09,3339.46,123.7
+2020-11-10,3273.58,122.8
+2020-11-11,3242.90,117.8
+2020-11-12,3278.89,121.4
+2020-11-13,3276.32,119.8
+2020-11-16,3235.82,123.2
+2020-11-17,3245.95,127.0
+2020-11-18,3244.21,128.8
+2020-11-19,3230.64,129.9
+2020-11-20,3257.77,131.7
+2020-11-23,3211.23,132.3
+2020-11-24,3175.87,131.7
+2020-11-25,3141.90,133.7
+2020-11-26,3164.34,131.9
+2020-11-27,3105.25,135.8
+2020-11-30,3069.50,136.1
+2020-12-01,3086.34,138.9
+2020-12-02,3111.62,142.8
+2020-12-03,3066.03,146.6
+2020-12-04,3018.31,149.4
+2020-12-07,3036.83,148.4
+2020-12-08,3050.90,147.7
+2020-12-09,3099.54,143.5
+2020-12-10,3081.01,140.9
+2020-12-11,3119.53,141.3
+2020-12-14,3112.37,139.2
+2020-12-15,3059.20,138.2
+2020-12-16,3076.38,136.7
+2020-12-17,3067.03,135.9
+2020-12-18,3091.81,132.3
+2020-12-21,3076.82,133.0
+2020-12-22,3063.33,132.9
+2020-12-23,3076.57,131.8
+2020-12-24,3062.16,132.0
+2020-12-28,3111.66,131.0
+2020-12-29,3125.23,128.5
+2020-12-30,3188.45,128.3
+2020-12-31,3205.56,127.9
+2021-01-04,3121.55,128.2
+2021-01-05,3117.21,130.2
+2021-01-06,3203.25,130.3
+2021-01-07,3250.47,133.5
+2021-01-08,3208.75,133.5
+2021-01-11,3206.72,134.6
+2021-01-12,3247.15,131.8
+2021-01-13,3244.58,129.5
+2021-01-14,3245.73,127.4
+2021-01-15,3184.96,127.5
+2021-01-18,3225.27,125.7
+2021-01-19,3217.19,126.2
+2021-01-20,3268.82,127.8
+2021-01-21,3263.75,128.9
+2021-01-22,3223.46,126.8
+2021-01-25,3223.13,130.8
+2021-01-26,3217.84,129.8
+2021-01-27,3223.42,130.6
+2021-01-28,3220.98,129.9
+2021-01-29,3203.71,127.5
+2021-02-01,3217.72,131.3
+2021-02-02,3219.64,132.6
+2021-02-03,3199.39,134.8
+2021-02-04,3191.79,134.4
+2021-02-05,3186.43,134.9
+2021-02-08,3209.48,134.6
+2021-02-09,3196.78,134.7
+2021-02-10,3218.52,135.0
+2021-02-11,3295.83,134.2
+2021-02-12,3278.02,133.0
+2021-02-15,3334.31,131.6
+2021-02-16,3318.79,133.5
+2021-02-17,3303.69,133.2
+2021-02-18,3307.18,129.3
+2021-02-19,3278.82,128.8
+2021-02-22,3252.70,133.1
+2021-02-23,3231.02,132.8
+2021-02-24,3215.46,134.1
+2021-02-25,3229.72,136.8
+2021-02-26,3228.00,138.7
+2021-03-01,3255.91,139.3
+2021-03-02,3239.94,139.1
+2021-03-03,3286.85,141.1
+2021-03-04,3262.01,139.3
+2021-03-05,3213.12,138.9
+2021-03-08,3189.84,140.6
+2021-03-09,3213.19,141.8
+2021-03-10,3205.47,142.8
+2021-03-11,3195.68,147.6
+2021-03-12,3194.37,148.6
+2021-03-15,3248.90,151.5
+2021-03-16,3254.89,151.1
+2021-03-17,3239.97,149.7
+2021-03-18,3241.84,147.3
+2021-03-19,3228.66,149.0
+2021-03-22,3241.82,150.7
+2021-03-23,3281.01,151.9
+2021-03-24,3262.58,157.3
+2021-03-25,3275.47,158.6
+2021-03-26,3247.77,157.4
+2021-03-29,3256.04,153.6
+2021-03-30,3303.22,153.2
+2021-03-31,3353.86,149.9
+2021-04-01,3356.37,149.8
+2021-04-02,3329.82,150.4
+2021-04-05,3315.39,153.8
+2021-04-06,3286.42,154.2
+2021-04-07,3240.04,158.5
+2021-04-08,3199.10,159.3
+2021-04-09,3229.77,158.0
+2021-04-12,3261.08,156.6
+2021-04-13,3265.68,156.5
+2021-04-14,3292.98,157.6
+2021-04-15,3257.67,155.0
+2021-04-16,3280.72,154.5
+2021-04-19,3315.88,155.8
+2021-04-20,3332.29,154.9
+2021-04-21,3317.24,154.0
+2021-04-22,3269.74,154.1
+2021-04-23,3254.58,155.3
+2021-04-26,3271.26,151.9
+2021-04-27,3278.66,153.2
+2021-04-28,3342.05,152.2
+2021-04-29,3329.98,153.5
+2021-04-30,3379.70,151.8
+2021-05-03,3463.41,152.2
+2021-05-04,3457.95,148.5
+2021-05-05,3445.08,145.0
+2021-05-06,3501.94,142.4
+2021-05-07,3500.43,141.2
+2021-05-10,3490.75,140.8
+2021-05-11,3525.49,141.6
+2021-05-12,3480.96,142.8
+2021-05-13,3501.91,141.0
+2021-05-14,3480.01,143.9
+2021-05-17,3494.17,147.3
+2021-05-18,3513.50,148.4
+2021-05-19,3540.29,148.3
+2021-05-20,3482.91,149.7
+2021-05-21,3449.73,150.7
+2021-05-24,3464.94,155.9
+2021-05-25,3497.46,157.4
+2021-05-26,3485.58,157.9
+2021-05-27,3463.66,161.3
+2021-05-28,3443.28,162.8
+2021-05-31,3386.78,163.2
+2021-06-01,3368.79,163.4
+2021-06-02,3405.32,163.9
+2021-06-03,3434.83,162.6
+2021-06-04,3458.26,163.7
+2021-06-07,3458.50,161.5
+2021-06-08,3436.95,162.4
+2021-06-09,3388.61,165.0
+2021-06-10,3339.97,162.2
+2021-06-11,3392.14,158.7
+2021-06-14,3405.35,157.9
+2021-06-15,3448.80,156.3
+2021-06-16,3452.69,156.2
+2021-06-17,3486.05,154.3
+2021-06-18,3491.94,154.9
+2021-06-21,3573.56,155.7
+2021-06-22,3566.52,159.1
+2021-06-23,3498.11,161.4
+2021-06-24,3427.67,167.1
+2021-06-25,3397.37,166.6
+2021-06-28,3412.16,167.4
+2021-06-29,3430.21,170.0
+2021-06-30,3467.15,171.3
+2021-07-01,3493.68,167.9
+2021-07-02,3484.46,166.7
+2021-07-05,3517.97,171.7
+2021-07-06,3527.39,173.0
+2021-07-07,3526.93,174.2
+2021-07-08,3564.75,174.5
+2021-07-09,3585.24,175.2
+2021-07-12,3595.60,172.1
+2021-07-13,3643.80,170.6
+2021-07-14,3698.65,172.5
+2021-07-15,3677.08,172.5
+2021-07-16,3685.33,170.0
+2021-07-19,3665.89,172.2
+2021-07-20,3692.46,170.1
+2021-07-21,3761.13,174.0
+2021-07-22,3780.86,176.5
+2021-07-23,3778.53,180.3
+2021-07-26,3740.10,177.4
+2021-07-27,3753.08,173.2
+2021-07-28,3720.41,168.9
+2021-07-29,3772.52,167.0
+2021-07-30,3752.08,165.6
+2021-08-02,3737.44,165.7
+2021-08-03,3750.68,162.9
+2021-08-04,3797.78,159.6
+2021-08-05,3764.90,159.4
+2021-08-06,3760.28,156.6
+2021-08-09,3760.65,155.2
+2021-08-10,3748.35,153.5
+2021-08-11,3805.81,148.1
+2021-08-12,3770.20,143.8
+2021-08-13,3774.44,141.6
+2021-08-16,3732.22,142.0
+2021-08-17,3758.26,143.7
+2021-08-18,3755.84,145.8
+2021-08-19,3717.54,146.8
+2021-08-20,3721.80,145.7
+2021-08-23,3703.79,143.8
+2021-08-24,3734.19,142.2
+2021-08-25,3769.51,144.4
+2021-08-26,3775.15,143.5
+2021-08-27,3809.07,144.1
+2021-08-30,3748.27,147.5
+2021-08-31,3697.47,151.1
+2021-09-01,3674.74,150.3
+2021-09-02,3644.33,151.6
+2021-09-03,3636.81,149.3
+2021-09-06,3637.66,145.3
+2021-09-07,3610.67,146.4
+2021-09-08,3594.29,144.1
+2021-09-09,3645.81,140.1
+2021-09-10,3660.88,142.3
+2021-09-13,3600.27,143.9
+2021-09-14,3627.36,147.6
+2021-09-15,3615.78,147.0
+2021-09-16,3640.09,149.2
+2021-09-17,3633.56,149.1
+2021-09-20,3614.33,147.6
+2021-09-21,3575.99,148.3
+2021-09-22,3610.35,148.8
+2021-09-23,3646.07,152.0
+2021-09-24,3694.78,157.1
+2021-09-27,3699.88,155.2
+2021-09-28,3696.19,156.1
+2021-09-29,3722.68,157.2
+2021-09-30,3783.15,156.4
+2021-10-01,3805.14,149.8
+2021-10-04,3764.51,147.0
+2021-10-05,3774.59,145.1
+2021-10-06,3783.84,149.4
+2021-10-07,3812.21,147.2
+2021-10-08,3808.76,146.9
+2021-10-11,3817.17,147.4
+2021-10-12,3856.82,147.4
+2021-10-13,3839.49,150.1
+2021-10-14,3829.03,150.8
+2021-10-15,3899.01,150.3
+2021-10-18,3854.23,143.6
+2021-10-19,3838.36,144.2
+2021-10-20,3810.65,140.6
+2021-10-21,3788.37,139.2
+2021-10-22,3789.31,138.5
+2021-10-25,3793.52,134.8
+2021-10-26,3792.95,128.5
+2021-10-27,3788.05,124.0
+2021-10-28,3797.08,125.4
+2021-10-29,3729.66,122.6
+2021-11-01,3824.23,121.5
+2021-11-02,3886.69,122.9
+2021-11-03,3837.15,122.2
+2021-11-04,3872.16,124.9
+2021-11-05,3857.08,122.5
+2021-11-08,3821.94,124.1
+2021-11-09,3740.47,130.0
+2021-11-10,3730.56,131.7
+2021-11-11,3731.76,128.2
+2021-11-12,3708.95,125.6
+2021-11-15,3675.47,128.9
+2021-11-16,3661.66,132.6
+2021-11-17,3679.71,130.4
+2021-11-18,3617.31,129.5
+2021-11-19,3620.04,129.7
+2021-11-22,3606.41,131.7
+2021-11-23,3616.51,133.0
+2021-11-24,3593.21,132.7
+2021-11-25,3584.07,132.6
+2021-11-26,3597.09,134.5
+2021-11-29,3611.92,127.4
+2021-11-30,3604.28,122.1
+2021-12-01,3623.62,117.9
+2021-12-02,3674.39,112.3
+2021-12-03,3675.33,107.5
+2021-12-06,3691.97,103.6
+2021-12-07,3694.46,105.2
+2021-12-08,3715.35,102.5
+2021-12-09,3725.65,101.6
+2021-12-10,3718.50,100.9
+2021-12-13,3682.98,103.6
+2021-12-14,3650.83,105.1
+2021-12-15,3699.16,105.6
+2021-12-16,3737.94,105.7
+2021-12-17,3724.35,106.0
+2021-12-20,3703.04,105.5
+2021-12-21,3688.76,103.0
+2021-12-22,3729.46,101.3
+2021-12-23,3775.64,101.2
+2021-12-24,3785.85,102.9
+2021-12-27,3726.83,104.9
+2021-12-28,3735.55,103.5
+2021-12-29,3735.39,107.4
+2021-12-30,3735.23,108.4
+2021-12-31,3731.82,108.8
+2022-01-03,3750.99,113.6
+2022-01-04,3727.85,117.5
+2022-01-05,3752.11,119.6
+2022-01-06,3783.45,122.1
+2022-01-07,3737.08,123.5
+2022-01-10,3683.53,125.8
+2022-01-11,3705.60,128.7
+2022-01-12,3712.83,133.4
+2022-01-13,3710.58,134.7
+2022-01-14,3732.90,136.5
+2022-01-17,3746.21,141.0
+2022-01-18,3726.68,143.2
+2022-01-19,3687.28,144.1
+2022-01-20,3679.15,143.6
+2022-01-21,3676.70,147.3
+2022-01-24,3711.26,149.1
+2022-01-25,3712.50,153.3
+2022-01-26,3706.11,153.3
+2022-01-27,3693.37,156.1
+2022-01-28,3668.13,156.0
+2022-01-31,3655.57,155.3
+2022-02-01,3665.63,154.7
+2022-02-02,3708.04,154.3
+2022-02-03,3658.97,153.1
+2022-02-04,3691.24,155.0
+2022-02-07,3732.06,153.2
+2022-02-08,3725.05,154.2
+2022-02-09,3729.88,152.8
+2022-02-10,3770.83,153.4
+2022-02-11,3763.98,149.2
+2022-02-14,3792.85,148.7
+2022-02-15,3771.66,147.8
+2022-02-16,3751.85,150.5
+2022-02-17,3733.39,151.1
+2022-02-18,3733.85,152.4
+2022-02-21,3706.31,151.7
+2022-02-22,3714.10,147.2
+2022-02-23,3706.43,147.3
+2022-02-24,3707.39,146.6
+2022-02-25,3747.69,145.1
+2022-02-28,3769.49,147.4
+2022-03-01,3745.52,151.2
+2022-03-02,3757.40,152.4
+2022-03-03,3734.41,153.3
+2022-03-04,3682.31,153.6
+2022-03-07,3716.54,158.7
+2022-03-08,3727.64,161.4
+2022-03-09,3751.76,160.8
+2022-03-10,3718.84,161.3
+2022-03-11,3781.51,161.3
+2022-03-14,3780.70,163.5
+2022-03-15,3774.95,163.9
+2022-03-16,3812.70,171.8
+2022-03-17,3798.17,172.0
+2022-03-18,3844.49,174.5
+2022-03-21,3793.98,178.7
+2022-03-22,3752.48,179.2
+2022-03-23,3747.64,180.9
+2022-03-24,3779.35,182.4
+2022-03-25,3855.33,184.9
+2022-03-28,3820.68,182.2
+2022-03-29,3840.78,181.0
+2022-03-30,3772.81,177.7
+2022-03-31,3770.66,176.4
+2022-04-01,3755.44,173.5
+2022-04-04,3705.59,172.8
+2022-04-05,3653.94,168.8
+2022-04-06,3730.47,161.5
+2022-04-07,3773.29,160.4
+2022-04-08,3766.68,159.2
+2022-04-11,3781.58,159.9
+2022-04-12,3748.70,155.5
+2022-04-13,3753.06,156.9
+2022-04-14,3809.80,154.4
+2022-04-15,3805.22,153.1
+2022-04-18,3820.13,156.7
+2022-04-19,3796.73,156.1
+2022-04-20,3857.38,160.3
+2022-04-21,3792.10,160.0
+2022-04-22,3771.46,161.4
+2022-04-25,3811.77,154.7
+2022-04-26,3848.92,151.5
+2022-04-27,3849.96,148.0
+2022-04-28,3854.36,144.1
+2022-04-29,3830.20,144.5
+2022-05-02,3820.18,147.7
+2022-05-03,3821.51,149.2
+2022-05-04,3814.36,148.4
+2022-05-05,3846.46,147.6
+2022-05-06,3859.52,151.0
+2022-05-09,3859.88,152.5
+2022-05-10,3934.19,152.1
+2022-05-11,3884.20,151.9
+2022-05-12,3882.59,151.8
+2022-05-13,3899.32,151.9
+2022-05-16,3956.55,150.9
+2022-05-17,3986.73,146.3
+2022-05-18,3915.49,145.4
+2022-05-19,3810.65,148.9
+2022-05-20,3811.92,149.3
+2022-05-23,3855.88,154.1
+2022-05-24,3842.54,158.6
+2022-05-25,3749.54,163.0
+2022-05-26,3787.94,165.1
+2022-05-27,3747.65,168.1
+2022-05-30,3782.20,163.5
+2022-05-31,3750.85,163.8
+2022-06-01,3762.93,162.7
+2022-06-02,3751.62,159.1
+2022-06-03,3751.52,158.2
+2022-06-06,3777.47,156.7
+2022-06-07,3778.66,156.9
+2022-06-08,3823.68,155.2
+2022-06-09,3843.24,152.8
+2022-06-10,3927.68,152.1
+2022-06-13,3943.88,151.7
+2022-06-14,4028.80,151.9
+2022-06-15,4016.85,151.8
+2022-06-16,3974.80,151.1
+2022-06-17,4023.80,150.0
+2022-06-20,4005.02,147.8
+2022-06-21,3968.69,147.0
+2022-06-22,3929.66,147.4
+2022-06-23,3913.23,147.4
+2022-06-24,3892.62,151.7
+2022-06-27,3908.02,154.1
+2022-06-28,3877.68,155.4
+2022-06-29,3854.01,152.8
+2022-06-30,3891.16,150.8
+2022-07-01,3903.64,152.2
+2022-07-04,3921.05,152.9
+2022-07-05,3925.23,147.8
+2022-07-06,3897.29,148.6
+2022-07-07,3931.77,148.9
+2022-07-08,3973.75,149.2
+2022-07-11,3980.46,149.5
+2022-07-12,3945.39,150.7
+2022-07-13,3909.88,147.3
+2022-07-14,3940.03,147.6
+2022-07-15,3943.47,145.7
+2022-07-18,3991.17,141.3
+2022-07-19,3972.64,136.3
+2022-07-20,3987.17,133.6
+2022-07-21,3940.12,131.8
+2022-07-22,3981.02,131.7
+2022-07-25,3967.49,130.8
+2022-07-26,3991.04,132.4
+2022-07-27,3951.92,132.4
+2022-07-28,4063.56,130.4
+2022-07-29,4088.57,129.4
+2022-08-01,4055.24,135.7
+2022-08-02,4069.69,139.2
+2022-08-03,4107.33,140.0
+2022-08-04,4099.48,142.5
+2022-08-05,4066.61,144.8
+2022-08-08,4027.68,147.9
+2022-08-09,4050.70,148.9
+2022-08-10,4049.78,150.3
+2022-08-11,4024.77,148.5
+2022-08-12,4001.39,147.0
+2022-08-15,3974.36,148.4
+2022-08-16,3926.29,150.6
+2022-08-17,3953.15,149.1
+2022-08-18,3981.17,147.2
+2022-08-19,3957.24,149.3
+2022-08-22,3981.65,148.2
+2022-08-23,3950.36,145.2
+2022-08-24,3882.00,146.2
+2022-08-25,3830.40,147.2
+2022-08-26,3857.27,149.4
+2022-08-29,3818.20,154.9
+2022-08-30,3809.18,154.8
+2022-08-31,3818.77,158.2
+2022-09-01,3718.94,157.5
+2022-09-02,3700.40,157.0
+2022-09-05,3737.03,153.0
+2022-09-06,3700.78,151.4
+2022-09-07,3708.47,147.4
+2022-09-08,3751.62,148.0
+2022-09-09,3732.15,144.7
+2022-09-12,3773.71,150.6
+2022-09-13,3795.83,152.9
+2022-09-14,3816.71,153.4
+2022-09-15,3759.27,154.7
+2022-09-16,3772.88,153.9
+2022-09-19,3805.92,153.8
+2022-09-20,3860.52,153.5
+2022-09-21,3907.82,149.7
+2022-09-22,3901.28,148.8
+2022-09-23,3927.31,146.1
+2022-09-26,3970.75,142.5
+2022-09-27,4019.05,142.0
+2022-09-28,4007.65,143.9
+2022-09-29,4051.92,143.2
+2022-09-30,4073.98,143.6
+2022-10-03,4000.15,142.9
+2022-10-04,4008.66,143.0
+2022-10-05,4053.35,144.9
+2022-10-06,4080.78,142.3
+2022-10-07,4018.93,141.3
+2022-10-10,4044.23,138.5
+2022-10-11,4016.20,138.0
+2022-10-12,4023.43,142.5
+2022-10-13,4037.05,145.0
+2022-10-14,4000.59,147.0
+2022-10-17,4062.56,146.1
+2022-10-18,4073.14,146.9
+2022-10-19,4046.86,145.4
+2022-10-20,4033.16,144.1
+2022-10-21,4000.28,143.6
+2022-10-24,4010.82,143.3
+2022-10-25,4015.18,147.5
+2022-10-26,4015.78,145.1
+2022-10-27,4017.56,143.2
+2022-10-28,4014.34,135.9
+2022-10-31,4006.94,133.4
+2022-11-01,4045.93,131.3
+2022-11-02,4026.04,131.3
+2022-11-03,4006.13,129.2
+2022-11-04,4037.24,127.3
+2022-11-07,4075.17,120.6
+2022-11-08,4085.26,118.7
+2022-11-09,4068.12,117.7
+2022-11-10,4069.16,113.2
+2022-11-11,4040.09,111.9
+2022-11-14,4019.78,112.3
+2022-11-15,4068.94,110.1
+2022-11-16,4137.36,110.3
+2022-11-17,4255.91,111.1
+2022-11-18,4255.66,112.1
+2022-11-21,4301.69,113.9
+2022-11-22,4271.43,115.3
+2022-11-23,4350.58,118.0
+2022-11-24,4335.14,118.8
+2022-11-25,4316.76,117.1
+2022-11-28,4338.49,115.9
+2022-11-29,4352.03,116.1
+2022-11-30,4293.04,118.7
+2022-12-01,4215.41,118.3
+2022-12-02,4216.79,121.1
+2022-12-05,4210.17,116.9
+2022-12-06,4248.08,114.7
+2022-12-07,4198.78,113.9
+2022-12-08,4164.49,111.4
+2022-12-09,4168.24,113.3
+2022-12-12,4164.42,116.7
+2022-12-13,4188.33,115.9
+2022-12-14,4157.86,114.6
+2022-12-15,4261.30,114.8
+2022-12-16,4301.31,115.2
+2022-12-19,4323.78,115.2
+2022-12-20,4304.08,116.4
+2022-12-21,4312.69,119.9
+2022-12-22,4352.01,122.0
+2022-12-23,4303.30,120.1
+2022-12-26,4241.82,119.5
+2022-12-27,4182.74,114.3
+2022-12-28,4216.50,115.2
+2022-12-29,4205.99,112.1
+2022-12-30,4208.83,111.2
+2023-01-02,4249.78,108.2
+2023-01-03,4256.36,106.1
+2023-01-04,4260.61,106.2
+2023-01-05,4268.29,107.3
+2023-01-06,4214.09,104.6
+2023-01-09,4159.14,104.4
+2023-01-10,4159.76,105.4
+2023-01-11,4175.28,107.6
+2023-01-12,4178.40,111.3
+2023-01-13,4099.28,108.9
+2023-01-16,4021.55,114.8
+2023-01-17,4056.84,118.7
+2023-01-18,4105.86,123.2
+2023-01-19,4060.14,128.1
+2023-01-20,4076.05,131.0
+2023-01-23,4093.32,138.5
+2023-01-24,4059.42,140.9
+2023-01-25,4109.68,145.8
+2023-01-26,4088.58,148.6
+2023-01-27,4037.69,147.3
+2023-01-30,4027.40,149.1
+2023-01-31,4013.44,147.1
+2023-02-01,4080.58,143.6
+2023-02-02,4141.44,144.7
+2023-02-03,4120.80,145.6
+2023-02-06,4049.99,151.7
+2023-02-07,4067.80,153.3
+2023-02-08,4032.39,157.5
+2023-02-09,4069.88,162.2
+2023-02-10,4203.99,163.8
+2023-02-13,4235.80,169.4
+2023-02-14,4253.74,175.9
+2023-02-15,4239.86,177.6
+2023-02-16,4264.86,180.7
+2023-02-17,4284.18,185.8
+2023-02-20,4226.18,190.4
+2023-02-21,4238.15,194.0
+2023-02-22,4240.81,189.7
+2023-02-23,4181.45,191.0
+2023-02-24,4224.29,192.2
+2023-02-27,4192.89,189.5
+2023-02-28,4200.96,184.4
+2023-03-01,4212.78,182.4
+2023-03-02,4271.89,183.1
+2023-03-03,4267.96,182.8
+2023-03-06,4259.27,180.6
+2023-03-07,4334.45,182.9
+2023-03-08,4337.19,180.8
+2023-03-09,4249.80,180.0
+2023-03-10,4240.64,182.8
+2023-03-13,4237.28,179.1
+2023-03-14,4292.45,179.1
+2023-03-15,4285.79,179.3
+2023-03-16,4289.04,177.8
+2023-03-17,4337.33,175.4
+2023-03-20,4275.91,171.6
+2023-03-21,4257.28,169.0
+2023-03-22,4208.09,169.2
+2023-03-23,4191.10,171.0
+2023-03-24,4178.31,170.8
+2023-03-27,4204.36,169.6
+2023-03-28,4179.86,168.1
+2023-03-29,4170.98,168.8
+2023-03-30,4149.98,171.3
+2023-03-31,4160.77,169.8
+2023-04-03,4214.14,163.6
+2023-04-04,4225.07,164.0
+2023-04-05,4231.93,163.0
+2023-04-06,4245.75,165.6
+2023-04-07,4217.22,161.7
+2023-04-10,4204.93,160.4
+2023-04-11,4239.36,157.4
+2023-04-12,4265.62,156.2
+2023-04-13,4274.58,158.5
+2023-04-14,4335.42,159.7
+2023-04-17,4349.37,157.1
+2023-04-18,4432.53,154.7
+2023-04-19,4426.36,155.2
+2023-04-20,4406.04,153.0
+2023-04-21,4419.03,149.6
+2023-04-24,4348.48,146.5
+2023-04-25,4355.00,144.6
+2023-04-26,4346.63,145.2
+2023-04-27,4314.37,146.7
+2023-04-28,4291.90,149.7
+2023-05-01,4298.21,147.1
+2023-05-02,4305.48,146.9
+2023-05-03,4351.26,146.4
+2023-05-04,4428.91,144.4
+2023-05-05,4391.93,144.2
+2023-05-08,4373.19,143.7
+2023-05-09,4322.43,146.2
+2023-05-10,4348.36,147.3
+2023-05-11,4341.25,152.8
+2023-05-12,4314.85,154.3
+2023-05-15,4265.42,156.5
+2023-05-16,4255.96,152.0
+2023-05-17,4283.63,155.2
+2023-05-18,4282.20,158.5
+2023-05-19,4298.19,156.5
+2023-05-22,4286.22,150.7
+2023-05-23,4331.56,144.7
+2023-05-24,4307.93,144.2
+2023-05-25,4330.81,143.2
+2023-05-26,4329.04,140.5
+2023-05-29,4338.19,138.3
+2023-05-30,4354.01,137.6
+2023-05-31,4436.66,135.8
+2023-06-01,4428.67,135.8
+2023-06-02,4417.81,131.5
+2023-06-05,4446.22,130.9
+2023-06-06,4557.92,133.0
+2023-06-07,4641.28,133.0
+2023-06-08,4549.73,135.9
+2023-06-09,4556.52,135.9
+2023-06-12,4579.31,134.8
+2023-06-13,4518.00,137.5
+2023-06-14,4509.79,136.3
+2023-06-15,4557.28,138.1
+2023-06-16,4615.34,136.6
+2023-06-19,4639.05,138.6
+2023-06-20,4652.19,140.8
+2023-06-21,4651.57,140.5
+2023-06-22,4701.16,143.4
+2023-06-23,4742.41,143.7
+2023-06-26,4732.50,140.3
+2023-06-27,4716.12,137.0
+2023-06-28,4654.44,132.2
+2023-06-29,4638.47,129.4
+2023-06-30,4674.93,125.6
+2023-07-03,4698.71,121.6
+2023-07-04,4627.87,121.1
+2023-07-05,4693.22,121.5
+2023-07-06,4667.94,121.2
+2023-07-07,4717.36,121.3
+2023-07-10,4657.15,121.0
+2023-07-11,4658.57,123.3
+2023-07-12,4622.87,126.3
+2023-07-13,4612.82,126.8
+2023-07-14,4621.49,125.9
+2023-07-17,4654.96,126.8
+2023-07-18,4646.62,129.4
+2023-07-19,4731.43,130.6
+2023-07-20,4694.22,130.1
+2023-07-21,4675.01,134.1
+2023-07-24,4654.31,132.8
+2023-07-25,4651.18,131.8
+2023-07-26,4626.70,130.9
+2023-07-27,4712.80,129.1
+2023-07-28,4691.67,130.0
+2023-07-31,4751.42,134.5
+2023-08-01,4769.52,138.8
+2023-08-02,4784.76,140.5
+2023-08-03,4743.35,139.2
+2023-08-04,4757.53,139.5
+2023-08-07,4677.53,139.4
+2023-08-08,4649.99,141.4
+2023-08-09,4687.06,141.2
+2023-08-10,4732.60,144.0
+2023-08-11,4800.31,142.3
+2023-08-14,4778.62,145.8
+2023-08-15,4766.50,145.8
+2023-08-16,4833.04,145.5
+2023-08-17,4803.12,143.4
+2023-08-18,4885.05,143.1
+2023-08-21,4859.08,146.7
+2023-08-22,4864.02,148.4
+2023-08-23,4929.04,151.3
+2023-08-24,4899.71,152.5
+2023-08-25,4817.87,157.6
+2023-08-28,4788.00,158.6
+2023-08-29,4833.10,160.5
+2023-08-30,4844.56,161.2
+2023-08-31,4808.52,159.5
+2023-09-01,4856.95,161.6
+2023-09-04,4882.62,164.2
+2023-09-05,4935.43,164.3
+2023-09-06,4830.34,163.8
+2023-09-07,4848.36,167.1
+2023-09-08,4855.33,166.6
+2023-09-11,4823.69,167.9
+2023-09-12,4881.04,167.7
+2023-09-13,4846.86,165.2
+2023-09-14,4803.62,167.1
+2023-09-15,4792.02,169.0
+2023-09-18,4827.60,165.7
+2023-09-19,4842.31,162.9
+2023-09-20,4789.48,160.0
+2023-09-21,4792.37,158.0
+2023-09-22,4781.33,156.0
+2023-09-25,4778.98,155.6
+2023-09-26,4773.83,151.8
+2023-09-27,4771.42,150.3
+2023-09-28,4752.88,154.3
+2023-09-29,4861.89,156.5
+2023-10-02,4829.54,159.6
+2023-10-03,4818.44,160.5
+2023-10-04,4881.05,157.2
+2023-10-05,4912.91,157.3
+2023-10-06,4883.55,156.3
+2023-10-09,4843.22,157.1
+2023-10-10,4787.73,156.3
+2023-10-11,4835.57,157.0
+2023-10-12,4757.60,157.4
+2023-10-13,4761.84,158.2
+2023-10-16,4766.70,160.8
+2023-10-17,4761.60,158.8
+2023-10-18,4789.88,159.8
+2023-10-19,4871.10,161.6
+2023-10-20,4742.62,165.2
+2023-10-23,4718.01,171.8
+2023-10-24,4742.64,176.3
+2023-10-25,4815.01,178.7
+2023-10-26,4819.40,181.4
+2023-10-27,4852.25,181.0
+2023-10-30,4839.65,177.1
+2023-10-31,4799.89,173.1
+2023-11-01,4898.63,171.6
+2023-11-02,5003.58,171.4
+2023-11-03,5019.94,172.2
+2023-11-06,5051.88,170.5
+2023-11-07,4987.66,168.8
+2023-11-08,5037.94,167.6
+2023-11-09,4965.71,165.3
+2023-11-10,4959.83,162.4
+2023-11-13,4987.21,161.0
+2023-11-14,4933.09,162.1
+2023-11-15,4991.56,163.4
+2023-11-16,5070.88,164.4
+2023-11-17,5071.55,162.9
+2023-11-20,5154.20,163.4
+2023-11-21,5097.32,165.6
+2023-11-22,5087.66,163.8
+2023-11-23,5077.34,167.9
+2023-11-24,5074.69,169.7
+2023-11-27,5099.29,172.1
+2023-11-28,5089.98,176.2
+2023-11-29,4998.63,176.6
+2023-11-30,5023.74,175.0
+2023-12-01,5116.08,176.6
+2023-12-04,5163.73,179.3
+2023-12-05,5122.11,182.2
+2023-12-06,5114.16,179.6
+2023-12-07,5202.65,178.2
+2023-12-08,5206.10,178.6
+2023-12-11,5227.82,177.3
+2023-12-12,5285.81,176.6
+2023-12-13,5209.30,172.6
+2023-12-14,5184.00,167.2
+2023-12-15,5236.68,166.2
+2023-12-18,5155.92,168.6
+2023-12-19,5156.59,171.0
+2023-12-20,5108.46,169.8
+2023-12-21,5094.85,170.5
+2023-12-22,5045.93,168.7
+2023-12-26,5047.69,165.2
+2023-12-27,5052.56,162.4
+2023-12-28,5013.36,161.5
+2023-12-29,5022.42,157.7
+2024-01-02,5045.78,155.3
+2024-01-03,4998.28,149.9
+2024-01-04,5030.29,146.5
+2024-01-05,4971.23,146.8
+2024-01-08,4954.79,146.0
+2024-01-09,4865.04,145.0
+2024-01-10,4849.52,143.9
+2024-01-11,4822.18,140.5
+2024-01-12,4797.53,141.6
+2024-01-15,4857.69,143.4
+2024-01-16,4826.00,146.1
+2024-01-17,4769.96,146.1
+2024-01-18,4785.66,146.0
+2024-01-19,4766.54,151.4
+2024-01-22,4744.80,155.2
+2024-01-23,4733.42,156.6
+2024-01-24,4706.61,158.2
+2024-01-25,4636.09,160.0
+2024-01-26,4613.82,160.5
+2024-01-29,4635.83,159.4
+2024-01-30,4711.58,161.6
+2024-01-31,4672.09,164.0
+2024-02-01,4707.40,165.3
+2024-02-02,4769.91,166.6
+2024-02-05,4856.79,164.1
+2024-02-06,4839.19,161.5
+2024-02-07,4885.39,163.2
+2024-02-08,4930.41,162.0
+2024-02-09,4958.69,157.2
+2024-02-12,4912.93,159.0
+2024-02-13,4904.23,157.6
+2024-02-14,4897.37,155.1
+2024-02-15,4870.49,152.0
+2024-02-16,4904.73,151.5
+2024-02-19,4960.53,155.6
+2024-02-20,4987.32,160.3
+2024-02-21,4980.73,163.9
+2024-02-22,5003.51,166.6
+2024-02-23,5061.86,169.2
+2024-02-26,5043.57,170.1
+2024-02-27,5022.00,171.2
+2024-02-28,5091.40,172.1
+2024-02-29,5063.13,166.3
+2024-03-01,5085.14,164.1
+2024-03-04,5073.38,163.2
+2024-03-05,5065.51,163.6
+2024-03-06,4961.55,160.1
+2024-03-07,4992.62,156.8
+2024-03-08,4953.29,158.2
+2024-03-11,5009.29,154.9
+2024-03-12,5020.45,153.1
+2024-03-13,4974.47,153.0
+2024-03-14,4949.52,153.0
+2024-03-15,4924.94,155.8
+2024-03-18,4891.50,158.3
+2024-03-19,4954.24,160.7
+2024-03-20,4918.16,159.3
+2024-03-21,4936.42,159.3
+2024-03-22,4922.43,156.8
+2024-03-25,4898.11,157.3
+2024-03-26,4901.57,159.1
+2024-03-27,4897.28,159.2
+2024-03-28,4960.83,161.2
+2024-03-29,4945.95,160.2
+2024-04-01,4958.94,155.5
+2024-04-02,4937.52,155.4
+2024-04-03,5033.30,154.6
+2024-04-04,5032.65,156.6
+2024-04-05,5031.88,155.0
+2024-04-08,5067.72,151.9
+2024-04-09,4993.07,147.6
+2024-04-10,4999.33,146.9
+2024-04-11,5015.03,147.2
+2024-04-12,5051.12,144.3
+2024-04-15,5059.51,141.6
+2024-04-16,4998.88,142.2
+2024-04-17,4994.76,143.9
+2024-04-18,5006.01,146.1
+2024-04-19,5053.14,145.9
+2024-04-22,5010.56,144.7
+2024-04-23,5019.68,141.1
+2024-04-24,4942.15,139.4
+2024-04-25,4920.23,138.9
+2024-04-26,4892.45,138.4
+2024-04-29,4943.88,134.9
+2024-04-30,4989.82,137.1
+2024-05-01,4999.48,135.6
+2024-05-02,4977.69,134.7
+2024-05-03,4982.48,135.8
+2024-05-06,5025.05,133.4
+2024-05-07,5026.90,135.4
+2024-05-08,5042.80,137.3
+2024-05-09,4924.49,138.5
+2024-05-10,4952.52,138.7
+2024-05-13,4934.78,137.7
+2024-05-14,5026.43,139.2
+2024-05-15,4958.75,136.8
+2024-05-16,4971.23,136.8
+2024-05-17,4877.93,135.2
+2024-05-20,4872.69,136.2
+2024-05-21,4859.47,135.5
+2024-05-22,4882.47,135.5
+2024-05-23,4884.86,134.0
+2024-05-24,4891.10,134.1
+2024-05-27,4905.36,136.7
+2024-05-28,4917.37,139.9
+2024-05-29,4937.69,144.0
+2024-05-30,5000.94,143.7
+2024-05-31,5070.65,145.9
+2024-06-03,5127.98,145.8
+2024-06-04,5045.19,145.5
+2024-06-05,5016.24,143.5
+2024-06-06,5046.25,141.4
+2024-06-07,5049.23,140.2
+2024-06-10,5014.73,141.3
+2024-06-11,5057.45,143.6
+2024-06-12,5096.28,146.0
+2024-06-13,5111.82,146.8
+2024-06-14,5070.66,148.7
+2024-06-17,5098.56,145.1
+2024-06-18,5122.80,144.3
+2024-06-19,5111.20,146.4
+2024-06-20,5175.65,145.1
+2024-06-21,5171.91,146.4
+2024-06-24,5242.11,150.1
+2024-06-25,5306.33,150.4
+2024-06-26,5291.38,147.2
+2024-06-27,5294.61,144.9
+2024-06-28,5359.44,143.5
+2024-07-01,5347.57,141.4
+2024-07-02,5357.25,141.2
+2024-07-03,5280.20,140.1
+2024-07-04,5243.21,139.9
+2024-07-05,5218.11,137.4
+2024-07-08,5241.90,134.0
+2024-07-09,5146.69,130.3
+2024-07-10,5146.28,127.0
+2024-07-11,5154.33,126.1
+2024-07-12,5186.91,126.4
+2024-07-15,5120.79,126.0
+2024-07-16,5184.72,128.5
+2024-07-17,5227.42,127.4
+2024-07-18,5265.04,128.1
+2024-07-19,5197.94,125.9
+2024-07-22,5193.92,122.0
+2024-07-23,5177.70,123.8
+2024-07-24,5231.80,123.0
+2024-07-25,5263.98,124.7
+2024-07-26,5203.88,124.6
+2024-07-29,5282.61,118.2
+2024-07-30,5323.25,112.6
+2024-07-31,5330.13,109.1
+2024-08-01,5352.71,108.4
+2024-08-02,5365.73,108.0
+2024-08-05,5376.30,108.9
+2024-08-06,5297.56,106.6
+2024-08-07,5400.84,111.7
+2024-08-08,5429.14,116.1
+2024-08-09,5478.58,115.8
+2024-08-12,5492.27,116.1
+2024-08-13,5493.79,118.0
+2024-08-14,5480.72,119.5
+2024-08-15,5468.36,121.4
+2024-08-16,5573.46,124.6
+2024-08-19,5676.41,125.5
+2024-08-20,5549.48,124.1
+2024-08-21,5584.07,120.4
+2024-08-22,5534.01,121.1
+2024-08-23,5461.26,118.9
+2024-08-26,5458.47,118.4
+2024-08-27,5504.49,119.4
+2024-08-28,5470.29,121.1
+2024-08-29,5405.64,124.4
+2024-08-30,5429.02,126.5
+2024-09-02,5442.77,128.6
+2024-09-03,5408.58,133.8
+2024-09-04,5413.66,135.4
+2024-09-05,5447.10,137.7
+2024-09-06,5378.49,139.6
+2024-09-09,5431.47,137.6
+2024-09-10,5488.40,138.3
+2024-09-11,5498.86,139.3
+2024-09-12,5605.09,140.0
+2024-09-13,5658.65,138.4
+2024-09-16,5759.58,135.4
+2024-09-17,5777.90,134.0
+2024-09-18,5853.87,132.9
+2024-09-19,5924.51,130.1
+2024-09-20,5959.11,128.6
+2024-09-23,5837.28,128.6
+2024-09-24,5854.55,129.5
+2024-09-25,5857.22,128.5
+2024-09-26,5903.27,131.1
+2024-09-27,5925.98,128.2
+2024-09-30,6058.45,126.6
+2024-10-01,6114.15,125.6
+2024-10-02,6163.07,124.5
+2024-10-03,6165.97,124.1
+2024-10-04,6113.61,122.9
+2024-10-07,6207.83,121.8
+2024-10-08,6178.18,122.6
+2024-10-09,6161.60,123.7
+2024-10-10,6193.20,125.1
+2024-10-11,6182.37,125.5
+2024-10-14,6226.36,125.8
+2024-10-15,6174.58,125.6
+2024-10-16,6135.39,126.1
+2024-10-17,6037.74,124.8
+2024-10-18,6074.97,124.8
+2024-10-21,6094.67,123.0
+2024-10-22,6142.22,126.6
+2024-10-23,6100.14,124.1
+2024-10-24,6080.35,122.3
+2024-10-25,6072.98,118.9
+2024-10-28,6085.05,120.7
+2024-10-29,6024.15,122.1
+2024-10-30,6037.92,123.2
+2024-10-31,6053.67,121.8
+2024-11-01,6059.25,121.9
+2024-11-04,5991.25,123.7
+2024-11-05,5939.86,122.2
+2024-11-06,5859.20,122.7
+2024-11-07,5796.58,122.9
+2024-11-08,5793.03,122.9
+2024-11-11,5747.86,120.4
+2024-11-12,5742.66,117.9
+2024-11-13,5761.85,114.8
+2024-11-14,5854.10,111.9
+2024-11-15,5848.50,111.2
+2024-11-18,5927.78,109.5
+2024-11-19,5905.99,105.9
+2024-11-20,5956.07,102.8
+2024-11-21,5947.21,103.3
+2024-11-22,6001.86,102.0
+2024-11-25,5967.60,103.1
+2024-11-26,5898.02,101.9
+2024-11-27,5926.99,99.1
+2024-11-28,5934.32,96.7
+2024-11-29,6005.73,98.1
+2024-12-02,6063.34,94.2
+2024-12-03,6187.65,91.1
+2024-12-04,6235.39,88.3
+2024-12-05,6222.72,86.5
+2024-12-06,6209.32,85.3
+2024-12-09,6231.05,85.7
+2024-12-10,6152.86,82.2
+2024-12-11,6138.69,82.9
+2024-12-12,6205.37,80.4
+2024-12-13,6215.46,78.7
+2024-12-16,6271.46,82.3
+2024-12-17,6311.29,83.6
+2024-12-18,6300.74,83.7
+2024-12-19,6211.64,84.9
+2024-12-20,6184.18,84.8
+2024-12-23,6220.43,86.3
+2024-12-24,6337.92,82.3
+2024-12-26,6348.64,83.5
+2024-12-27,6342.63,85.3
+2024-12-30,6343.98,93.1
+2024-12-31,6318.17,96.3
+2025-01-02,6313.33,95.3
+2025-01-03,6334.42,97.6
+2025-01-06,6304.04,106.2
+2025-01-07,6279.39,109.0
+2025-01-08,6374.80,115.6
+2025-01-09,6285.90,112.9
+2025-01-10,6280.44,111.7
+2025-01-13,6337.21,117.3
+2025-01-14,6319.03,120.1
+2025-01-15,6407.13,124.5
+2025-01-16,6451.87,126.4
+2025-01-17,6459.79,128.6
+2025-01-20,6449.95,128.6
+2025-01-21,6433.45,126.8
+2025-01-22,6474.91,127.2
+2025-01-23,6438.64,125.9
+2025-01-24,6410.30,126.9
+2025-01-27,6320.56,123.9
+2025-01-28,6261.13,123.6
+2025-01-29,6291.64,124.4
+2025-01-30,6339.73,124.4
+2025-01-31,6378.08,122.3
+2025-02-03,6363.03,118.7
+2025-02-04,6272.38,118.2
+2025-02-05,6201.59,121.0
+2025-02-06,6197.18,119.7
+2025-02-07,6150.77,122.1
+2025-02-10,6165.84,119.3
+2025-02-11,6188.39,116.2
+2025-02-12,6242.38,114.8
+2025-02-13,6202.51,111.3
+2025-02-14,6138.36,110.7
+2025-02-17,6080.95,111.0
+2025-02-18,6018.60,113.0
+2025-02-19,6023.74,120.2
+2025-02-20,6111.77,120.9
+2025-02-21,6068.67,121.6
+2025-02-24,6108.15,114.3
+2025-02-25,6076.15,113.8
+2025-02-26,6061.49,112.6
+2025-02-27,6107.20,111.6
+2025-02-28,6129.93,114.0
+2025-03-03,6080.88,116.9
+2025-03-04,6079.79,117.9
+2025-03-05,6093.46,120.6
+2025-03-06,6073.22,122.3
+2025-03-07,6122.63,121.9
+2025-03-10,6166.04,120.5
+2025-03-11,6119.09,120.3
+2025-03-12,6188.55,123.1
+2025-03-13,6195.61,125.5
+2025-03-14,6215.38,125.8
+2025-03-17,6241.49,130.2
+2025-03-18,6270.43,130.1
+2025-03-19,6351.47,130.2
+2025-03-20,6369.40,131.5
+2025-03-21,6429.82,131.0
+2025-03-24,6393.42,130.0
+2025-03-25,6459.01,130.8
+2025-03-26,6376.07,134.2
+2025-03-27,6529.83,131.9
+2025-03-28,6634.36,130.3
+2025-03-31,6619.81,130.7
+2025-04-01,6575.16,131.5
+2025-04-02,6609.32,131.1
+2025-04-03,6676.80,128.0
+2025-04-04,6747.25,129.3
+2025-04-07,6703.29,124.7
+2025-04-08,6754.04,124.1
+2025-04-09,6847.27,120.9
+2025-04-10,6937.10,121.2
+2025-04-11,7005.21,125.0
+2025-04-14,7057.06,130.0
+2025-04-15,7069.07,127.9
+2025-04-16,7055.72,129.2
+2025-04-17,7177.35,129.3
+2025-04-18,7184.52,130.8
+2025-04-21,7096.45,132.3
+2025-04-22,7124.19,135.8
+2025-04-23,7088.19,140.4
+2025-04-24,7077.93,142.4
+2025-04-25,7089.40,146.5
+2025-04-28,6984.19,149.5
+2025-04-29,7010.50,151.5
+2025-04-30,6928.59,151.8
+2025-05-01,6982.69,150.6
+2025-05-02,7019.67,149.2
+2025-05-05,6999.90,151.3
+2025-05-06,7121.17,151.8
+2025-05-07,7213.49,155.6
+2025-05-08,7217.74,157.7
+2025-05-09,7105.50,158.4
+2025-05-12,7117.12,158.6
+2025-05-13,7086.20,161.3
+2025-05-14,7086.16,161.0
+2025-05-15,7140.31,160.6
+2025-05-16,7081.23,161.7
+2025-05-19,6953.33,158.3
+2025-05-20,6963.60,155.9
+2025-05-21,6986.25,154.1
+2025-05-22,6933.89,152.3
+2025-05-23,6839.71,152.0
+2025-05-26,6779.56,148.2
+2025-05-27,6740.98,146.8
+2025-05-28,6809.27,147.3
+2025-05-29,6801.84,146.6
+2025-05-30,6892.84,145.2
+2025-06-02,6954.44,144.1
+2025-06-03,7098.77,142.4
+2025-06-04,7247.70,140.1
+2025-06-05,7306.51,137.5
+2025-06-06,7216.78,134.8
+2025-06-09,7159.71,134.8
+2025-06-10,7156.80,133.3
+2025-06-11,7109.81,132.4
+2025-06-12,7100.75,131.1
+2025-06-13,7046.81,125.2
+2025-06-16,6970.47,117.4
+2025-06-17,6893.86,113.2
+2025-06-18,7007.56,111.5
+2025-06-19,6976.92,110.4
+2025-06-20,6965.13,109.6
+2025-06-23,6933.82,111.4
+2025-06-24,6986.20,110.3
+2025-06-25,6956.12,114.9
+2025-06-26,6925.41,113.5
+2025-06-27,6925.47,120.2
+2025-06-30,7023.80,124.1
+2025-07-01,7030.83,123.4
+2025-07-02,7157.78,125.1
+2025-07-03,7197.76,127.1
+2025-07-04,7159.27,126.0
+2025-07-07,7199.53,127.7
+2025-07-08,7288.76,128.4
+2025-07-09,7316.28,124.9
+2025-07-10,7234.56,128.0
+2025-07-11,7425.78,128.4
+2025-07-14,7379.11,123.7
+2025-07-15,7308.47,124.9
+2025-07-16,7322.15,126.3
+2025-07-17,7342.66,122.0
+2025-07-18,7375.91,123.9
+2025-07-21,7309.03,126.8
+2025-07-22,7357.96,129.4
+2025-07-23,7444.59,127.5
+2025-07-24,7385.28,128.3
+2025-07-25,7442.69,129.2
+2025-07-28,7371.53,126.4
+2025-07-29,7390.53,122.8
+2025-07-30,7443.03,120.2
+2025-07-31,7487.39,119.9
+2025-08-01,7410.74,120.5
+2025-08-04,7425.55,120.7
+2025-08-05,7445.21,122.2
+2025-08-06,7423.68,124.1
+2025-08-07,7345.94,126.3
+2025-08-08,7242.40,124.1
+2025-08-11,7324.13,125.3
+2025-08-12,7356.87,125.4
+2025-08-13,7327.11,124.1
+2025-08-14,7241.83,131.1
+2025-08-15,7220.31,134.2
+2025-08-18,7406.87,136.1
+2025-08-19,7386.88,135.5
+2025-08-20,7524.20,135.6
+2025-08-21,7576.70,135.1
+2025-08-22,7507.29,138.5
+2025-08-25,7401.87,139.2
+2025-08-26,7440.28,139.7
+2025-08-27,7447.09,135.6
+2025-08-28,7511.71,134.7
+2025-08-29,7548.23,133.1
+2025-09-01,7531.32,134.5
+2025-09-02,7452.73,136.5
+2025-09-03,7490.91,135.2
+2025-09-04,7458.30,138.2
+2025-09-05,7517.67,134.4
+2025-09-08,7557.90,133.9
+2025-09-09,7633.27,133.3
+2025-09-10,7640.99,133.4
+2025-09-11,7729.79,132.3
+2025-09-12,7693.07,134.5
+2025-09-15,7638.08,132.3
+2025-09-16,7673.02,132.5
+2025-09-17,7607.82,132.5
+2025-09-18,7668.64,130.0
+2025-09-19,7637.72,128.9
+2025-09-22,7654.17,128.1
+2025-09-23,7588.74,125.1
+2025-09-24,7582.04,122.4
+2025-09-25,7536.13,122.1
+2025-09-26,7590.29,121.3
+2025-09-29,7561.05,123.6
+2025-09-30,7588.98,124.3
+2025-10-01,7585.13,124.5
+2025-10-02,7569.70,124.4
+2025-10-03,7669.73,122.8
+2025-10-06,7660.77,125.2
+2025-10-07,7724.98,129.6
+2025-10-08,7864.21,128.8
+2025-10-09,7918.68,127.7
+2025-10-10,7773.50,131.2
+2025-10-13,7760.05,131.7
+2025-10-14,7719.00,131.1
+2025-10-15,7679.25,127.1
+2025-10-16,7680.16,126.7
+2025-10-17,7740.27,125.1
+2025-10-20,7668.50,121.2
+2025-10-21,7543.09,120.9
+2025-10-22,7514.37,117.1
+2025-10-23,7454.24,115.6
+2025-10-24,7484.40,118.5
+2025-10-27,7484.21,120.1
+2025-10-28,7520.96,121.4
+2025-10-29,7472.71,120.7
+2025-10-30,7472.27,121.4
+2025-10-31,7456.26,122.2
+2025-11-03,7426.56,122.7
+2025-11-04,7439.28,121.9
+2025-11-05,7326.75,121.6
+2025-11-06,7365.09,120.3
+2025-11-07,7510.94,122.5
+2025-11-10,7492.52,126.7
+2025-11-11,7618.10,127.9
+2025-11-12,7687.61,129.4
+2025-11-13,7634.15,127.4
+2025-11-14,7708.24,126.4
+2025-11-17,7682.15,127.2
+2025-11-18,7636.19,128.1
+2025-11-19,7649.61,128.0
+` },
+    { name: "indicators_weekly.csv", csv: `week_ending,initial_claims,card_spending,rail_traffic
+2017-01-07,226.6,101.99,246.3
+2017-01-14,209.0,102.19,251.9
+2017-01-21,182.5,103.45,249.5
+2017-01-28,186.3,102.94,249.0
+2017-02-04,221.8,102.59,254.8
+2017-02-11,228.2,102.02,251.5
+2017-02-18,275.1,99.45,243.7
+2017-02-25,293.6,101.19,244.9
+2017-03-04,306.1,99.71,241.4
+2017-03-11,287.7,95.93,246.4
+2017-03-18,310.2,94.38,242.4
+2017-03-25,290.2,94.93,249.3
+2017-04-01,324.6,95.95,250.2
+2017-04-08,273.4,93.90,245.9
+2017-04-15,284.3,95.96,248.4
+2017-04-22,250.6,96.96,247.6
+2017-04-29,243.7,96.50,248.2
+2017-05-06,231.2,95.37,245.5
+2017-05-13,222.5,93.49,242.0
+2017-05-20,221.9,93.19,239.6
+2017-05-27,233.5,93.67,236.9
+2017-06-03,214.4,94.89,236.4
+2017-06-10,213.6,94.34,235.3
+2017-06-17,213.2,96.21,235.9
+2017-06-24,179.7,98.19,242.5
+2017-07-01,186.4,99.92,245.4
+2017-07-08,183.7,98.88,254.0
+2017-07-15,210.0,99.90,253.7
+2017-07-22,220.3,98.88,250.2
+2017-07-29,228.7,98.94,240.4
+2017-08-05,206.6,99.16,243.0
+2017-08-12,218.5,99.37,247.5
+2017-08-19,216.3,100.60,249.4
+2017-08-26,240.5,99.76,249.4
+2017-09-02,229.2,100.15,246.4
+2017-09-09,225.5,97.72,249.1
+2017-09-16,242.7,96.40,246.0
+2017-09-23,241.1,93.85,246.1
+2017-09-30,234.4,94.35,252.2
+2017-10-07,228.3,95.21,257.6
+2017-10-14,239.0,95.94,259.7
+2017-10-21,210.5,98.03,254.8
+2017-10-28,217.7,99.02,248.3
+2017-11-04,215.6,97.98,256.0
+2017-11-11,205.2,99.47,256.7
+2017-11-18,217.0,100.46,260.1
+2017-11-25,219.8,102.14,256.2
+2017-12-02,228.4,103.11,255.1
+2017-12-09,232.5,104.87,248.1
+2017-12-16,243.7,106.34,249.1
+2017-12-23,264.5,106.99,245.3
+2017-12-30,240.2,107.16,243.3
+2018-01-06,242.2,107.57,244.5
+2018-01-13,228.2,105.89,246.8
+2018-01-20,230.0,106.32,243.8
+2018-01-27,200.5,106.17,237.2
+2018-02-03,207.7,103.86,229.2
+2018-02-10,205.4,103.84,230.3
+2018-02-17,190.3,104.45,224.5
+2018-02-24,191.3,104.26,227.6
+2018-03-03,180.4,103.95,226.8
+2018-03-10,178.0,102.60,227.3
+2018-03-17,177.1,101.46,229.1
+2018-03-24,197.0,100.42,221.5
+2018-03-31,188.2,100.07,218.3
+2018-04-07,196.5,99.32,213.8
+2018-04-14,198.1,99.85,211.0
+2018-04-21,187.9,99.57,212.3
+2018-04-28,186.3,100.10,213.9
+2018-05-05,207.8,100.57,211.8
+2018-05-12,211.5,100.95,211.3
+2018-05-19,218.6,99.09,202.2
+2018-05-26,220.8,99.35,202.2
+2018-06-02,214.2,99.05,199.5
+2018-06-09,222.8,100.10,190.8
+2018-06-16,210.6,101.09,192.5
+2018-06-23,213.5,101.04,191.2
+2018-06-30,225.6,101.00,190.4
+2018-07-07,217.8,103.92,191.9
+2018-07-14,215.4,102.06,188.3
+2018-07-21,226.8,103.28,190.2
+2018-07-28,217.9,101.30,186.4
+2018-08-04,199.9,103.41,188.2
+2018-08-11,228.4,104.06,187.4
+2018-08-18,228.0,103.92,187.3
+2018-08-25,217.1,104.53,188.8
+2018-09-01,220.9,103.06,188.8
+2018-09-08,213.0,105.37,188.3
+2018-09-15,241.5,105.48,192.8
+2018-09-22,231.9,105.10,195.2
+2018-09-29,216.6,107.49,201.5
+2018-10-06,216.8,109.45,192.9
+2018-10-13,218.0,108.76,194.1
+2018-10-20,213.0,107.46,195.3
+2018-10-27,216.4,107.18,200.0
+2018-11-03,219.9,109.42,201.1
+2018-11-10,200.0,113.03,199.2
+2018-11-17,194.0,112.01,202.1
+2018-11-24,208.1,113.68,197.6
+2018-12-01,195.2,112.78,199.0
+2018-12-08,211.1,111.72,202.9
+2018-12-15,225.7,110.38,198.7
+2018-12-22,228.1,111.45,205.3
+2018-12-29,229.7,114.24,207.3
+2019-01-05,239.0,113.79,207.3
+2019-01-12,240.9,113.10,211.5
+2019-01-19,249.0,112.19,212.3
+2019-01-26,255.6,113.15,211.3
+2019-02-02,231.1,113.07,209.0
+2019-02-09,212.8,114.48,200.0
+2019-02-16,232.4,113.31,203.4
+2019-02-23,234.2,112.55,204.0
+2019-03-02,237.5,113.60,200.0
+2019-03-09,212.5,111.81,201.2
+2019-03-16,190.4,112.09,195.4
+2019-03-23,196.6,112.15,203.2
+2019-03-30,226.3,111.84,196.7
+2019-04-06,233.5,107.67,198.4
+2019-04-13,221.4,109.00,198.2
+2019-04-20,209.1,108.73,197.3
+2019-04-27,228.3,107.62,202.0
+2019-05-04,260.8,107.42,201.9
+2019-05-11,213.7,107.79,199.8
+2019-05-18,208.3,106.47,195.9
+2019-05-25,243.8,106.91,191.4
+2019-06-01,244.3,109.64,186.3
+2019-06-08,234.6,108.96,183.4
+2019-06-15,251.8,109.47,182.1
+2019-06-22,255.0,107.97,181.6
+2019-06-29,265.1,106.99,183.0
+2019-07-06,260.2,105.78,182.5
+2019-07-13,282.4,104.83,183.3
+2019-07-20,272.9,104.69,181.9
+2019-07-27,282.9,106.22,176.5
+2019-08-03,256.8,106.96,181.0
+2019-08-10,253.9,106.70,180.6
+2019-08-17,226.0,106.95,183.2
+2019-08-24,212.0,106.25,182.5
+2019-08-31,208.6,107.99,175.4
+2019-09-07,238.9,105.96,176.2
+2019-09-14,240.4,107.30,182.3
+2019-09-21,261.3,107.87,182.3
+2019-09-28,241.5,106.25,180.4
+2019-10-05,238.7,107.53,181.9
+2019-10-12,231.6,106.94,187.1
+2019-10-19,193.9,106.46,195.1
+2019-10-26,193.6,109.32,192.1
+2019-11-02,192.5,108.37,192.6
+2019-11-09,196.9,110.83,187.5
+2019-11-16,240.1,110.58,186.0
+2019-11-23,246.4,109.62,193.1
+2019-11-30,255.7,110.37,192.3
+2019-12-07,224.9,109.37,191.0
+2019-12-14,233.8,108.39,198.5
+2019-12-21,242.5,105.37,198.4
+2019-12-28,241.1,105.33,195.9
+2020-01-04,201.8,104.19,194.4
+2020-01-11,193.3,106.24,191.1
+2020-01-18,184.7,105.41,190.7
+2020-01-25,195.6,106.56,192.0
+2020-02-01,183.8,106.75,192.5
+2020-02-08,232.8,104.81,188.2
+2020-02-15,250.4,102.90,185.8
+2020-02-22,227.3,103.85,184.6
+2020-02-29,200.7,104.89,190.8
+2020-03-07,214.7,105.99,191.3
+2020-03-14,232.9,105.03,196.2
+2020-03-21,280.8,104.01,189.2
+2020-03-28,277.3,103.00,187.9
+2020-04-04,293.6,101.18,192.5
+2020-04-11,359.2,99.73,190.2
+2020-04-18,400.0,96.14,189.3
+2020-04-25,429.6,94.84,188.2
+2020-05-02,432.0,93.31,186.8
+2020-05-09,444.7,90.82,179.2
+2020-05-16,342.7,89.40,174.4
+2020-05-23,284.4,89.71,173.3
+2020-05-30,255.3,89.50,172.2
+2020-06-06,208.3,89.81,171.9
+2020-06-13,179.9,90.32,170.9
+2020-06-20,176.4,89.98,163.4
+2020-06-27,155.6,93.01,167.1
+2020-07-04,149.5,95.05,168.6
+2020-07-11,171.1,97.77,172.5
+2020-07-18,164.0,99.68,170.8
+2020-07-25,169.2,100.73,179.7
+2020-08-01,170.5,104.94,178.2
+2020-08-08,173.5,106.37,187.7
+2020-08-15,182.1,107.81,189.1
+2020-08-22,190.6,108.34,188.8
+2020-08-29,193.6,109.32,194.5
+2020-09-05,220.0,108.76,198.9
+2020-09-12,206.2,109.32,194.6
+2020-09-19,213.3,110.56,197.7
+2020-09-26,226.8,110.95,199.0
+2020-10-03,229.7,109.90,196.6
+2020-10-10,208.5,109.49,196.7
+2020-10-17,207.9,108.62,204.1
+2020-10-24,203.6,109.04,200.3
+2020-10-31,195.1,109.89,194.7
+2020-11-07,180.6,109.73,189.7
+2020-11-14,215.9,112.86,188.6
+2020-11-21,220.2,112.53,181.4
+2020-11-28,243.7,113.62,182.2
+2020-12-05,246.7,117.09,178.4
+2020-12-12,251.0,118.84,181.3
+2020-12-19,218.8,119.95,186.7
+2020-12-26,213.3,122.58,191.7
+2021-01-02,214.5,123.84,195.8
+2021-01-09,227.7,122.60,196.6
+2021-01-16,224.7,125.24,199.9
+2021-01-23,236.5,128.40,198.7
+2021-01-30,239.9,130.01,202.3
+2021-02-06,249.2,131.69,206.8
+2021-02-13,241.8,133.51,209.5
+2021-02-20,253.6,136.48,215.5
+2021-02-27,235.5,138.69,212.2
+2021-03-06,243.2,135.35,209.8
+2021-03-13,266.5,136.36,211.3
+2021-03-20,251.6,137.35,215.6
+2021-03-27,253.5,137.18,219.5
+2021-04-03,231.6,138.25,220.1
+2021-04-10,243.6,139.82,220.1
+2021-04-17,243.5,141.22,216.9
+2021-04-24,249.7,138.35,219.6
+2021-05-01,233.2,139.45,222.2
+2021-05-08,260.5,142.41,217.7
+2021-05-15,272.6,140.98,216.2
+2021-05-22,265.8,142.60,215.3
+2021-05-29,278.8,142.71,211.7
+2021-06-05,268.8,142.72,205.0
+2021-06-12,260.7,146.13,202.1
+2021-06-19,236.0,146.36,202.3
+2021-06-26,243.8,147.66,200.2
+2021-07-03,237.8,144.99,199.1
+2021-07-10,236.6,143.60,194.4
+2021-07-17,218.8,144.70,195.0
+2021-07-24,240.9,142.69,197.2
+2021-07-31,211.4,143.62,194.4
+2021-08-07,210.8,143.78,195.5
+2021-08-14,225.1,145.09,197.9
+2021-08-21,236.3,143.65,197.8
+2021-08-28,223.6,146.38,203.6
+2021-09-04,235.7,149.48,198.3
+2021-09-11,234.6,149.94,203.8
+2021-09-18,224.5,150.03,206.7
+2021-09-25,239.6,146.86,203.6
+2021-10-02,219.9,144.85,201.8
+2021-10-09,231.7,141.77,204.2
+2021-10-16,234.9,138.92,200.1
+2021-10-23,227.8,139.88,195.8
+2021-10-30,209.2,140.83,202.5
+2021-11-06,215.8,142.62,204.1
+2021-11-13,219.4,142.74,206.5
+2021-11-20,229.8,141.41,203.4
+2021-11-27,240.0,140.30,203.3
+2021-12-04,200.1,145.36,204.1
+2021-12-11,189.2,145.19,208.0
+2021-12-18,193.1,146.86,206.8
+2021-12-25,198.1,147.67,206.2
+2022-01-01,209.7,144.17,208.7
+2022-01-08,229.1,146.90,208.5
+2022-01-15,261.9,149.24,208.1
+2022-01-22,248.4,146.59,208.8
+2022-01-29,253.2,148.01,211.1
+2022-02-05,274.2,148.42,209.1
+2022-02-12,288.4,147.53,210.3
+2022-02-19,276.9,148.35,211.8
+2022-02-26,256.3,149.33,209.4
+2022-03-05,283.8,146.65,208.3
+2022-03-12,286.6,144.14,209.4
+2022-03-19,294.0,143.42,204.9
+2022-03-26,276.6,143.85,210.4
+2022-04-02,235.5,142.25,208.2
+2022-04-09,258.6,141.22,213.2
+2022-04-16,234.9,140.21,213.9
+2022-04-23,259.2,137.03,218.9
+2022-04-30,239.2,137.91,219.5
+2022-05-07,276.7,137.57,212.6
+2022-05-14,250.7,137.87,207.5
+2022-05-21,248.1,137.85,208.5
+2022-05-28,283.7,136.60,206.1
+2022-06-04,264.2,134.30,203.2
+2022-06-11,237.7,133.98,201.9
+2022-06-18,224.3,135.66,204.1
+2022-06-25,227.9,135.74,209.3
+2022-07-02,224.9,137.81,208.3
+2022-07-09,247.4,138.23,205.5
+2022-07-16,222.5,138.52,202.4
+2022-07-23,189.0,140.64,203.1
+2022-07-30,214.1,140.11,201.1
+2022-08-06,236.2,139.38,202.7
+2022-08-13,235.6,136.46,203.4
+2022-08-20,227.8,136.23,198.6
+2022-08-27,247.4,134.12,190.3
+2022-09-03,243.8,132.74,188.5
+2022-09-10,232.4,132.70,187.4
+2022-09-17,248.9,132.54,191.4
+2022-09-24,253.8,134.74,187.4
+2022-10-01,249.7,138.39,189.5
+2022-10-08,243.4,135.06,190.0
+2022-10-15,227.0,134.93,191.4
+2022-10-22,220.6,136.21,193.9
+2022-10-29,209.6,135.74,188.5
+2022-11-05,183.4,133.82,189.2
+2022-11-12,178.3,135.99,196.9
+2022-11-19,172.0,136.10,195.6
+2022-11-26,171.8,135.82,198.8
+2022-12-03,168.6,133.18,195.6
+2022-12-10,171.8,132.99,198.6
+2022-12-17,169.3,135.55,200.3
+2022-12-24,182.2,138.77,203.1
+2022-12-31,177.0,135.77,201.3
+2023-01-07,199.5,134.66,203.2
+2023-01-14,203.6,136.35,199.1
+2023-01-21,229.3,137.83,193.6
+2023-01-28,230.6,135.13,192.6
+2023-02-04,228.0,137.54,192.5
+2023-02-11,271.5,133.53,192.5
+2023-02-18,289.8,129.74,194.5
+2023-02-25,317.3,125.00,194.5
+2023-03-04,274.9,123.64,191.5
+2023-03-11,294.3,121.95,190.0
+2023-03-18,310.9,121.05,183.8
+2023-03-25,295.2,119.72,176.2
+2023-04-01,295.6,119.95,182.7
+2023-04-08,272.1,120.41,184.5
+2023-04-15,252.1,120.51,185.0
+2023-04-22,260.7,120.64,182.1
+2023-04-29,260.5,120.64,187.7
+2023-05-06,250.4,122.34,181.4
+2023-05-13,255.0,121.24,178.8
+2023-05-20,251.3,122.46,181.7
+2023-05-27,219.8,124.58,179.9
+2023-06-03,224.6,125.40,178.2
+2023-06-10,221.5,123.41,177.6
+2023-06-17,227.7,121.80,175.7
+2023-06-24,207.5,122.77,172.3
+2023-07-01,187.5,123.48,173.4
+2023-07-08,175.0,125.83,172.3
+2023-07-15,198.9,128.34,174.9
+2023-07-22,193.9,127.86,168.0
+2023-07-29,193.3,125.42,169.0
+2023-08-05,225.9,125.05,166.8
+2023-08-12,247.0,124.99,166.9
+2023-08-19,220.3,124.72,164.9
+2023-08-26,243.0,124.31,164.8
+2023-09-02,249.2,123.34,163.8
+2023-09-09,254.7,120.96,157.7
+2023-09-16,250.9,121.11,155.8
+2023-09-23,237.8,121.78,154.7
+2023-09-30,249.5,121.63,157.8
+2023-10-07,237.9,121.94,160.5
+2023-10-14,235.2,119.57,160.9
+2023-10-21,258.7,120.13,160.5
+2023-10-28,301.1,119.15,166.2
+2023-11-04,271.4,120.90,175.5
+2023-11-11,259.8,122.48,171.0
+2023-11-18,264.2,119.45,169.3
+2023-11-25,258.5,117.56,172.2
+2023-12-02,274.6,116.58,168.3
+2023-12-09,287.0,116.80,171.4
+2023-12-16,282.2,115.73,166.2
+2023-12-23,310.4,112.82,169.8
+2023-12-30,276.9,113.30,171.5
+2024-01-06,245.3,112.16,170.7
+2024-01-13,251.8,110.33,176.1
+2024-01-20,277.3,110.71,187.9
+2024-01-27,271.8,110.29,191.1
+2024-02-03,261.2,108.45,189.0
+2024-02-10,240.3,107.17,193.9
+2024-02-17,248.9,106.86,191.5
+2024-02-24,254.6,107.20,191.5
+2024-03-02,250.3,109.04,194.8
+2024-03-09,245.4,106.85,197.3
+2024-03-16,220.7,105.99,200.6
+2024-03-23,227.2,106.25,197.7
+2024-03-30,234.9,105.50,191.6
+2024-04-06,212.8,104.30,189.5
+2024-04-13,200.9,103.40,185.1
+2024-04-20,196.8,102.99,186.4
+2024-04-27,194.2,103.44,187.4
+2024-05-04,203.6,106.06,190.4
+2024-05-11,207.1,107.08,189.4
+2024-05-18,206.9,107.09,190.0
+2024-05-25,203.9,106.88,185.3
+2024-06-01,216.5,109.32,183.2
+2024-06-08,226.8,111.98,184.3
+2024-06-15,228.2,113.22,183.2
+2024-06-22,226.9,114.43,186.8
+2024-06-29,244.2,112.42,188.9
+2024-07-06,214.2,113.49,189.9
+2024-07-13,212.0,116.05,188.3
+2024-07-20,213.1,116.15,193.5
+2024-07-27,221.0,117.66,204.2
+2024-08-03,206.5,118.29,205.4
+2024-08-10,203.3,119.42,210.1
+2024-08-17,217.4,117.40,207.3
+2024-08-24,202.4,116.98,206.8
+2024-08-31,224.1,116.61,205.1
+2024-09-07,213.8,115.96,209.6
+2024-09-14,195.8,119.05,212.6
+2024-09-21,204.9,118.16,214.5
+2024-09-28,188.6,119.85,211.9
+2024-10-05,188.6,119.72,210.1
+2024-10-12,204.0,121.12,214.9
+2024-10-19,197.2,122.01,214.6
+2024-10-26,193.0,123.34,212.9
+2024-11-02,206.1,122.89,218.3
+2024-11-09,196.4,121.16,215.9
+2024-11-16,180.5,122.98,214.4
+2024-11-23,171.1,123.80,211.4
+2024-11-30,177.0,124.84,213.9
+2024-12-07,173.6,127.21,223.1
+2024-12-14,167.9,127.68,223.0
+2024-12-21,182.3,131.73,227.5
+2024-12-28,188.2,132.52,226.6
+2025-01-04,209.4,133.92,225.1
+2025-01-11,225.5,132.38,228.1
+2025-01-18,236.5,129.92,225.8
+2025-01-25,205.5,129.85,229.4
+2025-02-01,211.8,129.16,231.6
+2025-02-08,198.0,133.09,233.3
+2025-02-15,179.2,133.21,232.4
+2025-02-22,199.4,133.70,227.5
+2025-03-01,181.1,134.37,231.2
+2025-03-08,191.4,135.12,230.8
+2025-03-15,224.2,134.88,228.9
+2025-03-22,239.4,135.08,235.0
+2025-03-29,233.6,138.92,228.1
+2025-04-05,225.7,140.49,224.6
+2025-04-12,200.6,141.23,223.0
+2025-04-19,217.9,143.32,217.3
+2025-04-26,199.2,142.06,219.3
+2025-05-03,196.7,143.14,223.6
+2025-05-10,222.4,146.16,225.6
+2025-05-17,235.0,143.71,223.3
+2025-05-24,221.4,142.66,223.3
+2025-05-31,221.2,139.91,224.2
+2025-06-07,213.5,139.64,228.6
+2025-06-14,195.9,141.41,225.3
+2025-06-21,174.0,141.03,226.6
+2025-06-28,186.8,140.61,232.1
+2025-07-05,179.5,140.97,239.3
+2025-07-12,174.3,144.44,248.8
+2025-07-19,179.8,145.92,254.9
+2025-07-26,192.1,147.13,251.7
+2025-08-02,186.4,147.09,259.5
+2025-08-09,190.7,143.08,262.5
+2025-08-16,202.7,144.14,256.0
+2025-08-23,200.8,144.34,249.9
+2025-08-30,191.6,144.16,242.0
+2025-09-06,202.1,142.88,232.8
+2025-09-13,208.7,142.93,230.2
+2025-09-20,202.6,143.37,231.9
+2025-09-27,198.2,143.66,230.0
+2025-10-04,197.8,143.09,234.2
+2025-10-11,195.7,143.56,239.1
+2025-10-18,194.2,144.54,249.6
+2025-10-25,195.1,147.07,254.9
+2025-11-01,220.2,150.20,263.2
+2025-11-08,204.4,148.79,268.7
+2025-11-15,218.3,148.26,
+` },
+    { name: "indicators_monthly.csv", csv: `month,industrial_production,retail_sales,payrolls,pmi,unemployment_rate
+2017-01,100.26,504.6,146303,53.0,4.8
+2017-02,100.55,510.4,146368,48.2,4.7
+2017-03,99.43,503.4,146146,45.9,4.8
+2017-04,98.19,497.6,146129,50.4,4.9
+2017-05,97.81,501.1,146258,49.1,4.8
+2017-06,98.34,503.5,146490,52.3,4.8
+2017-07,98.77,510.7,146677,52.6,4.8
+2017-08,98.72,508.3,146687,47.7,4.8
+2017-09,98.28,505.5,146739,48.2,4.8
+2017-10,97.96,509.4,147017,50.5,4.8
+2017-11,98.41,511.7,147345,52.1,4.9
+2017-12,98.88,516.9,147357,49.4,4.9
+2018-01,99.02,512.6,147553,52.5,4.8
+2018-02,99.29,512.4,147889,53.3,4.8
+2018-03,100.24,515.5,148277,53.2,4.8
+2018-04,100.94,520.3,148538,52.2,4.7
+2018-05,101.60,527.6,148836,52.9,4.6
+2018-06,102.54,532.0,149295,51.7,4.6
+2018-07,102.65,538.8,149697,51.6,4.5
+2018-08,103.19,546.9,149948,48.7,4.5
+2018-09,103.29,542.4,150068,51.2,4.5
+2018-10,103.86,540.7,150355,53.0,4.4
+2018-11,104.61,541.8,150711,53.5,4.4
+2018-12,104.97,544.3,150965,53.0,4.3
+2019-01,105.08,553.0,151139,48.8,4.4
+2019-02,104.53,554.6,151323,48.8,4.4
+2019-03,103.53,553.7,151260,50.0,4.3
+2019-04,103.46,553.6,151368,50.4,4.3
+2019-05,103.97,555.6,151485,49.3,4.3
+2019-06,103.86,555.3,151638,50.0,4.4
+2019-07,103.13,551.5,151568,48.1,4.4
+2019-08,103.21,549.8,151736,49.6,4.4
+2019-09,103.37,556.7,151874,50.8,4.4
+2019-10,104.14,567.2,152275,54.4,4.3
+2019-11,105.42,576.7,152418,50.6,4.3
+2019-12,105.02,572.2,152457,47.4,4.3
+2020-01,105.23,574.4,152647,52.3,4.3
+2020-02,105.34,582.8,152920,53.1,4.2
+2020-03,106.12,586.3,152959,49.5,4.3
+2020-04,103.22,564.0,151894,35.1,4.6
+2020-05,98.30,529.1,151402,39.6,4.6
+2020-06,98.54,531.6,151970,56.0,4.6
+2020-07,102.32,555.0,152869,61.4,4.4
+2020-08,104.93,572.9,153460,57.4,4.3
+2020-09,106.49,586.8,153788,53.5,4.2
+2020-10,107.63,594.8,154104,52.0,4.2
+2020-11,108.32,604.7,154312,52.7,4.2
+2020-12,108.10,609.4,154560,52.4,4.2
+2021-01,108.23,614.3,154893,52.6,4.1
+2021-02,108.29,613.3,154988,53.0,4.1
+2021-03,107.40,607.1,155132,50.5,4.1
+2021-04,107.20,602.0,155150,48.6,4.2
+2021-05,106.77,599.6,155185,48.5,4.2
+2021-06,105.34,594.4,155124,44.6,4.3
+2021-07,103.78,586.4,154973,45.8,4.3
+2021-08,103.54,593.3,155092,50.4,4.4
+2021-09,103.67,594.5,155176,48.7,4.4
+2021-10,103.38,593.6,155427,51.1,4.3
+2021-11,103.26,599.3,155638,52.1,4.3
+2021-12,103.44,611.7,156042,53.9,4.3
+2022-01,104.03,619.4,156094,49.8,4.2
+2022-02,103.63,616.3,156081,48.4,4.2
+2022-03,103.14,608.2,155938,49.0,4.2
+2022-04,101.64,606.3,155918,47.6,4.2
+2022-05,100.84,603.6,155961,49.3,4.3
+2022-06,99.90,596.6,156007,50.6,4.3
+2022-07,99.20,590.7,156027,50.2,4.2
+2022-08,99.35,586.8,155996,49.8,4.3
+2022-09,99.06,584.3,156028,50.7,4.4
+2022-10,99.10,584.5,156213,51.7,4.4
+2022-11,99.62,590.5,156544,53.6,4.3
+2022-12,100.33,599.4,156915,54.7,4.2
+2023-01,100.81,609.6,157225,52.9,4.2
+2023-02,100.01,609.1,156939,44.0,4.3
+2023-03,97.68,598.0,156608,43.6,4.4
+2023-04,96.40,587.0,156527,48.9,4.4
+2023-05,96.55,590.4,156645,53.2,4.4
+2023-06,97.55,595.8,156934,51.5,4.3
+2023-07,98.74,602.9,157205,51.6,4.3
+2023-08,98.50,603.0,157216,48.0,4.3
+2023-09,96.71,599.5,156985,48.1,4.4
+2023-10,96.06,596.8,156830,46.4,4.6
+2023-11,95.11,588.9,156811,46.9,4.5
+2023-12,93.47,579.7,156578,45.3,4.5
+2024-01,92.44,581.4,156598,47.6,4.6
+2024-02,92.01,581.4,156559,48.6,4.7
+2024-03,91.69,581.3,156641,49.4,4.6
+2024-04,92.06,579.8,156792,53.1,4.6
+2024-05,92.69,579.8,156992,51.2,4.6
+2024-06,93.42,582.8,157136,51.2,4.5
+2024-07,93.72,586.7,157485,53.4,4.4
+2024-08,94.58,597.5,157785,54.4,4.4
+2024-09,94.80,605.3,158005,53.3,4.3
+2024-10,95.78,612.3,158286,55.8,4.3
+2024-11,97.47,627.1,158872,55.3,4.2
+2024-12,99.60,648.1,159593,57.9,4.1
+2025-01,101.09,658.5,159989,53.4,4.1
+2025-02,102.82,662.1,160409,55.9,4.0
+2025-03,104.71,667.5,160644,54.1,4.0
+2025-04,105.80,667.5,160738,50.8,4.0
+2025-05,105.48,662.6,160641,49.4,4.0
+2025-06,105.41,662.8,160984,53.7,4.0
+2025-07,106.37,680.1,161352,52.3,4.0
+2025-08,107.52,693.1,161628,51.3,4.0
+2025-09,108.15,696.0,161951,52.2,4.0
+2025-10,108.98,705.9,162244,52.2,4.0
+2025-11,,,,,
+` },
+    { name: "gdp_quarterly.csv", csv: `quarter,gdp
+2017Q1,100.262
+2017Q2,100.185
+2017Q3,100.757
+2017Q4,101.236
+2018Q1,101.930
+2018Q2,103.112
+2018Q3,104.213
+2018Q4,104.985
+2019Q1,105.616
+2019Q2,105.873
+2019Q3,106.105
+2019Q4,106.765
+2020Q1,107.230
+2020Q2,105.926
+2020Q3,107.557
+2020Q4,109.024
+2021Q1,109.882
+2021Q2,110.086
+2021Q3,109.930
+2021Q4,110.588
+2022Q1,111.226
+2022Q2,111.050
+2022Q3,111.018
+2022Q4,111.659
+2023Q1,112.381
+2023Q2,111.973
+2023Q3,112.596
+2023Q4,112.122
+2024Q1,111.876
+2024Q2,112.270
+2024Q3,113.256
+2024Q4,114.816
+2025Q1,116.833
+2025Q2,117.631
+2025Q3,118.620
+2025Q4,
+` }],
+  missing: [{ name: "regional_panel.csv", csv: `date,industrial_production,retail_sales,employment,consumer_confidence,housing_starts,exports,business_survey,gdp,investment
+2012-01-01,-1.1011,-0.1765,-0.1443,,1.1287,-2.2681,0.4485,,
+2012-02-01,-0.431,0.4417,-0.0065,,0.3271,0.7024,0.2815,,
+2012-03-01,0.1091,1.3328,0.5462,,3.4093,-0.724,0.5596,0.0882,
+2012-04-01,-0.2838,0.1037,0.2295,,1.3747,1.514,-0.9178,,
+2012-05-01,-1.5088,-1.5902,0.0472,,0.5931,-1.2392,,,
+2012-06-01,-1.5083,-0.3544,-0.77,,-4.1321,-1.0728,-0.4959,-0.1948,
+2012-07-01,0.3624,0.0381,0.4299,,2.2279,-0.438,0.9219,,
+2012-08-01,1.6268,0.3467,0.1344,,0.6228,3.0736,0.662,,
+2012-09-01,0.1434,1.0457,0.1403,,2.1567,0.6642,1.2133,0.4096,
+2012-10-01,1.9022,0.7599,0.6557,,1.9409,1.8452,0.813,,
+2012-11-01,0.3191,0.4987,0.0542,,0.2041,1.1517,1.0356,,
+2012-12-01,1.2707,1.1604,0.7846,,0.7876,-0.368,1.1713,0.6884,
+2013-01-01,-0.8293,0.499,-0.8974,,0.5193,0.5828,-0.5697,,
+2013-02-01,0.9183,-0.4263,0.2535,,-2.1949,-0.6713,0.5419,,
+2013-03-01,-0.0994,0.6887,0.0202,,-1.9137,1.0414,0.2103,0.1459,
+2013-04-01,-0.0641,0.9358,1.1597,,0.4608,1.2326,1.0774,,
+2013-05-01,-0.2591,-0.1505,0.2041,,-0.3471,-2.1148,-0.1811,,
+2013-06-01,-1.2405,-0.5396,-0.441,,-2.7309,-0.2838,-2.1122,0.0243,
+2013-07-01,-1.1509,-1.7263,-1.0071,,-3.9603,-1.402,-1.9868,,
+2013-08-01,-1.6007,-0.6139,-1.0657,,-2.5613,-1.814,-1.2649,,
+2013-09-01,0.3405,-0.0484,-0.4081,,-0.877,-0.2071,-0.2425,-0.6854,
+2013-10-01,-0.6918,-0.1009,-0.1856,,-2.4147,-0.46,-0.6356,,
+2013-11-01,-1.0464,-0.4925,0.0393,,-0.8121,-0.8134,0.9567,,
+2013-12-01,-0.0718,-0.3133,-0.5076,,-1.2818,0.3813,-1.2515,-0.2275,
+2014-01-01,-1.5014,-0.5501,-0.101,,-1.2074,-0.0487,,,
+2014-02-01,0.4642,0.4993,0.4992,,2.1139,0.0955,,,
+2014-03-01,-0.4446,-0.0514,-0.174,,-0.7075,-1.1852,-0.2173,-0.0151,
+2014-04-01,1.9313,2.1599,1.2163,,2.0843,1.5221,0.5046,,
+2014-05-01,0.8623,-0.53,0.4613,,1.3075,-0.0239,,,
+2014-06-01,2.5619,2.0666,1.3979,,1.7454,1.8957,2.0817,0.7946,
+2014-07-01,1.7805,0.2824,0.6252,,0.9864,1.9395,1.2611,,
+2014-08-01,0.7916,2.1491,-0.0815,,-0.0438,1.1211,-0.0247,,
+2014-09-01,0.5011,0.0701,-0.4786,,0.2414,1.1586,,0.2713,
+2014-10-01,-0.109,-0.1277,0.0369,,-0.0905,0.2463,0.5485,,
+2014-11-01,0.5166,-0.492,0.1477,,-0.275,1.054,0.6631,,
+2014-12-01,0.6136,0.5058,0.302,,-1.47,-0.3893,-0.2592,0.1719,
+2015-01-01,0.5879,0.881,-0.6558,,0.8193,-1.3061,-1.1223,,
+2015-02-01,-1.3731,-0.614,-0.6421,,-0.8557,-0.5609,-0.5689,,
+2015-03-01,-1.7687,-0.9839,-0.9327,,-1.3806,-0.4494,-0.7116,-0.1457,
+2015-04-01,-0.552,-0.5576,0.1302,,1.1963,0.4619,0.4584,,
+2015-05-01,-0.4422,-0.6401,-0.2494,,-1.737,-0.0261,-1.382,,
+2015-06-01,0.0854,-0.6385,-0.3673,,0.1917,0.1404,0.8252,-0.0169,
+2015-07-01,0.309,0.3952,0.5502,,-0.4669,-0.7552,-0.0056,,
+2015-08-01,-1.4508,-1.4148,-0.4238,,0.4081,0.3091,0.5473,,
+2015-09-01,-0.0128,-0.3056,0.1088,,-1.8086,-0.0269,-0.3708,-0.024,
+2015-10-01,2.1097,0.3464,0.3215,,0.3351,1.7932,1.3184,,
+2015-11-01,-0.5358,-1.5467,-0.5551,,-1.8726,-0.6122,-0.5418,,
+2015-12-01,-1.1696,-0.9122,-0.4132,,-0.6632,-0.5617,-1.2169,-0.1914,
+2016-01-01,-0.7859,-0.9032,0.0762,,-0.4319,-0.8631,-1.3916,,
+2016-02-01,-0.9771,-1.5229,-0.9468,,-1.3841,-0.3411,-1.3022,,
+2016-03-01,-0.883,1.2877,-0.2793,,-1.5582,-0.2209,-1.691,-0.2268,-1.1468
+2016-04-01,0.6251,0.1609,-0.7341,,-2.1058,-1.465,,,
+2016-05-01,-1.6885,-1.8852,-0.8514,,-2.144,-0.5994,-1.2891,,
+2016-06-01,-0.5684,-0.5273,0.0779,,-3.8832,-0.1702,0.3598,-0.1632,-1.0501
+2016-07-01,-0.2444,0.1335,0.3312,,0.9879,2.3008,-0.2737,,
+2016-08-01,1.135,1.7752,0.6532,,1.8975,1.6447,,,
+2016-09-01,2.2111,2.3684,0.4904,,2.5778,0.7243,1.1771,0.5278,1.2525
+2016-10-01,2.3747,1.5555,1.2685,,5.4559,2.2809,2.1475,,
+2016-11-01,1.916,1.041,0.9099,,0.8716,1.8716,2.445,,
+2016-12-01,-0.2319,0.3893,0.1067,,-2.4295,-0.9131,,0.3897,1.2646
+2017-01-01,-0.3986,1.6607,0.767,,1.6251,0.5266,0.7286,,
+2017-02-01,0.207,-0.5671,-0.838,,-1.8043,0.2839,-0.8053,,
+2017-03-01,0.636,0.1387,-0.076,,-1.1706,-0.6597,-0.1536,0.0773,-0.2973
+2017-04-01,-1.0564,-1.0526,-0.918,,-1.1508,-1.4974,-1.6608,,
+2017-05-01,-1.9425,-1.3832,-1.145,,-0.703,-1.3786,-1.2901,,
+2017-06-01,-2.2994,-1.2686,0.0289,,-3.3252,0.0173,-1.677,-0.5738,-1.422
+2017-07-01,-0.5917,0.2486,-0.5188,,-0.265,0.3104,-0.6282,,
+2017-08-01,-1.3974,-0.9677,-0.3593,,-3.8627,-0.4258,-0.3241,,
+2017-09-01,-2.5374,-2.443,-1.3551,,-4.2345,0.5146,-2.9396,-0.538,-1.1834
+2017-10-01,-1.7787,-2.1562,-0.6625,,-2.4835,-1.4811,-1.4659,,
+2017-11-01,0.1178,0.307,0.4055,,1.9067,-0.9179,-0.3632,,
+2017-12-01,-1.5126,0.3503,0.5697,,-0.1852,1.8729,0.5358,-0.1318,-0.757
+2018-01-01,-1.635,-0.3967,-0.6468,,-1.8273,0.1851,-0.9541,,
+2018-02-01,-3.2566,-2.1595,-1.363,,-5.9675,-2.175,-2.8739,,
+2018-03-01,-2.9581,-0.3104,-0.9519,,-2.3141,-1.2809,-2.8573,-0.5901,-1.9796
+2018-04-01,-1.5568,-1.3505,-1.1252,,-1.665,-1.2923,-1.0411,,
+2018-05-01,-2.8291,-1.3965,-0.8593,,-3.3763,-0.0916,,,
+2018-06-01,-0.5738,-0.6001,-1.4175,,-3.4669,0.1732,-0.9683,-0.5454,-2.1077
+2018-07-01,1.7024,-0.1237,-0.0442,,-1.0214,0.8263,0.4484,,
+2018-08-01,0.2139,0.3351,-0.4942,,-1.2422,0.0827,0.6696,,
+2018-09-01,0.593,0.2782,0.5563,,0.589,0.8919,1.094,0.3406,0.5255
+2018-10-01,0.9971,2.2242,0.3987,,0.867,1.1076,0.7463,,
+2018-11-01,1.9361,1.0285,1.2442,,1.1751,0.6751,1.718,,
+2018-12-01,1.0067,2.7921,1.7708,,4.0619,0.6178,,0.8353,1.7593
+2019-01-01,2.1384,2.3161,1.6947,111.0675,1.5813,1.243,0.2713,,
+2019-02-01,3.2684,1.9376,1.9416,102.4175,-0.5042,2.4366,2.1672,,
+2019-03-01,0.9394,-1.001,0.4832,98.8459,0.7586,0.7458,0.8469,0.7993,1.3495
+2019-04-01,1.2239,0.2143,1.3681,101.5276,1.8692,1.4826,,,
+2019-05-01,1.2287,1.0702,1.1784,108.1957,2.7693,1.9488,1.5444,,
+2019-06-01,2.7621,1.6812,1.1784,104.2473,3.8997,1.8092,2.0774,0.7218,1.3482
+2019-07-01,-0.0636,-0.9279,0.054,96.555,-1.6207,0.7117,,,
+2019-08-01,-0.9409,-0.6837,-0.7611,93.6006,0.0191,0.4523,-0.9414,,
+2019-09-01,-0.1476,0.8885,1.058,92.0512,-0.3104,0.811,,0.1141,-0.4297
+2019-10-01,-1.8131,-0.3659,-0.9911,92.15,-2.9165,0.0001,,,
+2019-11-01,-0.4305,-0.7075,-1.1793,87.8174,-0.1151,0.075,,,
+2019-12-01,0.5805,0.0073,0.5475,98.6919,-0.2641,-1.3808,-0.0111,-0.2903,-1.0767
+2020-01-01,-0.9926,-0.373,0.4497,90.0867,-1.8156,-0.4971,-0.5741,,
+2020-02-01,0.4001,-0.2987,-0.1053,102.639,2.5114,0.804,1.0603,,
+2020-03-01,1.2159,0.5464,0.6914,104.4036,0.0073,0.7899,1.1091,0.1646,-0.1294
+2020-04-01,0.9934,0.8225,0.3435,96.4563,,2.3205,,,
+2020-05-01,0.2234,0.2674,0.2636,99.5278,,1.3315,-0.1742,,
+2020-06-01,1.6468,0.9654,0.7645,100.7662,,1.1754,1.9933,0.4571,0.7841
+2020-07-01,0.7195,1.0906,0.4513,102.3508,,1.6126,1.3737,,
+2020-08-01,2.2348,2.5601,1.2262,109.2311,,1.6406,,,
+2020-09-01,0.269,0.7802,0.717,100.715,,-1.5769,,0.5726,1.0352
+2020-10-01,-0.791,1.1792,0.1524,104.0452,-0.4302,1.2093,1.0477,,
+2020-11-01,1.7144,1.3296,0.7142,101.212,2.1533,0.5653,1.0701,,
+2020-12-01,0.658,1.3023,0.4404,101.3781,2.5154,0.739,,0.445,0.7356
+2021-01-01,0.7136,1.5027,-0.3445,92.3893,0.9056,1.5552,0.3917,,
+2021-02-01,1.3537,-0.0984,1.1442,98.0823,0.4372,1.0899,0.4461,,
+2021-03-01,1.5936,1.1829,1.2434,104.3732,3.9399,1.4665,0.9975,0.4989,1.0711
+2021-04-01,1.9266,1.5339,1.262,106.8227,1.9754,0.9314,1.7377,,
+2021-05-01,-1.1085,-0.6687,-0.1662,95.9225,0.1579,0.0755,-0.9192,,
+2021-06-01,-0.7705,0.16,-0.285,96.3172,1.2232,0.0344,-0.4341,0.2069,-0.4576
+2021-07-01,0.0872,0.2646,-0.0756,99.0194,-1.2051,-0.36,,,
+2021-08-01,-0.9756,0.2286,-0.3556,95.7864,-0.2568,-1.3089,-1.5028,,
+2021-09-01,0.5452,1.1726,1.1268,101.721,0.0217,0.5001,0.2959,0.0887,-0.1635
+2021-10-01,-0.7051,-0.0692,-0.3697,97.1046,-0.5209,-0.8274,-0.4229,,
+2021-11-01,2.0024,1.3701,1.1132,102.1538,1.7944,0.7054,1.0378,,
+2021-12-01,0.4483,-0.9326,-0.717,96.839,0.4299,-0.1094,-0.2486,0.2494,-0.2542
+2022-01-01,-0.7241,-1.6681,0.2967,93.4378,-1.2481,-1.4197,-0.985,,
+2022-02-01,-0.7416,0.4697,0.1687,99.1536,0.0761,0.141,-1.1327,,
+2022-03-01,0.8778,0.369,0.1829,100.8477,1.4765,-0.2034,0.6644,0.0628,-0.0426
+2022-04-01,2.4094,1.6383,1.7058,106.1699,1.9043,1.3651,2.234,,
+2022-05-01,1.5003,0.6876,1.1379,102.533,1.9443,3.1684,0.5836,,
+2022-06-01,0.6258,1.9262,0.7,105.1794,-0.0626,1.6705,0.5207,0.6609,1.8031
+2022-07-01,0.685,0.7711,0.8078,105.8361,3.6516,1.896,,,
+2022-08-01,1.5284,1.8168,0.6655,104.0143,1.875,2.4806,1.3654,,
+2022-09-01,0.6219,-0.2147,1.0497,102.8628,-0.3788,2.0845,,0.5413,1.5095
+2022-10-01,-0.1512,1.9531,-0.066,102.8688,0.9357,0.9831,,,
+2022-11-01,1.9304,0.0971,0.2612,99.6185,0.8344,0.5207,1.2412,,
+2022-12-01,1.1719,1.0917,0.9357,101.3752,1.2673,0.8438,1.2548,0.4328,0.6078
+2023-01-01,1.1276,1.7417,1.3226,103.2657,2.7211,,1.7934,,
+2023-02-01,1.7797,1.5175,0.5935,103.8376,0.5145,,,,
+2023-03-01,3.2477,2.1509,2.0232,111.0892,3.9491,,3.3119,1.0276,2.2594
+2023-04-01,2.668,2.3231,1.2638,106.7989,3.192,,1.8153,,
+2023-05-01,1.5516,1.8842,0.8008,101.8297,3.2363,,2.247,,
+2023-06-01,1.4459,1.0844,0.0069,99.9146,2.0129,,,0.8374,1.827
+2023-07-01,0.8281,0.5949,0.5243,102.4335,1.9535,,-0.3934,,
+2023-08-01,2.2687,0.3956,0.9411,103.7277,-0.3632,,0.6804,,
+2023-09-01,1.4409,1.8666,0.1322,97.358,1.5115,,,0.5403,0.6621
+2023-10-01,0.1992,-0.5193,0.7779,101.8127,1.8949,,1.6245,,
+2023-11-01,2.6233,2.3569,1.3899,110.339,2.178,,1.8401,,
+2023-12-01,-0.1083,-0.2607,-0.3977,96.4537,-0.7648,,0.6116,0.5806,0.8754
+2024-01-01,-1.3795,-1.6312,-0.5033,94.8627,-1.0484,,-1.4203,,
+2024-02-01,-0.6255,-0.158,-0.9622,90.5643,-0.9774,,-0.7039,,
+2024-03-01,-0.9641,0.6655,0.3089,95.2208,-2.0498,,-0.6465,-0.0832,-0.6534
+2024-04-01,0.3456,1.1228,-0.3575,96.4471,-2.1451,,-0.7855,,
+2024-05-01,-0.571,0.851,0.2411,97.7469,-0.0002,,-0.6639,,
+2024-06-01,0.112,-0.4595,0.4377,96.145,1.4288,,0.0985,0.0076,-0.2235
+2024-07-01,0.7286,-0.0652,-0.6989,100.5377,2.1385,,0.9774,,
+2024-08-01,0.9223,-0.1599,0.0341,94.7069,-0.7162,,-0.8056,,
+2024-09-01,2.5981,1.1366,0.465,110.5842,3.1203,,,0.5891,0.979
+2024-10-01,2.6818,2.3772,1.1365,108.3011,2.7514,,1.7427,,
+2024-11-01,0.2573,1.4865,0.4447,103.6734,1.5436,,1.5028,,
+2024-12-01,0.482,0.9407,0.0765,100.9892,1.4501,,-0.5419,0.5918,1.4131
+2025-01-01,-0.3577,0.6168,0.4132,105.4756,-0.6294,,0.6835,,
+2025-02-01,-0.7227,0.1086,0.6772,101.9239,1.8682,,1.0415,,
+2025-03-01,-2.5344,-1.2079,-1.4192,88.2397,-0.8623,,-2.1833,-0.1105,-0.6229
+2025-04-01,-1.6152,-2.2005,-1.0516,85.8077,-3.9343,,-0.9123,,
+2025-05-01,0.4569,0.1297,0.2862,92.2377,0.6256,,,,
+2025-06-01,-1.5394,-0.0278,-0.95,90.8352,-1.315,,-1.0909,-0.4036,-1.2786
+2025-07-01,-1.3158,-0.4059,-0.0013,89.8498,-0.2046,,-1.9409,,
+2025-08-01,-0.6022,1.1463,-0.3677,98.4616,-0.6895,,-0.7742,,
+2025-09-01,-0.3005,1.3401,0.2141,100.4481,1.0212,,0.4145,,
+2025-10-01,2.0263,,1.5238,103.1853,,,1.6073,,
+` }]
+};
+/* EXAMPLES-END */
 const EXAMPLE_CSV = `date,industrial_production,retail_sales,employment,hours_worked,pmi,gdp
 2015-01-01,0.1869,0.4829,1.5992,0.3669,-1.5252,
 2015-02-01,0.7724,-0.0473,0.5313,1.0143,-0.8953,
@@ -1241,11 +4523,14 @@ function wire() {
   ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
   drop.addEventListener("drop", e => { const f = [...e.dataTransfer.files]; if (f.length) loadFiles(f); });
   $("file").onchange = e => { const f = [...e.target.files]; e.target.value = ""; if (f.length) loadFiles(f); };
-  $("example").onclick = loadExample;
+  $("example").onclick = () => loadExample($("exsel").value);
   $("clear").onclick = () => { S.series = []; S.fit = null; S.news = null; message("datamsg", "", ""); renderSeries();
     ["s-results", "s-news", "s-export"].forEach(id => $(id).classList.add("hidden")); };
   $("allon").onchange = e => { S.series.forEach(s => { if (s.freq !== "A") s.on = e.target.checked; }); renderSeries(); };
   $("r").onchange = () => { $("r").dataset.touched = "1"; };
+  $("base").onchange = () => { $("base").dataset.touched = "1"; refreshTargets(); };
+  $("trackfreq").onchange = () => drawCharts();
+  $("annual").onchange = () => drawCharts();
   $("run").onclick = estimate;
   $("vintage").onchange = () => {
     const f = $("vintage").value === "file";
@@ -1261,7 +4546,7 @@ function wire() {
     setEngine("engine ready", "ready"); $("run").disabled = !S.series.some(s => s.on);
   }).catch(e => { setEngine("engine failed", "busy"); message("datamsg", "err", "The Cozy engine did not start: " + e.message); });
 }
-window.NowcastApp = { S, Engine, estimate, runNews, loadExample, cleanCSV, scriptText, parseDate, tableToSeries, parseDelimited, cozyName };
+window.NowcastApp = { S, Engine, estimate, runNews, loadExample, cleanCSV, scriptText, parseDate, tableToSeries, parseDelimited, cozyName, buildPanel };
 wire();
 </script>
 </body>

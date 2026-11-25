@@ -125,6 +125,9 @@ SPECS = {
     ("nowcast.update(f, Ynew)",   "size(nowcast.update(f, nowcast.extend(Y, 3)).state.yhat)"),
     ("nowcast.extend(Y, h)",      "size(nowcast.extend(Y, 3))"),
     ("nowcast.news(f, Ynew, name, t)", "let Y2 = Y; Y2[1, 120] = Y[1, 120] + 1; nowcast.news(f, Y2, \"gdp\").revisions[1]"),
+    ("nowcast.path(f, name, freq)", "numel(nowcast.path(f, \"gdp\", \"quarterly\").value)"),
+    ("nowcast.report(f)",         "f.status"),
+    ("nowcast.transform(Y, codes, d)", "nowcast.transform([100, 104], [\"pct\"], [0])"),
   ]),
 }
 

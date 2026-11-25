@@ -11,7 +11,7 @@ all), compiled to WebAssembly and run on xterm.js, with the books built in.
 **[DSGE demos](https://micomrkaic.github.io/cozy/dsge.html)** — three macro
 models solved live in the page by the `dsge` package.
 **[Nowcast](https://micomrkaic.github.io/cozy/nowcast.html)** — drop in a
-spreadsheet of monthly indicators and quarterly GDP and get nowcasts with
+spreadsheet of daily, weekly and monthly indicators and quarterly GDP and get nowcasts with
 standard errors and the news behind each data release, from the `nowcast`
 package running in the page; the data stay on your computer.
 **[Cozy beside NumPy and Octave](COMPARE.md)** — seven small tasks written

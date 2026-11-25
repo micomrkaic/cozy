@@ -215,3 +215,16 @@ browser), then "maximum call depth exceeded". A reduction written with
 its index does not nest this way since 0.1.44, unless its body returns
 or assigns a local of the function around it.
 Status: DOCUMENTED COST.
+
+## Nowcasting has no daily model (0.1.59)
+
+`nowcast.cz` models at a weekly or monthly base; daily series enter
+averaged to weeks (or months). A daily base is possible in principle —
+the calendar weights generalize — but a month of days by Mariano and
+Murasawa's weights is about 60 measurement lags and a quarter about 180,
+and one EM step then takes one to nine seconds natively on ten years of
+data: minutes for an estimate. Weekly averages keep the signal the factor
+needs (weekly activity indexes are built the same way). The fix, if it is
+ever wanted, is a cheaper aggregation for long windows — cumulator states
+instead of measurement lags — not a bigger lag budget.
+
