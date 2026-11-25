@@ -519,21 +519,28 @@ cozy> g(10, null, 99)'
 `help(f)` on a function you or a package defined shows its signature
 (taken from the code, defaults included), the comment block written
 directly above its `let` as the description, and that block's `e.g.`
-lines as examples — the same shape builtin help has. `help("name")`
-asks by name (the way to read about a zero-argument function without
-autocalling it), and `help("pkg")` lists a loaded package's functions
-with their first line. The package guide states the docstring law and
+lines as examples — the same shape builtin help has. `help(pkg)` lists
+a loaded package's functions with their first line. The package guide states the docstring law and
 how the suite verifies every package example.
 
-**With or without quotes.** `help(x)` is handed a value and describes
-it; `help("name")` is handed a name and looks it up. The two agree
-wherever both make sense: a record lists its fields, one line each — so
-a record used as a namespace shows what it offers — and a dotted name
-is a path into a record, quoted or not. The quoted form is the one that
-always works: a package (`help("ts")`) is a file, not a value, and a
-zero-argument function would run if written bare.
+**With or without quotes.** `help(name)` and `help("name")` are the
+same: a name written bare inside `help(...)` is looked up, not evaluated
+(0.1.56). So `help(dist)` lists a package, `help(tic)` describes `tic`
+instead of starting the timer, and a name that is not defined gets an
+answer rather than an error — including, for a package not yet loaded,
+how to load it. A record lists its fields, one line each — so a record
+used as a namespace shows what it offers — and a dotted name is a path
+into a record, quoted or not. Inside a function, `help(x)` on a local
+variable or parameter describes its value.
 
 ```
+cozy> help(dist)
+  'dist' is a package that is not loaded: load("dist"), then help(dist)
+cozy> help(tic)
+  tic
+      start the wall-clock timer (monotonic)
+      builtin, 0 arguments
+      e.g.  tic                               % starts the timer
 cozy> load("packages/dist.cz")
 cozy> help(norm)
   norm — a record of 4 functions
@@ -1545,7 +1552,7 @@ cozy> clear("scatter"); who
 | `whor \| whor("sorted")` | your records only (shorthand for who("records")) |
 | `whos` | the whole workspace, sorted by name (who("sorted")) |
 | `who \| who("functions", "sorted")` | list the workspace; filter by "records"/"functions"/"vars", add "sorted" for name order |
-| `help / help(x) / help("name")` | help lists every builtin; help(x) describes a function, or lists a record's fields; help("name") asks by name: a function, a loaded package, or a path such as "norm.cdf" |
+| `help / help(x) / help("name")` | help lists every builtin; help(name) or help("name") describes a function, lists a record's fields or a loaded package's functions, or follows a path such as norm.cdf; a bare name is looked up, not run |
 | `system(cmd)` | run a shell command string; return its exit status |
 | `dis(f)` | disassemble a function's bytecode (compiler/VM introspection) |
 | `format / format(n) / format(mode, digits)` | number display: format(n) sets SIGNIFICANT digits; format("fixed", d) / format("sci", d) / format("auto", d) set the mode and digits explicitly; format() shows the current setting |

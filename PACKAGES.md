@@ -735,6 +735,7 @@ cozy> help(dsge)
     dsge.nk          the three-equation New Keynesian model, a ready-made spec.
     dsge.zlb         the New Keynesian model with a floor on the interest rate.
   help(dsge.model) or help("dsge.model") for any one of them
+  (also the loaded package packages/dsge.cz: who("dsge") lists its 47 names)
 ```
 
 A model with no unique stable solution is refused with the count that
@@ -995,9 +996,10 @@ package and must print EXPECTED (the builtins' marker and rule); write
 `%= ?` and `tools/pkgdoc_fill.py` fills the value in. Every package
 function must carry a block with a description and an example (helpers
 may carry a block starting `internal:` instead) — `make test` lints
-this. `help("pkg")` lists a loaded package's functions with their first
-line; `help("name")` asks by name, which is how you read about a
-zero-argument function without autocalling it.
+this. `help(pkg)` lists a loaded package's functions with their first
+line; quotes are optional (`help(ts)` and `help("ts")` are the same),
+and a bare name is looked up, never run, so `help(tic)` describes a
+zero-argument function without calling it.
 
 ```
 cozy> load("packages/ts.cz")
@@ -1008,7 +1010,7 @@ cozy> help(growth)
       package function, 1 to 2 arguments  (packages/ts.cz)
       e.g.  growth([100.0; 102; 104])'           % [nan, 2, 1.96078]
             format(4); mean(growth([100.0; 0/0; 104; 106]), "omit") % 1.923
-cozy> help("ts")
+cozy> help(ts)
   packages/ts.cz — 8 names
     lag              x shifted down k places; the first k entries are missing
     change           the k-period change x - lag(x, k), NaN-headed and the
