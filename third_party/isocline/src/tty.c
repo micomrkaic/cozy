@@ -12,6 +12,14 @@
 
 #include "tty.h"
 
+#if defined(__EMSCRIPTEN__)
+// COZY: in the browser the terminal is xterm.js in a page; keys arrive through
+// Cozy (wasm_api.c), which suspends (Asyncify) until one comes. No termios.
+extern int cozy_term_readbyte(long timeout_ms);   // a byte, or -1 if none within the timeout (<0: wait)
+extern int cozy_term_active(void);                // is the page's terminal attached?
+#endif
+
+
 #if defined(_WIN32)
 #include <windows.h>
 #include <io.h>
@@ -404,7 +412,11 @@ ic_private tty_t* tty_new(alloc_t* mem, int fd_in)
   tty->esc_initial_timeout = 100;
   #endif
   tty->esc_timeout = 10;
+  #if defined(__EMSCRIPTEN__)
+  if (!(cozy_term_active() && tty_init_raw(tty) && tty_init_utf8(tty))) {   // COZY
+  #else
   if (!(isatty(tty->fd_in) && tty_init_raw(tty) && tty_init_utf8(tty))) {
+  #endif
     tty_free(tty);
     return NULL;
   }
@@ -438,6 +450,9 @@ ic_private void tty_set_esc_delay(tty_t* tty, long initial_delay_ms, long follow
 }
 
 ic_private bool tty_is_atty(int fd) {
+  #if defined(__EMSCRIPTEN__)
+  if (fd >= 0 && fd <= 2) return cozy_term_active() != 0;   // COZY
+  #endif
   return (isatty(fd) != 0);
 }
 
@@ -449,6 +464,11 @@ ic_private bool tty_is_atty(int fd) {
 static bool tty_readc_blocking(tty_t* tty, uint8_t* c) {
   if (tty_cpop(tty,c)) return true;
   *c = 0;
+  #if defined(__EMSCRIPTEN__)
+  { int b = cozy_term_readbyte(-1);                 // COZY: a key from the page
+    if (b < 0) return false;
+    *c = (uint8_t)b; return true; }
+  #endif
   ssize_t nread = read(tty->fd_in, (char*)c, 1);
   if (nread < 0 && errno == EINTR) {
     // can happen on SIGWINCH signal for terminal resize
@@ -467,6 +487,11 @@ ic_private bool tty_readc_noblock(tty_t* tty, uint8_t* c, long timeout_ms)
   if (timeout_ms < 0) {
     return tty_readc_blocking(tty,c);
   }
+  #if defined(__EMSCRIPTEN__)
+  { int b = cozy_term_readbyte(timeout_ms);         // COZY: a key from the page, or none in time
+    if (b < 0) return false;
+    *c = (uint8_t)b; return true; }
+  #endif
 
   // if supported, peek first if any char is available.
   #if defined(FIONREAD)
@@ -654,6 +679,9 @@ static void signals_restore(void) {
 ic_private bool tty_start_raw(tty_t* tty) {
   if (tty == NULL) return false;
   if (tty->raw_enabled) return true;
+  #if defined(__EMSCRIPTEN__)
+  tty->raw_enabled = true; return true;              // COZY: a terminal emulator is always raw
+  #endif
   if (tcsetattr(tty->fd_in,TCSADRAIN,&tty->raw_ios) < 0) return false;   // COZY: DRAIN, not AFLUSH: keep type-ahead
   tty->raw_enabled = true;
   return true;
@@ -663,6 +691,9 @@ ic_private void tty_end_raw(tty_t* tty) {
   if (tty == NULL) return;
   if (!tty->raw_enabled) return;
   tty->cpush_count = 0;
+  #if defined(__EMSCRIPTEN__)
+  tty->raw_enabled = false; return;                  // COZY
+  #endif
   if (tcsetattr(tty->fd_in,TCSADRAIN,&tty->orig_ios) < 0) return;      // COZY: keep type-ahead
   tty->raw_enabled = false;
 }
@@ -670,6 +701,9 @@ ic_private void tty_end_raw(tty_t* tty) {
 static bool tty_init_raw(tty_t* tty)
 {
   // Set input to raw mode. See <https://man7.org/linux/man-pages/man3/termios.3.html>.
+  #if defined(__EMSCRIPTEN__)
+  ic_unused(tty); return true;                        // COZY: no termios, no signals in the browser
+  #endif
   if (tcgetattr(tty->fd_in,&tty->orig_ios) == -1) return false;
   tty->raw_ios = tty->orig_ios;
   // input: no break signal, no \r to \n, no parity check, no 8-bit to 7-bit, no flow control

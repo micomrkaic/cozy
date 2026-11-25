@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate or verify the playground's package list.
 
-docs/index.html draws its Packages pane (one tick box per package) from a
+docs/workbench.html (the native workbench page) draws its Packages pane (one tick box per package) from a
 single line, `var PKGS = [...]`. That line is a function of packages/*.cz
 and nothing else, so it is generated, never hand-edited:
 
@@ -13,7 +13,7 @@ and nothing else, so it is generated, never hand-edited:
 suite. The verdict is the exit code."""
 import glob, os, re, sys
 
-PAGE = "docs/index.html"
+PAGE = "docs/workbench.html"
 LINE = re.compile(r"^(\s*)var PKGS = \[[^\]]*\];[^\n]*$", re.M)
 
 

@@ -36,5 +36,11 @@ Built as one translation unit (`src/isocline.c` includes the rest) with
   in that time — macOS CI's pager test lost the "m" of "manual". Cozy
   paints nothing that needs the palette.
 
+- **The browser build** (`#if defined(__EMSCRIPTEN__)`, from 0.1.51): keys
+  come from Cozy's `cozy_term_readbyte` (wasm_api.c), which suspends until
+  the page delivers one; there is no termios, so raw mode is a flag and no
+  signal handlers are installed; "is it a terminal" is `cozy_term_active()`;
+  the size is the page's (`cozy_term_cols/rows`). `src/tty.c`, `src/term.c`.
+
 To update: copy upstream's `src`, `include` and `LICENSE` over these, and
 re-apply the changes above (each is marked with a `COZY` comment).

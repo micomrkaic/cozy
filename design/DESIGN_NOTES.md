@@ -1128,3 +1128,23 @@ hook the REPL sets, so vmtest, pipes and the embedding library stay free
 of it. tests/run_lineedit.py types at the real REPL on a pty. NOTED:
 Ctrl-R's Enter accepts into the line (readline ran it). TRIGGER for
 stage 2: this.
+STAGE 2 SHIPPED 0.1.51: the playground is repl.c on xterm.js. The REPL
+runs in a Web Worker (cozy_repl via ccall async); keys reach it through a
+byte queue that cozy_term_readbyte drains, suspending with Asyncify while
+it is empty — the pause() mechanism, now the only way in; output leaves by
+the Emscripten FS stdout/stderr devices (FS.init) in batches. isocline's
+seam (tty.c read, raw mode, size) got an __EMSCRIPTEN__ branch. Ctrl-C:
+the worker turns 0x03 into an interrupt flag when the editor is not
+reading, and the VM polls it every 16384 back-edges or calls, yielding
+about every 40 ms (CONSIDERED: SharedArrayBuffer + Atomics — needs
+cross-origin isolation, which GitHub Pages cannot set). The panes follow
+repl_prompt_hook's notice (the workspace listing, the history file for
+localStorage) and type at the prompt; nothing evaluates behind the
+terminal. FOUND: isocline prints prompts as markup, so input()/pause()
+messages with "[" vanished (the demo's pause) — natively too; prompts are
+escaped now. input()/pause() at a terminal use the editor on both sides,
+Ctrl-C interrupting. KEPT: docs/workbench.html, the line-mode page the
+native workbench serves (evaluation in the native process); its parity is
+stage 3's (a native pty over the workbench socket). RESIDUE: Ctrl-C does
+not reach inside one long builtin in the browser; type-ahead is not echoed
+until read; no shell. TRIGGER for stage 3: this.

@@ -16,6 +16,9 @@
 #include <unistd.h>
 #include "lineedit.h"
 #include "isocline.h"
+#ifdef __EMSCRIPTEN__
+extern int cozy_term_active(void);   /* the browser's terminal (wasm_api.c) */
+#endif
 
 static EnvObj *g_env;           /* the live globals, for name completion */
 static bool    g_tty;           /* stdin is a terminal: edit lines */
@@ -77,7 +80,11 @@ static void completer(ic_completion_env_t *cenv, const char *prefix)
 void le_init(const char *histpath, EnvObj *globals)
 {
     g_env = globals;
+#ifdef __EMSCRIPTEN__
+    g_tty = cozy_term_active() != 0;            /* the page's xterm.js */
+#else
     g_tty = isatty(fileno(stdin)) != 0;
+#endif
     if (!g_tty) return;                         /* pipes never touch the editor */
     ic_set_prompt_marker("", "");               /* our prompts are complete */
     ic_style_def("ic-prompt", "");              /* and plain, as before */
@@ -104,11 +111,29 @@ static char *read_plain(const char *prompt)
     return buf;
 }
 
+/* isocline prints a prompt as markup ("[b]bold[/]"); Cozy's prompts —
+ * input()'s question, pause()'s message, the demo's "[ Enter for the next
+ * problem ]" — are plain text, so [ and \ are escaped */
+static char *plain_prompt(const char *prompt)
+{
+    size_t n = strlen(prompt), k = 0;
+    char *e = malloc(2 * n + 1);
+    if (!e) return nullptr;
+    for (size_t i = 0; i < n; i++) {
+        if (prompt[i] == '[' || prompt[i] == '\\') e[k++] = '\\';
+        e[k++] = prompt[i];
+    }
+    e[k] = '\0';
+    return e;
+}
+
 /* one edited line; isocline's own history entry for it removed */
 static char *read_edited(const char *prompt, bool *cancelled)
 {
     fflush(stdout); fflush(stderr);
-    char *r = ic_readline(prompt);
+    char *pe = plain_prompt(prompt);
+    char *r = ic_readline(pe ? pe : prompt);
+    free(pe);
     if (cancelled) *cancelled = ic_last_cancelled();
     if (!r) return nullptr;
     if (strlen(r) > 1) ic_history_remove_last();  /* isocline keeps only entries of 2+ bytes */
@@ -136,7 +161,22 @@ char *le_readline_nohist(const char *prompt)
     }
     bool c = false;
     char *r = read_edited(prompt, &c);
+    if (c) { free(r); return nullptr; }          /* Ctrl-C: interrupt */
     return r ? r : strdup("");
+}
+
+bool le_pause(const char *msg)
+{
+    if (!g_tty) {                                /* a pipe: wait for a line */
+        fputs(msg, stdout); fflush(stdout);
+        int ch;
+        while ((ch = getchar()) != EOF && ch != '\n') { }
+        return true;
+    }
+    bool c = false;
+    char *r = read_edited(msg, &c);
+    free(r);
+    return !c;
 }
 
 void le_history_add(const char *entry)

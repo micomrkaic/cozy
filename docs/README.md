@@ -3,7 +3,19 @@
 This folder is served by GitHub Pages at
 `https://micomrkaic.github.io/cozy/`.
 
-- `index.html` — the terminal page (custom minimal REPL, brand palette).
+- `index.html` — the playground: xterm.js (vendored in `vendor/xterm/`, MIT)
+  running the native REPL — `repl.c`, the isocline line editor, the same
+  commands — compiled to WebAssembly in a Web Worker (0.1.51). Keys go to
+  the worker, bytes come back to the terminal; the side panes (plots,
+  editor, docs, workspace, packages) follow the notice the REPL sends before
+  each prompt and type at the prompt like a person — the page evaluates
+  nothing on its own. History persists in localStorage. On touch screens a
+  line field and Tab/arrow/Ctrl-C buttons type into the same terminal.
+  Tested in Chromium by `tests/run_playground_page.js`.
+- `workbench.html` — the line-mode page the native workbench (`cozy
+  --workbench`) serves, with evaluation routed to the native process; it
+  also falls back to the WebAssembly engine one command at a time when
+  opened on its own.
 - `cozy.js` — the whole interpreter as a single self-contained file: the
   WebAssembly binary is embedded as base64 (`-sSINGLE_FILE=1`), so there is no
   separate `.wasm` to fetch and no MIME/CORS/path concerns. The three books

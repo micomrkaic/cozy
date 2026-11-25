@@ -19,8 +19,13 @@ void  le_init(const char *histpath, EnvObj *globals);
  * the line was abandoned with Ctrl-C, returns "" and sets *cancelled. */
 char *le_readline(const char *prompt, bool *cancelled);
 
-/* input(): the same editing, but the answer is not kept in the history. */
+/* input(): the same editing, but the answer is not kept in the history.
+ * Returns null when the question was abandoned with Ctrl-C (the caller
+ * interrupts), "" at end of input. */
 char *le_readline_nohist(const char *prompt);
+
+/* pause(): show msg, wait for Enter. False when Ctrl-C was pressed instead. */
+bool  le_pause(const char *msg);
 
 /* Remember an entry (a whole multi-line entry, or a command). */
 void  le_history_add(const char *entry);

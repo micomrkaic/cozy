@@ -6,7 +6,8 @@
 <title>Cozy — a heavier numerical language, warmly held</title>
   <meta property="og:image" content="og-card.png">
   <meta property="og:title" content="Cozy — a heavier numerical language, warmly held">
-<meta name="description" content="Cozy, a heavier numerical language — sparse matrices, exact derivatives, constrained optimization — running in your browser via WebAssembly.">
+<meta name="description" content="Cozy, a heavier numerical language — sparse matrices, exact derivatives, constrained optimization — running in your browser via WebAssembly, in a real terminal.">
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
 <style>
   :root {
     --blue: #208bff;
@@ -137,11 +138,40 @@
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: #1c2230; border-radius: 5px; }
 </style>
+<style>
+  /* the terminal (0.1.51): xterm.js running the native REPL */
+  /* padding on .xterm, not #term: the fit addon subtracts the element's padding,
+     but reads the parent's height border-box (box-sizing below), so padding there
+     would cost the bottom row */
+  #term { flex: 1; min-height: 0; padding: 0; overflow: hidden; white-space: normal; }
+  #term .xterm { height: 100%; padding: 10px 6px 4px 14px; }
+  #booting { padding: 10px 14px; }
+  #term .xterm-viewport { background: var(--bg) !important; }
+  #booting { color: var(--dim); }
+  #touchbar { display: none; gap: 6px; padding: 6px 10px; border-top: 1px solid #1c2230; align-items: center; flex-wrap: wrap; }
+  #touchbar input { flex: 1 1 160px; min-width: 120px; background: #11151f; color: var(--fg); border: 1px solid #232a3a;
+    border-radius: 6px; padding: 6px 8px; font: inherit; }
+  #touchbar button { font: inherit; font-size: 12.5px; }
+  body.touch #touchbar { display: flex; }
+  #term { position: relative; }
+  #touchbar { position: relative; z-index: 2; background: var(--bg); }
+  @media (max-width: 900px) {
+    #left { flex: none; height: 68vh; min-height: 300px; }
+    #right { flex: none; height: 75vh; }
+    footer { display: none; }
+    header { flex-wrap: wrap; gap: 6px 8px; padding: 10px 12px; }
+    header .tagline, header .spacer { display: none; }
+    header .btn, header a { white-space: nowrap; font-size: 12px; padding: 3px 8px; }
+  }
+  #toast { position: fixed; right: 16px; bottom: 16px; background: #171d2b; color: var(--fg); border: 1px solid #2b3550;
+    border-radius: 8px; padding: 8px 12px; font-size: 12.5px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 50; }
+  #toast.on { opacity: 1; }
+</style>
 </head>
 <body>
 <header>
   <span class="logo">Cozy</span>
-  <span class="tagline">a small functional array language · in your browser</span>
+  <span class="tagline">a heavier numerical language · the real REPL, in your browser</span>
   <span class="spacer"></span>
   <label class="btn">upload<input type="file" id="upload" multiple></label>
   <button class="btn" id="dl" title="download files your session created (saves, CSVs, plots)">download new files</button>
@@ -149,30 +179,26 @@
   <a href="nowcast.html" title="nowcast GDP from monthly data: a dynamic factor model in your browser">Nowcast</a>
   <a href="https://github.com/micomrkaic/cozy" target="_blank" rel="noopener">GitHub</a>
 </header>
-
 <div id="main">
 <div id="left">
-<div id="term"><span class="dim">booting WebAssembly…</span>
+<div id="term"><div id="booting">booting WebAssembly…</div></div>
+<div id="touchbar">
+  <input id="tline" placeholder="type here, Enter runs" autocomplete="off" autocapitalize="off" spellcheck="false">
+  <button class="btn" data-key="tab">Tab</button>
+  <button class="btn" data-key="up">&uarr;</button>
+  <button class="btn" data-key="down">&darr;</button>
+  <button class="btn" data-key="ctrlc">Ctrl-C</button>
 </div>
-
-<div class="inputline" id="inputline" style="display:none">
-  <span class="prompt">cozy&gt;</span><input id="input" autocomplete="off" autocapitalize="off" spellcheck="false" autofocus>
-</div>
-
 <footer>
   Try: <span class="chip" data-cmd="2 + 3 * 4">2 + 3 * 4</span>
   <span class="chip" data-cmd="let A = [1, 2; 3, 4]; inv(A)">inv(A)</span>
   <span class="chip" data-cmd="eig([2, 1; 1, 2]).values">eig</span>
-  <span class="chip" data-cmd="fzero(cos, 1, 2)">fzero</span>
   <span class="chip" data-cmd="integral(fn x -> x^2, 0, 1)">integral</span>
-  <span class="chip" data-cmd="help(svd)">help(svd)</span>
   <span class="chip" data-cmd="plot(1:20, map(fn x -> sin(x/3), 1:20), {title = &quot;sine&quot;})">plot</span>
-  <span class="chip" data-cmd="hist(randn(1, 2000), 15)">hist</span>
-  <span class="chip" data-cmd="who">who</span>
-  &nbsp;·&nbsp; up/down for history &nbsp;·&nbsp; single-line entries (use <span class="dim">;</span> to sequence)
+  <span class="chip" data-cmd="load(&quot;demo&quot;); demo()">the tour</span>
+  <span class="chip" data-cmd="manual">manual</span>
+  &nbsp;·&nbsp; the same REPL as the terminal: Tab completes, &uarr;/Ctrl-R recall, Ctrl-C interrupts, multi-line entries continue
 </footer>
-
-<script src="cozy.js"></script>
 </div>
 <div id="right">
   <div id="tabs">
@@ -183,7 +209,7 @@
     <button id="tab-pkgs">Packages</button>
   </div>
   <div id="plots"><div class="placeholder">plot(...) and hist(...) render here as SVG.</div></div>
-  <div id="workspace" style="display:none; flex:1; overflow-y:auto; padding:14px;"><pre id="ws-pre" style="margin:0; font-size:13px; line-height:1.5; color:var(--fg); white-space:pre-wrap;">(run something — the workspace appears after each eval)</pre></div>
+  <div id="workspace" style="display:none; flex:1; overflow-y:auto; padding:14px;"><pre id="ws-pre" style="margin:0; font-size:13px; line-height:1.5; color:var(--fg); white-space:pre-wrap;">(the workspace appears here, updated after every entry)</pre></div>
   <div id="pkgs" style="display:none; flex:1; overflow-y:auto; padding:14px;"></div>
   <div id="docs">
     <div id="docbar">
@@ -204,363 +230,251 @@
       <button class="btn" id="ed-run">Run &nbsp;&#9654;</button>
       <label class="btn">Open<input type="file" id="ed-open" accept=".cz,.txt"></label>
       <button class="btn" id="ed-save">Save .cz</button>
-      <span class="hint">Ctrl+Enter runs selection (whole buffer if none)</span>
+      <span class="hint">Run types the buffer at the prompt (Ctrl+Enter: the selection)</span>
     </div>
     <textarea id="edtext" spellcheck="false" placeholder="% write Cozy here — multi-line definitions welcome&#10;let cube = fn x -&gt; x^3&#10;plot(1:20, map(cube, 1:20), {title = &quot;cubes&quot;})"></textarea>
   </div>
 </div>
 </div>
+<div id="toast"></div>
+<script src="vendor/xterm/xterm.js"></script>
+<script src="vendor/xterm/addon-fit.js"></script>
 <script>
-(function () {
-  var term = document.getElementById('term');
-  var inputline = document.getElementById('inputline');
-  var input = document.getElementById('input');
-  var history = [];
-  var histpos = 0;
-  var evalLine = null;
+"use strict";
+/* The playground's terminal is the native REPL — repl.c, the isocline
+ * editor, the same commands — compiled to WebAssembly and run in a Web
+ * Worker; xterm.js draws it (0.1.51, design entry 34). The page never
+ * evaluates anything itself: it sends keys, draws bytes, and keeps the side
+ * panes in step with the notice the REPL sends before each prompt. */
 
-  function el(cls, text) {
-    var s = document.createElement('span');
-    if (cls) s.className = cls;
-    s.textContent = text;
-    return s;
+/* the bundle the worker loads, with its content hash: a cached older engine
+   can never meet this page. Stamped by tools/gen_dsge_page.py; make test checks it. */
+var COZY_BUNDLE = "cozy.js?v=51125657fa24";
+
+var $ = function (id) { return document.getElementById(id); };
+var HISTKEY = 'cozy_history_v2', EDKEY = 'cozy_editor_v1';
+var toastTimer = null;
+function toast(msg) {
+  var t = $('toast'); t.textContent = msg; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('on'); }, 3500);
+}
+
+/* ---- the worker: Cozy's REPL ------------------------------------------ */
+var WORKER = function () {
+  self.window = self;
+  var M = null, out = [], ids = 0, initial = null;
+  var enc = new TextEncoder();
+  globalThis.__cozyKeys = [];
+  globalThis.__cozyCols = 80; globalThis.__cozyRows = 24;
+  function flush() {
+    if (out.length) { postMessage({ t: 'out', d: new Uint8Array(out) }); out = []; }
   }
-  function writeRaw(node) { term.appendChild(node); scroll(); }
-  function writeLine(cls, text) {
-    if (text && text.indexOf('[ Enter for the next problem ]') !== -1) window.__demoStep = true;
-    var d = document.createElement('div');
-    d.appendChild(el(cls, text));
-    term.appendChild(d); scroll();
+  globalThis.__cozyFlush = flush;
+  function history() {
+    try { return new TextDecoder().decode(M.FS.readFile('/home/web_user/.cozy_history')); } catch (e) { return ''; }
   }
-  function scroll() { term.scrollTop = term.scrollHeight; }
-
-  // Colour interpreter output: lines starting with "  error"/"  parse error" are errors.
-  function writeResult(text) {
-    if (!text) return;
-    /* the stepping tour (demo5, then Enter): a result that ends a problem
-       arms a bare Enter to run next; any other result disarms it */
-    window.__demoStep = text.indexOf('[ Enter for the next problem ]') !== -1;
-    var lines = text.split('\n');
-    // trailing empty element from final newline
-    if (lines.length && lines[lines.length - 1] === '') lines.pop();
-    for (var i = 0; i < lines.length; i++) {
-      var l = lines[i];
-      var cls = /^\s*(error|parse error)\b/.test(l) ? 'err' : 'out';
-      var d = document.createElement('div');
-      d.appendChild(el(cls, l));
-      term.appendChild(d);
-    }
-    scroll();
-  }
-
-  // pause() support: the wasm side streams pending output here mid-eval,
-  // then waits (Asyncify) until Enter releases the latch below.
-  window.__cozyStream = function (t) { writeResult(t); window.__demoStep = false; };
-  window.__cozyInputSupported = 1;   /* input() asks here, in the terminal (wasm_api.c) */
-  document.addEventListener('keydown', function (e) {
-    if (window.__cozyPauseWaiting && !window.__cozyInputWaiting && e.key === 'Enter') {
-      window.__cozyPauseDone = 1;
-      e.preventDefault(); e.stopPropagation();
-    }
-  }, true);
-
-  function banner() {
-    // Cozy in figlet nancyj — fat, round, 1970s-warm; pure ASCII so it
-    // aligns in any monospace fallback.
-    var art = [
-      ' a88888b.                            ',
-      'd8\'   `88                            ',
-      '88        .d8888b. d888888b dP    dP ',
-      '88        88\'  `88    .d8P\' 88    88 ',
-      'Y8.   .88 88.  .88  .Y8P    88.  .88 ',
-      ' Y88888P\' `88888P\' d888888P `8888P88 ',
-      '                                 .88 ',
-      '                             d8888P  ',
-    ];
-    for (var i = 0; i < art.length; i++) {
-      var d = document.createElement('div');
-      d.appendChild(el('banner-warm', art[i]));
-      term.appendChild(d);
-    }
-    writeLine('banner-dim', 'a heavier numerical language, warmly held');
-    scroll();
-  }
-
-  Cozy().then(function (M) {
-    /* async: an eval that waits at pause() or input() suspends (Asyncify)
-       and resolves only when it really ends — called plainly, _cozy_eval
-       returned "" at the first pause and the page ran its next command into
-       the middle of the waiting one (0.1.49, the demo menu that kept asking) */
-    evalLine = function (s) {
-      var n = M.lengthBytesUTF8(s) + 1;
-      var p = M._malloc(n);
-      M.stringToUTF8(s, p, n);
-      return Promise.resolve(M.ccall('cozy_eval', 'number', ['number'], [p], { async: true }))
-        .then(function (r) { var t = M.UTF8ToString(r); M._free(p); return t; });
-    };
-    M._cozy_init();
-    window.COZY = M;
-    window.evalWasm = evalLine;      /* the workbench router lives outside this IIFE */
-    M.cozyPlot = function (fname) {
-      try {
-        var svg = new TextDecoder().decode(M.FS.readFile(fname));
-        var box = document.getElementById('plots');
-        if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
-        box.insertAdjacentHTML('afterbegin', svg);
-        showTab(false);
-      } catch (e) {}
-    };
-    for (var fi = 0; fi < M.FS.readdir('/').length; fi++) known.add(M.FS.readdir('/')[fi]);
-    var ver = M.UTF8ToString(M._cozy_version());
-    term.innerHTML = '';
-    banner();
-    writeLine('banner-dim', ver);
-    writeLine('dim', '');
-    writeLine('dim', 'Type an expression and press Enter. help lists the builtins;');
-    writeLine('dim', 'help(name) shows one with examples. format(n) sets precision.');
-    writeLine('dim', 'plot and hist render as SVG in the Plots panel. Drop files anywhere:');
-    writeLine('dim', '.cz opens in the editor, data files upload for readtable/load.');
-    writeLine('dim', 'The standard packages are preloaded: try load("dist").');
-    writeLine('dim', 'Type manual (or manual packages) to read the docs in the Docs tab.');
-    writeLine('dim', '');
-    inputline.style.display = 'flex';
-    input.focus();
-  }).catch(function (e) {
-    writeLine('err', 'Failed to start Cozy: ' + e.message);
-  });
-
-  function run(line) {
-    // echo the entered line with a prompt
-    var d = document.createElement('div');
-    d.appendChild(el('prompt', 'cozy> '));
-    d.appendChild(el('echo', line));
-    term.appendChild(d);
-    var mm = line.match(/^\s*manual(?:\s+(packages|changelog|lessons|design|readme))?\s*$/);
-    if (mm) {
-      var map = { packages: '/PACKAGES.md', book: '/BOOK.md', changelog: '/CHANGELOG.md',
-                  lessons: '/LESSONS.md', design: '/DESIGN_NOTES.md', readme: '/MANUAL.md' };
-      showPane('docs');
-      loadDoc(mm[1] ? map[mm[1]] : '/MANUAL.md');
-      writeLine('dim', '(opened in the Docs tab \u2192)');
-      scroll();
-      return;
-    }
-    if (line.trim()) {
-      history.push(line);
-      histpos = history.length;
-      try {
-        evalAny(line).then(function (r) { writeResult(r); afterEval(); scroll(); })
-                     .catch(function (e) { writeLine('err', '  internal error: ' + e.message); scroll(); });
-      } catch (e) {
-        writeLine('err', '  internal error: ' + e.message);
-      }
-    }
-    scroll();
-  }
-
-  input.addEventListener('keydown', function (e) {
-    if (e.key === 'Enter') {
-      var line = input.value;
-      input.value = '';
-      /* a running input() is waiting for this line: answer it, run nothing */
-      if (window.__cozyInputWaiting && !window.__cozyInputReady) {
-        var last = term.lastElementChild;
-        if (last) last.appendChild(el('echo', line)); else writeLine('echo', line);
-        scroll();
-        window.__cozyInputValue = line; window.__cozyInputReady = 1;
-        return;
-      }
-      /* demo stepping: when a problem is waiting, a bare Enter advances —
-       * same gesture as the REPL's pause (owner's ruling: just hit Enter) */
-      if (line === '' && window.__demoStep) { window.__demoStep = false; run('next'); return; }
-      run(line);
-    } else if (e.key === 'ArrowUp') {
-      if (histpos > 0) { histpos--; input.value = history[histpos]; moveCaretEnd(); }
-      e.preventDefault();
-    } else if (e.key === 'ArrowDown') {
-      if (histpos < history.length - 1) { histpos++; input.value = history[histpos]; }
-      else { histpos = history.length; input.value = ''; }
-      e.preventDefault();
-    } else if (e.key === 'l' && e.ctrlKey) {
-      // ctrl-L clears the screen, keeps the session
-      var kids = term.querySelectorAll('div');
-      for (var i = 0; i < kids.length; i++) kids[i].remove();
-      e.preventDefault();
-    }
-  });
-  function moveCaretEnd() {
-    setTimeout(function () { input.selectionStart = input.selectionEnd = input.value.length; }, 0);
-  }
-
-  // clicking in the terminal area focuses the input; chips run their command.
-  // Clicks in the right panel (editor, docs, plots) or on any interactive
-  // element must keep their own focus — v1.8.1 fix for editor keystrokes
-  // being stolen by the REPL.
-  document.addEventListener('click', function (e) {
-    if (e.target.classList.contains('chip')) {
-      input.value = e.target.getAttribute('data-cmd');
-      run(input.value); input.value = ''; input.focus();
-      return;
-    }
-    if (e.target.closest('#right') ||
-        e.target.closest('input, textarea, select, button, label, a')) return;
-    if (window.getSelection().toString() === '') input.focus();
-  });
-
-  /* terminal API for the panel wiring below (which is outside this IIFE) */
-  window.nuTerm = {
-    run: run,
-    writeLine: writeLine,
-    scroll: scroll,
-    focusInput: function () { input.focus(); },
-    /* run editor text as if typed at the prompt: cozy_eval takes a whole
-     * program and echoes each statement's value (v1.8.3) */
-    runBuffer: function (text) {
-      writeLine('dim', '% editor script:');
-      try {
-        evalAny(text).then(function (r) { writeResult(r); afterEval(); scroll(); });
-      } catch (e) {
-        writeLine('err', '  internal error: ' + e.message);
-      }
-      scroll();
+  globalThis.__cozyNotice = function (who) { flush(); postMessage({ t: 'notice', who: who, hist: history() }); };
+  function byte(c) { if (c !== null && c !== undefined) { out.push(c & 255); if (out.length >= 16384) flush(); } }
+  var cfg = {
+    preRun: [function () { cfg.FS.init(function () { return null; }, byte, byte); }],
+    cozyPlot: function (fname) {
+      try { postMessage({ t: 'plot', svg: new TextDecoder().decode(cfg.FS.readFile(fname)) }); } catch (e) {}
     }
   };
-})();
-
-  /* ---- tabs ---- */
-  var known = new Set();
-  var tabP = document.getElementById('tab-plots'), tabE = document.getElementById('tab-editor'),
-      tabD = document.getElementById('tab-docs');
-  function showPane(which) {          /* 'plots' | 'editor' | 'docs' | 'ws' | 'pkgs' */
-    document.getElementById('plots').style.display     = which === 'plots'  ? 'block' : 'none';
-    document.getElementById('editor').style.display    = which === 'editor' ? 'flex'  : 'none';
-    document.getElementById('docs').style.display      = which === 'docs'   ? 'flex'  : 'none';
-    document.getElementById('workspace').style.display = which === 'ws'     ? 'block' : 'none';
-    document.getElementById('pkgs').style.display      = which === 'pkgs'   ? 'block' : 'none';
-    tabP.classList.toggle('on', which === 'plots');
-    tabE.classList.toggle('on', which === 'editor');
-    tabD.classList.toggle('on', which === 'docs');
-    document.getElementById('tab-ws').classList.toggle('on', which === 'ws');
-    document.getElementById('tab-pkgs').classList.toggle('on', which === 'pkgs');
-    if (which === 'editor') edtext.focus();
-  }
-  function showTab(edon) { showPane(edon ? 'editor' : 'plots'); }   /* legacy callers */
-  tabP.addEventListener('click', function () { showPane('plots'); });
-  tabE.addEventListener('click', function () { showPane('editor'); });
-  tabD.addEventListener('click', function () { showPane('docs'); loadDoc(); });
-  document.getElementById('tab-ws').addEventListener('click', function () { showPane('ws'); refreshWorkspace(); });
-  document.getElementById('tab-pkgs').addEventListener('click', function () { showPane('pkgs'); });
-
-  /* ---- workbench (design entry 9): dual engine + panes ---- */
-  var NATIVE = false, knownPlots = {};
-  function evalAny(s) {   /* one router: native server if present, else wasm */
-    if (NATIVE)
-      return fetch('/eval', { method: 'POST', body: s }).then(function (r) { return r.text(); })
-             .then(function (txt) { return txt.replace(/\n$/, ''); });
-    /* one at a time: a command (or the workspace refresh) typed while
-       another waits at pause/input runs after it, not into it */
-    var r = evalChain.then(function () { return window.evalWasm(s); });
-    evalChain = r.catch(function () {});
+  function files() {
+    var r = [];
+    M.FS.readdir('/').forEach(function (f) {
+      try { if (M.FS.isFile(M.FS.stat('/' + f).mode)) r.push(f); } catch (e) {}
+    });
     return r;
   }
-  var evalChain = Promise.resolve();
-  function refreshWorkspace() {
-    evalAny('who').then(function (txt) {
-      document.getElementById('ws-pre').textContent = txt.trim() ? txt : '(empty workspace)';
-      updatePkgChecks(txt);
-    }).catch(function () {});
-  }
-  function refreshPlotsNative() {
-    if (!NATIVE) return;
-    fetch('/plots').then(function (r) { return r.text(); }).then(function (txt) {
-      txt.split('\n').forEach(function (f) {
-        if (!f || knownPlots[f]) return;
-        knownPlots[f] = true;
-        fetch('/' + f).then(function (r) { return r.text(); }).then(function (svg) {
-          var box = document.getElementById('plots');
-          if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
-          box.insertAdjacentHTML('afterbegin', svg);
-          showPane('plots');
-        });
-      });
-    }).catch(function () {});
-  }
-  function afterEval() { refreshWorkspace(); refreshPlotsNative(); }
-  var PKGS = ['astro','autodiff','demo','dist','dsge','finance','nowcast','optim','phys','poly','rmt','scatter','sparselin','symb','ts'];   /* GENERATED by tools/gen_page_pkgs.py from packages/*.cz */
-  var pkgChecks = {};
-  (function buildPkgs() {
-    var box = document.getElementById('pkgs');
-    var hint = document.createElement('div');
-    hint.textContent = 'Tick to load, untick to unload (clear the package\u2019s names). State follows the workspace, however a package was loaded.';
-    hint.style.cssText = 'font-size:12px; color:#99a3b3; padding:2px 4px 10px;';
-    box.appendChild(hint);
-    PKGS.forEach(function (p) {
-      var row = document.createElement('label');
-      row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; font-size:13px;';
-      var cb = document.createElement('input');
-      cb.type = 'checkbox'; cb.dataset.pkg = p;
-      pkgChecks[p] = cb;
-      var name = document.createElement('span');
-      name.textContent = 'packages/' + p + '.cz';
-      cb.addEventListener('change', function () {
-        /* clear by PATH, not by short name: clear("dsge") would find the
-         * variable dsge first (that package's namespace record) and remove
-         * only it, leaving the package loaded. */
-        var shown = (cb.checked ? 'load' : 'clear') + '("packages/' + p + '.cz")';
-        var line = cb.checked ? shown + '; 1' : shown;
-        window.nuTerm.writeLine('echo', 'cozy> ' + shown);
-        evalAny(line).then(function () {
-          window.nuTerm.writeLine('dim', cb.checked ? '  loaded packages/' + p + '.cz'
-                                                    : '  cleared packages/' + p + '.cz');
-          afterEval(); window.nuTerm.scroll();
-        }).catch(function (e) {
-          cb.checked = !cb.checked;   /* revert on failure */
-          window.nuTerm.writeLine('err', '  ' + e.message); window.nuTerm.scroll();
-        });
-      });
-      row.appendChild(cb); row.appendChild(name); box.appendChild(row);
-    });
-  })();
-  function updatePkgChecks(whoText) {
-    PKGS.forEach(function (p) {
-      pkgChecks[p].checked = whoText.indexOf('packages/' + p + '.cz') !== -1;
+  function session() {
+    M.ccall('cozy_repl', 'number', [], [], { async: true }).then(function () {
+      flush(); postMessage({ t: 'ended' });
     });
   }
-  try {   /* native engine detection: jsdom/file:// lack fetch or the server */
-    if (typeof fetch === 'function')
-      fetch('/native-ping').then(function (r) { return r.text(); }).then(function (tx) {
-        if (tx.indexOf('cozy') === 0) {
-          NATIVE = true;
-          var parts = tx.trim().split(/\s+/);   /* "cozy <version> <backend>" */
-          var desc = parts.length >= 3 ? 'v' + parts[1] + ' \u00b7 ' + parts[2] + ' backend'
-                                       : 'local cozy process';
-          /* REWRITE the banner's version line in place: one truth, the
-           * computing engine's. Poll until the wasm boot has printed it. */
-          var tries = 0;
-          (function fixBanner() {
-            var lines = document.querySelectorAll('#term div');
-            var done = false;
-            for (var i = 0; i < lines.length; i++) {
-              var tc = lines[i].textContent;
-              if (tc.indexOf('(wasm, built') !== -1) {
-                /* the NATIVE engine's version, not the wasm bundle's — the
-                 * two can differ when only the binary was hotfixed */
-                lines[i].textContent = 'v' + (parts.length >= 2 ? parts[1] : '?') +
-                    ' \u00b7 ' + (parts.length >= 3 ? parts[2] : 'native') +
-                    ' backend \u00b7 native engine';
-                lines[i].className = 'banner-warm';
-                done = true;
-              }
-              if (tc.indexOf('standard packages are preloaded') !== -1)
-                lines[i].textContent = 'Packages load on demand: the Packages tab or load("dist").';
-            }
-            if (!done && ++tries < 60) { setTimeout(fixBanner, 150); return; }
-            window.nuTerm.scroll();
-            refreshWorkspace();
-          })();
+  onmessage = function (e) {
+    var m = e.data;
+    if (m.t === 'keys') {
+      var bytes = enc.encode(m.d);
+      for (var i = 0; i < bytes.length; i++) {
+        /* Ctrl-C while something runs is an interrupt, as SIGINT is natively;
+           at a prompt (the editor is reading) it is a key */
+        if (bytes[i] === 3 && !globalThis.__cozyReading) {
+          globalThis.__cozyInterrupt = 1;
+          out.push(94, 67); flush();                     /* the "^C" a tty echoes */
+          continue;
         }
-      }).catch(function () {});
-  } catch (e) {}
+        globalThis.__cozyKeys.push(bytes[i]);
+      }
+    }
+    else if (m.t === 'size') { globalThis.__cozyCols = m.cols; globalThis.__cozyRows = m.rows; }
+    else if (m.t === 'start') {
+      if (m.hist) { try { M.FS.writeFile('/home/web_user/.cozy_history', m.hist); } catch (e) {} }
+      session();
+    }
+    else if (m.t === 'restart') session();
+    else if (m.t === 'write') {
+      try { M.FS.writeFile('/' + m.name, new Uint8Array(m.data)); postMessage({ t: 'written', name: m.name, n: m.data.byteLength }); }
+      catch (err) { postMessage({ t: 'toast', msg: 'upload failed: ' + err }); }
+    }
+    else if (m.t === 'read') {
+      var d = null; try { d = M.FS.readFile(m.path); } catch (err) {}
+      postMessage({ t: 'file', id: m.id, path: m.path, d: d });
+    }
+    else if (m.t === 'newfiles') {
+      var got = files().filter(function (f) { return initial.indexOf(f) < 0; }).map(function (f) {
+        return { name: f, d: M.FS.readFile('/' + f) };
+      });
+      postMessage({ t: 'newfiles', files: got });
+    }
+    else if (m.t === 'packages') {
+      var p = []; try { p = M.FS.readdir('/packages').filter(function (f) { return /\.cz$/.test(f); }); } catch (err) {}
+      postMessage({ t: 'packages', list: p.sort() });
+    }
+  };
+  importScripts(self.COZY_BUNDLE_URL);
+  Cozy(cfg).then(function (m) {
+    M = m; M._cozy_init();
+    initial = files();
+    postMessage({ t: 'ready', version: M.UTF8ToString(M._cozy_version()) });
+  });
+};
+
+var worker = new Worker(URL.createObjectURL(new Blob([
+  'self.COZY_BUNDLE_URL = ' + JSON.stringify(new URL(COZY_BUNDLE, location.href).href) + ';\n(' + WORKER.toString() + ')();'
+], { type: 'text/javascript' })));
+
+/* ---- the terminal ----------------------------------------------------- */
+var term = new Terminal({
+  convertEol: true, cursorBlink: true, scrollback: 10000, allowProposedApi: false,
+  fontFamily: '"SF Mono", "JetBrains Mono", "Fira Code", ui-monospace, Menlo, Consolas, monospace',
+  fontSize: window.innerWidth < 600 ? 12 : 14, lineHeight: 1.15,
+  theme: { background: '#0b0e14', foreground: '#c9d4e3', cursor: '#00c2d6', cursorAccent: '#0b0e14',
+           selectionBackground: '#2b3550' }
+});
+var fit = new FitAddon.FitAddon();
+term.loadAddon(fit);
+var ready = false, ended = false;
+function keys(s) {
+  if (!ready) return;
+  if (ended) { ended = false; worker.postMessage({ t: 'restart' }); return; }
+  worker.postMessage({ t: 'keys', d: s });
+}
+function sendSize() { worker.postMessage({ t: 'size', cols: term.cols, rows: term.rows }); }
+term.onData(keys);
+term.onResize(sendSize);
+window.__term = term;                    /* the browser test reads the screen through this */
+
+var pkgChecks = {}, docCache = {}, pending = {}, reqId = 0;
+function request(msg) {
+  return new Promise(function (res) { msg.id = ++reqId; pending[msg.id] = res; worker.postMessage(msg); });
+}
+
+worker.onmessage = function (e) {
+  var m = e.data;
+  if (m.t === 'out') term.write(m.d);
+  else if (m.t === 'ready') {
+    $('booting').remove();
+    term.open($('term'));
+    fit.fit();
+    var hist = ''; try { hist = localStorage.getItem(HISTKEY) || ''; } catch (err) {}
+    sendSize();
+    worker.postMessage({ t: 'start', hist: hist });
+    ready = true;
+    term.focus();
+    worker.postMessage({ t: 'packages' });
+  }
+  else if (m.t === 'notice') {
+    $('ws-pre').textContent = m.who.trim() ? m.who : '(empty workspace)';
+    for (var p in pkgChecks) pkgChecks[p].checked = m.who.indexOf('packages/' + p) !== -1;
+    try { if (m.hist) localStorage.setItem(HISTKEY, m.hist); } catch (err) {}
+  }
+  else if (m.t === 'ended') {
+    ended = true;
+    term.write('\r\n\x1b[2m[session ended — press any key for a new one]\x1b[0m\r\n');
+  }
+  else if (m.t === 'plot') {
+    var box = $('plots');
+    if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
+    box.insertAdjacentHTML('afterbegin', m.svg);
+    showPane('plots');
+  }
+  else if (m.t === 'file') { var f = pending[m.id]; delete pending[m.id]; if (f) f(m.d); }
+  else if (m.t === 'written') {
+    toast('uploaded ' + m.name + ' (' + m.n + ' bytes) — ' +
+          (/\.cz$/i.test(m.name) ? 'load("/' + m.name + '")' : 'readtable("/' + m.name + '")'));
+  }
+  else if (m.t === 'toast') toast(m.msg);
+  else if (m.t === 'newfiles') {
+    m.files.forEach(function (f) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([f.d])); a.download = f.name; a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+    });
+    toast(m.files.length + ' new file' + (m.files.length === 1 ? '' : 's') + ' downloaded');
+  }
+  else if (m.t === 'packages') buildPkgs(m.list);
+};
+window.addEventListener('resize', function () { if (ready) fit.fit(); });
+if (window.ResizeObserver) new ResizeObserver(function () { if (ready) fit.fit(); }).observe($('term'));
+$('term').addEventListener('click', function () { term.focus(); });
+
+/* phones: the terminal's own keyboard handling is unreliable there, so a
+   plain line field types into it (owner's decision, design entry 34) */
+if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) document.body.classList.add('touch');
+$('tline').addEventListener('keydown', function (e) {
+  if (e.key === 'Enter') { keys($('tline').value + '\r'); $('tline').value = ''; e.preventDefault(); }
+});
+Array.prototype.forEach.call(document.querySelectorAll('#touchbar button'), function (b) {
+  b.addEventListener('click', function () {
+    var k = b.dataset.key, v = $('tline').value;
+    if (v) { keys(v); $('tline').value = ''; }
+    keys({ tab: '\t', up: '\x1b[A', down: '\x1b[B', ctrlc: '\x03' }[k]);
+  });
+});
+
+/* chips, the editor and the packages type at the prompt — visibly, as a
+   person would; nothing runs behind the terminal's back */
+document.querySelector('footer').addEventListener('click', function (e) {
+  if (!e.target.classList.contains('chip')) return;
+  keys(e.target.getAttribute('data-cmd') + '\r'); term.focus();
+});
+
+/* ---- tabs ---- */
+function showPane(which) {
+  $('plots').style.display = which === 'plots' ? 'block' : 'none';
+  $('editor').style.display = which === 'editor' ? 'flex' : 'none';
+  $('docs').style.display = which === 'docs' ? 'flex' : 'none';
+  $('workspace').style.display = which === 'ws' ? 'block' : 'none';
+  $('pkgs').style.display = which === 'pkgs' ? 'block' : 'none';
+  ['plots', 'editor', 'docs', 'ws', 'pkgs'].forEach(function (w) { $('tab-' + w).classList.toggle('on', w === which); });
+  if (which === 'editor') $('edtext').focus();
+}
+['plots', 'editor', 'ws', 'pkgs'].forEach(function (w) { $('tab-' + w).addEventListener('click', function () { showPane(w); }); });
+$('tab-docs').addEventListener('click', function () { showPane('docs'); loadDoc(); });
+
+/* ---- packages: tick types load(...), untick types clear(...) ---- */
+function buildPkgs(list) {
+  var box = $('pkgs'); box.innerHTML = '';
+  var hint = document.createElement('div');
+  hint.textContent = 'Tick to load, untick to unload — the command is typed at the prompt. State follows the workspace, however a package was loaded.';
+  hint.style.cssText = 'font-size:12px; color:#99a3b3; padding:2px 4px 10px;';
+  box.appendChild(hint);
+  list.forEach(function (f) {
+    var row = document.createElement('label');
+    row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 4px; border-bottom:1px solid rgba(255,255,255,0.06); cursor:pointer; font-size:13px;';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; pkgChecks[f] = cb;
+    var name = document.createElement('span'); name.textContent = 'packages/' + f;
+    /* clear by PATH, not by short name: clear("dsge") would find the variable
+       dsge first (that package's namespace record) and remove only it */
+    cb.addEventListener('change', function () {
+      keys((cb.checked ? 'load' : 'clear') + '("packages/' + f + '")\r'); term.focus();
+    });
+    row.appendChild(cb); row.appendChild(name); box.appendChild(row);
+  });
+}
 
   /* ---- markdown -> HTML: the same subset the C renderer handles ---- */
   function mdToHtml(src) {
@@ -623,125 +537,79 @@
     return out.join('\n');
   }
 
-  var docPick = document.getElementById('doc-pick');
-  var docCache = {};
-  function loadDoc(path) {
-    if (path) docPick.value = path;
-    var p = docPick.value;
-    if (!window.COZY) return;
-    if (!docCache[p]) {
-      try {
-        docCache[p] = mdToHtml(new TextDecoder().decode(window.COZY.FS.readFile(p)));
-      } catch (e) { docCache[p] = '<p>(document not found in this build)</p>'; }
-    }
-    document.getElementById('docview').innerHTML = docCache[p];
-    document.getElementById('docview').scrollTop = 0;
-  }
-  docPick.addEventListener('change', function () { loadDoc(); });
 
-  /* ---- script editor (persists in localStorage) ---- */
-  var edtext = document.getElementById('edtext');
-  var EDKEY = 'cozy_editor_v1';
-  try { var t0 = localStorage.getItem(EDKEY); if (t0) edtext.value = t0; } catch (e) {}
-  var edTimer = null;
-  edtext.addEventListener('input', function () {
-    clearTimeout(edTimer);
-    edTimer = setTimeout(function () { try { localStorage.setItem(EDKEY, edtext.value); } catch (e) {} }, 400);
+var docPick = $('doc-pick');
+function loadDoc(path) {
+  if (path) docPick.value = path;
+  var p = docPick.value;
+  if (docCache[p]) { $('docview').innerHTML = docCache[p]; $('docview').scrollTop = 0; return; }
+  request({ t: 'read', path: p }).then(function (d) {
+    docCache[p] = d ? mdToHtml(new TextDecoder().decode(d)) : '<p>(document not found in this build)</p>';
+    $('docview').innerHTML = docCache[p]; $('docview').scrollTop = 0;
   });
-  function runScript(text) {
-    if (!window.COZY || !text.trim().length) return;
-    nuTerm.runBuffer(text);              /* interactive echo; focus stays in the editor */
-  }
-  document.getElementById('ed-run').addEventListener('click', function () { runScript(edtext.value); });
-  edtext.addEventListener('keydown', function (ev) {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
-      ev.preventDefault();
-      var a = edtext.selectionStart, b = edtext.selectionEnd, v = edtext.value;
-      if (a === b) { runScript(v); return; }
-      while (a > 0 && v[a - 1] !== '\n') a--;
-      while (b < v.length && v[b] !== '\n') b++;
-      runScript(v.slice(a, b));
-    } else if (ev.key === 'Tab') {
-      ev.preventDefault();
-      edtext.setRangeText('    ', edtext.selectionStart, edtext.selectionEnd, 'end');
-    }
-  });
-  document.getElementById('ed-open').addEventListener('change', function (ev) {
-    var f = ev.target.files[0]; if (!f) return;
-    f.text().then(function (t) {
-      edtext.value = t;
-      try { localStorage.setItem(EDKEY, t); } catch (e) {}
-      showTab(true);
-    });
-    ev.target.value = '';
-  });
-  document.getElementById('ed-save').addEventListener('click', function () {
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([edtext.value], { type: 'text/plain' }));
-    a.download = 'script.cz'; a.click(); URL.revokeObjectURL(a.href);
-  });
+}
+docPick.addEventListener('change', function () { loadDoc(); });
+window.mdToHtml = mdToHtml;
 
-  /* ---- upload + download-new-files ---- */
-  document.getElementById('upload').addEventListener('change', function (ev) {
-    var files = Array.prototype.slice.call(ev.target.files);
-    files.forEach(function (f) {
-      f.arrayBuffer().then(function (buf) {
-        window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
-        known.add(f.name);
-        var hint = /\.cz$/i.test(f.name) ? 'run it with: load("/' + f.name + '")'
-                                          : 'e.g. readtable("/' + f.name + '")';
-        nuTerm.writeLine('dim', '(uploaded ' + f.name + ', ' + buf.byteLength + ' bytes — ' + hint + ')');
-        nuTerm.scroll();
+/* ---- the editor: Run types the buffer at the prompt ---- */
+var edtext = $('edtext');
+try { var t0 = localStorage.getItem(EDKEY); if (t0) edtext.value = t0; } catch (e) {}
+var edTimer = null;
+edtext.addEventListener('input', function () {
+  clearTimeout(edTimer);
+  edTimer = setTimeout(function () { try { localStorage.setItem(EDKEY, edtext.value); } catch (e) {} }, 400);
+});
+function runScript(text) {
+  text = text.replace(/\r\n?/g, '\n').replace(/\n+$/, '');
+  if (!text.trim()) return;
+  keys(text.split('\n').join('\r') + '\r');
+}
+$('ed-run').addEventListener('click', function () { runScript(edtext.value); });
+edtext.addEventListener('keydown', function (ev) {
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === 'Enter') {
+    ev.preventDefault();
+    var a = edtext.selectionStart, b = edtext.selectionEnd, v = edtext.value;
+    if (a === b) { runScript(v); return; }
+    while (a > 0 && v[a - 1] !== '\n') a--;
+    while (b < v.length && v[b] !== '\n') b++;
+    runScript(v.slice(a, b));
+  } else if (ev.key === 'Tab') {
+    ev.preventDefault();
+    edtext.setRangeText('    ', edtext.selectionStart, edtext.selectionEnd, 'end');
+  }
+});
+$('ed-open').addEventListener('change', function (ev) {
+  var f = ev.target.files[0]; if (!f) return;
+  f.text().then(function (t) { edtext.value = t; try { localStorage.setItem(EDKEY, t); } catch (e) {} showPane('editor'); });
+  ev.target.value = '';
+});
+$('ed-save').addEventListener('click', function () {
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([edtext.value], { type: 'text/plain' }));
+  a.download = 'script.cz'; a.click(); URL.revokeObjectURL(a.href);
+});
+
+/* ---- files in and out ---- */
+function upload(f) { f.arrayBuffer().then(function (buf) { worker.postMessage({ t: 'write', name: f.name, data: buf }, [buf]); }); }
+$('upload').addEventListener('change', function (ev) {
+  Array.prototype.slice.call(ev.target.files).forEach(upload); ev.target.value = '';
+});
+$('dl').addEventListener('click', function () { worker.postMessage({ t: 'newfiles' }); });
+var dragDepth = 0;
+window.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragleave', function () { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('dragover', function (ev) { ev.preventDefault(); });
+window.addEventListener('drop', function (ev) {
+  ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  Array.prototype.slice.call(ev.dataTransfer.files).forEach(function (f) {
+    if (/\.(cz|txt)$/i.test(f.name)) {
+      f.text().then(function (t) {
+        edtext.value = t; try { localStorage.setItem(EDKEY, t); } catch (e) {}
+        showPane('editor'); toast('opened ' + f.name + ' in the editor — Run types it at the prompt');
       });
-    });
-    ev.target.value = '';
+    } else upload(f);
   });
-  document.getElementById('dl').addEventListener('click', function () {
-    if (!window.COZY) return;
-    var n = 0, names = window.COZY.FS.readdir('/');
-    for (var i = 0; i < names.length; i++) {
-      var f = names[i];
-      if (known.has(f) || f === '.' || f === '..' || f === '_editor.cz') continue;
-      try {
-        if (!window.COZY.FS.isFile(window.COZY.FS.stat('/' + f).mode)) continue;
-        var data = window.COZY.FS.readFile('/' + f);
-        var a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([data]));
-        a.download = f; a.click(); URL.revokeObjectURL(a.href); n++;
-      } catch (e) {}
-    }
-    nuTerm.writeLine('dim', '(' + n + ' new file' + (n === 1 ? '' : 's') + ' downloaded)');
-    nuTerm.scroll();
-  });
-
-  /* ---- drag & drop: .cz -> editor, everything else -> MEMFS ---- */
-  var dragDepth = 0;
-  window.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
-  window.addEventListener('dragleave', function () { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
-  window.addEventListener('dragover', function (ev) { ev.preventDefault(); });
-  window.addEventListener('drop', function (ev) {
-    ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
-    if (!window.COZY) return;
-    var files = Array.prototype.slice.call(ev.dataTransfer.files);
-    files.forEach(function (f) {
-      if (/\.(nu|txt)$/i.test(f.name)) {
-        f.text().then(function (t) {
-          edtext.value = t;
-          try { localStorage.setItem(EDKEY, t); } catch (e) {}
-          showTab(true);
-          nuTerm.writeLine('dim', '(opened ' + f.name + ' in the editor — Ctrl+Enter runs it)');
-          nuTerm.scroll();
-        });
-      } else {
-        f.arrayBuffer().then(function (buf) {
-          window.COZY.FS.writeFile('/' + f.name, new Uint8Array(buf));
-          known.add(f.name);
-          nuTerm.writeLine('dim', '(uploaded ' + f.name + ', ' + buf.byteLength + ' bytes)');
-          nuTerm.scroll();
-        });
-      }
-    });
-  });
+});
 </script>
 </body>
 </html>

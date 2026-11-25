@@ -1212,7 +1212,9 @@ cozy> names("funcs")
 ```
 
 `input("prompt")` reads one line from the keyboard as a string, and
-`pause()` waits for Enter — `window.prompt` and an alert in the browser.
+`pause()` waits for Enter. At the prompt — a terminal, or the browser's,
+which is the same REPL — both are edited like any line, and Ctrl-C
+interrupts the computation that asked.
 Interactive by nature, so shown here rather than machine-replayed (under
 a pipe they consume the next stdin line; `tests/run_io.sh` checks exactly
 that):
@@ -1616,8 +1618,8 @@ cozy> clear("scatter"); who
 | `pwd` | the current working directory, as a string |
 | `cd("dir") \| cd` | change the working directory (persists, unlike !cd); bare cd goes home |
 | `ls \| ls("dir") \| ls("*.cz")` | directory listing as a string array (globs supported) |
-| `input("prompt")` | read one line from the keyboard as a string (window.prompt in the browser) |
-| `pause() \| pause("msg")` | wait for the user before continuing (alert in the browser) |
+| `input("prompt")` | read one line from the keyboard as a string (edited like the prompt; Ctrl-C interrupts) |
+| `pause() \| pause("msg")` | wait for Enter before continuing (Ctrl-C interrupts) |
 
 ### Plotting
 

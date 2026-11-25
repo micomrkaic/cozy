@@ -5,7 +5,8 @@
 **[Read the manual](MANUAL.md)** ([PDF](MANUAL.pdf)) — the full guide to the
 language, REPL, and tools, with every example verified against the
 interpreter. **[Try it in the browser](https://micomrkaic.github.io/cozy/)** —
-the same interpreter, compiled to WebAssembly, with the books built in.
+the same REPL as the terminal (line editor, completion, history, Ctrl-C and
+all), compiled to WebAssembly and run on xterm.js, with the books built in.
 **[DSGE demos](https://micomrkaic.github.io/cozy/dsge.html)** — three macro
 models solved live in the page by the `dsge` package.
 **[Nowcast](https://micomrkaic.github.io/cozy/nowcast.html)** — drop in a

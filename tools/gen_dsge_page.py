@@ -40,22 +40,29 @@ def build(SRC, opener):
 STAMP = re.compile(r'var COZY_BUNDLE = "cozy\.js\?v=[0-9a-f]+";')
 
 
+STAMPED = ["docs/nowcast.html", "docs/index.html"]
+
+
 def stamp(check):
-    """nowcast.html loads cozy.js?v=<hash of cozy.js> in its worker, so a
-    cached older engine is never used with a newer page."""
+    """The pages whose worker loads the engine (the nowcast page, the
+    playground) ask for cozy.js?v=<hash of cozy.js>, so a cached older engine
+    is never used with a newer page."""
     h = hashlib.sha256(open(BUNDLE, "rb").read()).hexdigest()[:12]
-    page = open("docs/nowcast.html", encoding="utf-8").read()
-    if len(STAMP.findall(page)) != 1:
-        raise SystemExit("gen_dsge_page: expected one COZY_BUNDLE line in docs/nowcast.html")
-    want = STAMP.sub(f'var COZY_BUNDLE = "cozy.js?v={h}";', page)
-    if want == page:
-        return 0
-    if check:
-        print("nowcast page: the cozy.js stamp is stale — run python3 tools/gen_dsge_page.py")
-        return 1
-    open("docs/nowcast.html", "w", encoding="utf-8").write(want)
-    print(f"nowcast page: stamped cozy.js?v={h}")
-    return 0
+    bad = 0
+    for path in STAMPED:
+        page = open(path, encoding="utf-8").read()
+        if len(STAMP.findall(page)) != 1:
+            raise SystemExit(f"gen_dsge_page: expected one COZY_BUNDLE line in {path}")
+        want = STAMP.sub(f'var COZY_BUNDLE = "cozy.js?v={h}";', page)
+        if want == page:
+            continue
+        if check:
+            print(f"{path}: the cozy.js stamp is stale — run python3 tools/gen_dsge_page.py")
+            bad = 1
+            continue
+        open(path, "w", encoding="utf-8").write(want)
+        print(f"{path}: stamped cozy.js?v={h}")
+    return bad
 
 
 def main():

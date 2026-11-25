@@ -33,6 +33,25 @@
 #include <sys/ioctl.h>
 
 #include "lineedit.h"                       /* isocline: editing, history, completion */
+#ifdef __EMSCRIPTEN__
+extern int cozy_term_readbyte(long timeout_ms);   /* the browser's terminal (wasm_api.c) */
+extern int cozy_term_rows(void);
+#endif
+
+/* Called before each new prompt (not a continuation): the browser REPL
+ * sends the page its workspace from here, so the side panes follow the
+ * session without running commands of their own. Null natively. */
+void (*repl_prompt_hook)(Interp *I) = nullptr;
+
+/* is output a terminal? natively isatty; in the browser, the page's */
+static bool out_is_tty(void)
+{
+#ifdef __EMSCRIPTEN__
+    return le_interactive();
+#else
+    return isatty(fileno(stdout)) != 0;
+#endif
+}
 
 /* ------------------------------------------------------------------ */
 /* session retention: accepted (arena, source) pairs live until exit   */
@@ -123,9 +142,40 @@ static FILE *open_pager(void)
     return popen(pager, "w");
 }
 
+#ifdef __EMSCRIPTEN__
+/* The browser has no less: a small pager in the page's terminal. Space or f
+ * pages, Enter or j steps a line, q (or Ctrl-C, Esc) quits. */
+static void page_builtin(const char *buf, size_t sz)
+{
+    int rows = cozy_term_rows();
+    if (rows < 4) rows = 24;
+    int page = rows - 1, shown = 0;
+    size_t pos = 0;
+    while (pos < sz) {
+        const char *nl = memchr(buf + pos, '\n', sz - pos);
+        size_t end = nl ? (size_t)(nl - buf) + 1 : sz;
+        fwrite(buf + pos, 1, end - pos, stdout);
+        pos = end; shown++;
+        if (shown >= page && pos < sz) {
+            fputs("\033[7m-- more --  space: page  Enter: line  q: quit\033[0m", stdout);
+            fflush(stdout);
+            int k = cozy_term_readbyte(-1);
+            fputs("\r\033[K", stdout);
+            if (k < 0 || k == 'q' || k == 'Q' || k == 3 || k == 27) break;
+            shown = (k == '\r' || k == '\n' || k == 'j') ? page - 1 : 0;
+        }
+    }
+    fflush(stdout);
+}
+#endif
+
 static void page_output(const char *buf, size_t sz)
 {
     if (!buf || sz == 0) return;
+#ifdef __EMSCRIPTEN__
+    page_builtin(buf, sz);
+    return;
+#endif
     size_t lines = 0;
     for (size_t i = 0; i < sz; i++) if (buf[i] == '\n') lines++;
     int rows = 24;
@@ -298,9 +348,13 @@ int repl_run(void)
 
     le_init(histpath, globals);
     extern char *(*cozy_input_hook)(const char *);
-    if (le_interactive()) cozy_input_hook = le_readline_nohist;   /* input() edits like the prompt */
+    extern bool (*cozy_pause_hook)(const char *);
+    if (le_interactive()) {                     /* input() and pause() edit like the prompt */
+        cozy_input_hook = le_readline_nohist;
+        cozy_pause_hook = le_pause;
+    }
     if (le_interactive()) {
-        print_banner(isatty(fileno(stdout)) && !getenv("NO_COLOR"));
+        print_banner(out_is_tty() && !getenv("NO_COLOR"));
         fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels  \u00b7  Ctrl-R searches history\n\n", stdout);
     }
 
@@ -319,6 +373,7 @@ int repl_run(void)
             free(acc); acc = nullptr; acclen = 0; cont = false;
         }
 
+        if (!cont && repl_prompt_hook) repl_prompt_hook(&I);
         bool cancelled = false;
         char *line = le_readline(cont ? "     ...> " : "cozy> ", &cancelled);
         if (line && cancelled) {                /* Ctrl-C at the prompt: abandon the entry */
@@ -342,8 +397,12 @@ int repl_run(void)
             const char *arg;
             if (*q == '!') {
                 q++;
+#ifdef __EMSCRIPTEN__
+                fputs("!: there is no shell in the browser (ls, cd and pwd are builtins)\n", stderr);
+#else
                 if (*q) { fflush(stdout); fflush(stderr); int rc = system(q); (void)rc; }
                 else fputs("usage: !<shell command>\n", stderr);
+#endif
                 le_history_add(line);
                 free(line);
                 continue;
@@ -390,7 +449,16 @@ int repl_run(void)
                             "or set COZY_MANUAL for the main manual)\n", file);
                     goto manual_done;
                 }
-                bool tty = isatty(fileno(stdout));
+                bool tty = out_is_tty();
+#ifdef __EMSCRIPTEN__
+                if (tty) {                             /* no less: render, then the built-in pager */
+                    char *mb = nullptr; size_t ms = 0;
+                    FILE *mm = open_memstream(&mb, &ms);
+                    if (mm) { md_render(mf, mm, true); fclose(mm); page_builtin(mb, ms); free(mb); }
+                    tty = false; fclose(mf); mf = nullptr;
+                }
+                if (!mf) goto manual_done;
+#endif
                 if (tty) {
                     FILE *pp = open_pager();
                     if (pp) {
@@ -466,14 +534,17 @@ int repl_run(void)
 
         if (!synthetic) le_history_add(acc);
         char  *cap = nullptr; size_t capsz = 0; FILE *ms = nullptr;
-        bool   paging = g_more && isatty(fileno(stdout));
+        bool   paging = g_more && out_is_tty();
         if (paging) {
             ms = open_memstream(&cap, &capsz);
             if (ms) value_set_out(ms); else paging = false;
         }
 
         Value r = vm_eval_program(&I, prog, globals, /*echo=*/true);
-        if (I.had_error)
+        if (I.had_error && strncmp(I.err, "interrupted", 11) == 0 && (I.err[11] == '\0' || I.err[11] == '\n'))
+            fputc('\n', stdout);                /* Ctrl-C at input()/pause(), or in the browser:
+                                                    the same newline SIGINT gives natively */
+        else if (I.had_error)
             print_diag(acc, I.cur_line, I.cur_col, I.err);
         value_release(r);
 
