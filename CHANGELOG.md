@@ -1,5 +1,25 @@
 # Cozy changelog
 
+## 0.1.53 — macOS by CI only
+
+The project no longer has Apple hardware. The macos CI job (the full
+suite with Accelerate and NLopt, then tier0, on every pull request) is
+now the only macOS verification, and the docs say so.
+
+### Changed
+- **The browser tests are required in CI.** The Linux job installs
+  Playwright and Chromium and sets `COZY_REQUIRE_BROWSER=1`, which turns
+  the browser tests' polite "playwright not installed, skipping" into a
+  failure. Both playground engines, the browser/terminal parity screen and
+  the nowcast page now gate every pull request, not just local runs.
+- **KNOWN_LIMITATIONS: the Apple Silicon workbench BLAS gap** is marked
+  UNVERIFIED and presumed fixed. It was measured (0.0.46-48) on the old
+  daemon-shaped workbench, which 0.1.52 replaced with the ordinary REPL
+  on a pty; with no Mac and runners too noisy for a 12-19 ms difference,
+  it cannot be re-measured. The owner-side experiments are gone.
+- **PLAYBOOK, CHARTER:** "the owner's Mac deploy is the acceptance run"
+  and the open MacBook formality become the macos CI job.
+
 ## 0.1.52 — one page, two engines, the same screen (terminal stage 3)
 
 The last stage of design entry 34: the native workbench runs the native

@@ -287,8 +287,9 @@ serve.c compiled for weeks on Linux and died on the Mac at
 INADDR_LOOPBACK: _POSIX_C_SOURCE asks Darwin's headers for strict
 POSIX, and BSD-heritage names are not POSIX — glibc leaks them anyway,
 Apple does not. The Linux container therefore CANNOT catch this class;
-the owner's Mac deploy is the real acceptance run for any new
-POSIX-adjacent code. Fix order: a guarded fallback #define for eternal
+the macos CI job is the real acceptance run for any new POSIX-adjacent
+code (there is no Apple hardware in the project any more: push, and
+read the macos job before merging). Fix order: a guarded fallback #define for eternal
 constants; _DARWIN_C_SOURCE alongside when BSD APIs are genuinely
 needed; never just deleting the strict macro.
 
@@ -387,8 +388,14 @@ transferred knowledge exactly like the code.
 
 .github/workflows/ci.yml runs the full suite on every push: Linux
 (tier0, openblas+nlopt, ASan, an install smoke) and macOS
-(accelerate+nlopt) — the Mac acceptance layer is now a robot in
-GitHub's basement, not a trip to Alexandria. tools/wasm.Dockerfile
+(accelerate+nlopt) — the Mac acceptance layer is a robot in GitHub's
+basement. Since 0.1.53 it is the ONLY Mac: the owner has no Apple
+hardware, so anything macOS-specific (a terminal quirk, a header, a
+timing) is checked by the macos job or not at all — write the check as
+a test that runs there. The Linux job installs Playwright and sets
+COZY_REQUIRE_BROWSER, so the browser tests (both playground engines,
+the browser/terminal parity screen, the nowcast page) fail CI instead
+of skipping. tools/wasm.Dockerfile
 freezes the Ubuntu emscripten recipe (clang-15 chain, node + its
 externalized builtins) as an image; make wasm-docker builds the bundle
 through it, ending the per-reset re-derivation tax. The Dockerfile's

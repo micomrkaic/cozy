@@ -177,10 +177,10 @@ differentiation (duals, hyper-duals, total ast(f) quotation), and
 optimization (entry 14: OPTIM=nlopt, nlmin with exact dual gradients,
 optim.cz dispatching; the AL retained as tier0 and the wasm story).
 Acceptance: full suite green under tier0 and openblas+nlopt on two
-Linux machines (container + owner's Debian). ONE OPEN FORMALITY:
-make BACKEND=accelerate OPTIM=nlopt test on the owner's MacBook
-(in Alexandria at the milestone; the owner in Duluth GA) — record its
-verdict in LESSONS when the reunion happens. Version counter: 0.1.x
+Linux machines (container + owner's Debian). The macOS formality
+(make BACKEND=accelerate OPTIM=nlopt test) is closed by CI: the macos
+job runs exactly that on every pull request. The project has no Apple
+hardware any more (0.1.53); macOS is verified by CI only. Version counter: 0.1.x
 for the remaining ladder steps (a derivative-free book problem once
 transcripts can be build-conditional, global methods on a transcript);
 0.2.0 at the next capability boundary the docket defines.

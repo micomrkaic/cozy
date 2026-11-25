@@ -19,9 +19,10 @@
 //     the page's own), Packages, Docs, the editor's Run;
 //   - nothing lost to the browser console, no page errors.
 // Run from the repository root: node tests/run_playground_page.js
+const SKIP = process.env.COZY_REQUIRE_BROWSER ? ", and COZY_REQUIRE_BROWSER is set: FAIL" : ", skipping";
 let chromium;
 try { chromium = require("playwright").chromium; }
-catch (e) { console.log("playground: playwright not installed, skipping"); process.exit(0); }
+catch (e) { console.log("playground: playwright not installed" + SKIP); process.exit(process.env.COZY_REQUIRE_BROWSER ? 1 : 0); }
 const fs = require("fs"), path = require("path"), http = require("http");
 
 const ROOT = process.cwd();
@@ -38,7 +39,7 @@ const server = http.createServer((req, res) => {
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   let browser;
   try { browser = await chromium.launch(); }
-  catch (e) { console.log("playground: no browser for playwright, skipping"); server.close(); process.exit(0); }
+  catch (e) { console.log("playground: no browser for playwright" + SKIP); server.close(); process.exit(process.env.COZY_REQUIRE_BROWSER ? 1 : 0); }
   const wasmUrl = `http://127.0.0.1:${server.address().port}/index.html?engine=wasm`;
   try {
     const counts = {};

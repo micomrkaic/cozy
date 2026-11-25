@@ -170,30 +170,29 @@ the arena when compilation produced no closure, or refcount chunks so
 retention follows actual references. The stress suite's long-session tier
 reports the growth and will enforce a plateau once the fix lands.
 
-## Workbench BLAS calls on Apple Silicon carry ~12-19 ms of per-call overhead
+## Workbench BLAS calls on Apple Silicon: an old measurement that can no longer be checked
 
-Measured by the owner across three instrumented sessions (0.0.46-48),
-same binary, tic/toc inside the process so HTTP is excluded: workbench
-gemm/inv trail the terminal REPL by a roughly FIXED 12-19 ms per call —
-2.1x at gemm n=1000, 1.18x at n=2000, amortizing with size. The ratio's
-size-dependence rules out core-class relegation and thread-count caps
-(both predict constant ratios); an explicit per-thread QoS attribute
-(0.0.47) and entry via dispatch_sync_f on the USER_INTERACTIVE queue
-(0.0.48) each changed nothing. Best remaining hypothesis: cold-start —
-Accelerate's pool threads park during the idle seconds between commands
-and the wake/ramp cost is paid per call in a daemon-shaped process.
-Discriminating experiments (owner-side): VECLIB_MAXIMUM_THREADS=1 on
-both surfaces (convergence implicates the pool); a tight back-to-back
-eval loop in the workbench (gap collapsing implicates cold-start).
-Status: DOCUMENTED COST. The terminal is the benchmarking surface; the
-workbench's value is the panes around a session that remains hundreds
-of times faster than the boxed era. A persistent warm compute thread is
-parked in the docket with these experiments as its trigger.
-**0.1.52: re-measure.** The workbench no longer evaluates in a daemon
-over HTTP: it runs the ordinary REPL process (the code `./cozy` runs) on a
-pseudo-terminal, with interactive QoS inherited. If the cold-start
-hypothesis was right, the gap should be gone; it has not been measured on
-Apple Silicon since.
+0.0.46-48, on the owner's Apple Silicon machine (tic/toc inside the
+process, so HTTP excluded): workbench gemm/inv trailed the terminal REPL
+by a roughly fixed 12-19 ms per call (2.1x at gemm n=1000, 1.18x at
+n=2000). Per-thread QoS (0.0.47) and dispatch onto the USER_INTERACTIVE
+queue (0.0.48) changed nothing; the leading hypothesis was cold-start of
+Accelerate's thread pool in a daemon-shaped process that sat idle between
+commands.
+
+That design is gone. Since 0.1.52 the workbench does not evaluate in a
+daemon: it runs the ordinary REPL (the code `./cozy` runs) on a
+pseudo-terminal, so a workbench calculation and a terminal calculation are
+the same process doing the same thing. If the cold-start hypothesis was
+right, the gap went with the daemon.
+
+It cannot be confirmed: the project no longer has Apple hardware, and
+shared CI runners are too noisy to resolve a 12-19 ms difference. macOS
+support is verified by CI only (the macos job runs the full suite with
+Accelerate and NLopt on every pull request), which proves correctness, not
+timings. Status: UNVERIFIED, presumed fixed by the 0.1.52 redesign. The
+terminal remains the surface to benchmark on. Whoever next has a Mac:
+`tic(); A * B; toc()` at n=1000, workbench vs terminal, settles it.
 
 ## Scalar loops are interpreted (measured 0.1.39)
 
