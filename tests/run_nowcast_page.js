@@ -11,7 +11,8 @@
 //   - the weekly example (daily, weekly, monthly and quarterly files): a
 //     weekly model converges, GDP gets a nowcast and weekly and monthly
 //     trackers, the convergence report says so, news adds up, and its
-//     exported script reproduces the nowcast too;
+//     exported script (bootstrap included) reproduces the nowcast and its
+//     bands too; the cards break the band into its parts;
 //   - the missing-data example: late starts, a gap, a discontinued series,
 //     irregular releases — estimated, with a backcast, nowcast and forecast.
 // Run from the repository root: node tests/run_nowcast_page.js
@@ -77,7 +78,7 @@ async function exercise(browser, url, label) {
   if (err) fail(label + ": estimation — " + await err.textContent());
   const st = await page.evaluate(() => {
     const F = window.NowcastApp.S.fit;
-    return { conv: F.conv, iters: F.iters, value: F.now.value, sd: F.now.sd,
+    return { conv: F.conv, iters: F.iters, value: F.now.value, sd: F.now.sd, pred: F.now.pred,
              script: window.NowcastApp.S.lastScript, csv: window.NowcastApp.cleanCSV(F.P), cards: document.querySelectorAll("#cards .nc").length };
   });
   if (!st.conv || st.cards !== 2 || !(st.sd > 0)) fail(label + ": fit " + JSON.stringify({ conv: st.conv, cards: st.cards, sd: st.sd }));
@@ -111,7 +112,8 @@ async function example(browser, url, which) {
   if (err) fail(which + " example: estimation — " + await err.textContent());
   const st = await page.evaluate(() => {
     const F = window.NowcastApp.S.fit;
-    return { status: F.status, base: F.P.base, freqs: F.P.freqs.join(""), value: F.now.value, sd: F.now.sd, iters: F.iters,
+    return { status: F.status, base: F.P.base, freqs: F.P.freqs.join(""), value: F.now.value, sd: F.now.sd, pred: F.now.pred, param: F.now.param, iters: F.iters,
+             parts: (document.querySelector("#cards .nc.main .act") || {}).textContent || "",
              cards: [...document.querySelectorAll("#cards .nc .k")].map(k => k.textContent.split(" ")[0]),
              report: document.getElementById("emstatus").dataset.status, tracks: Object.keys(F.paths).join(""),
              trackShown: !document.getElementById("trackwrap").classList.contains("hidden"),
@@ -141,10 +143,10 @@ async function example(browser, url, which) {
     if (Math.abs(a.value - b.value) > 1e-12) fail("served and standalone pages disagree: " + a.value + " vs " + b.value);
     // the downloads, run natively
     fs.writeFileSync(path.join(tmp, "nowcast_data.csv"), a.csv);
-    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), a.script + 'print("{:.17g} {:.17g}", n.value, n.sd)\n');
+    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), a.script + 'print("{:.17g} {:.17g} {:.17g}", n.value, n.sd, n.sdpred)\n');
     const out = execFileSync(path.join(ROOT, "cozy"), ["nowcast_script.cz"], { cwd: tmp, encoding: "utf8" }).trim().split("\n").pop();
-    const [v, s] = out.split(" ").map(Number);
-    if (!(Math.abs(v - a.value) < 1e-9 && Math.abs(s - a.sd) < 1e-9))
+    const [v, s, sp] = out.split(" ").map(Number);
+    if (!(Math.abs(v - a.value) < 1e-9 && Math.abs(s - a.sd) < 1e-9 && Math.abs(sp - a.pred) < 1e-9))
       fail(`the exported script gives ${v} (sd ${s}), the page ${a.value} (sd ${a.sd})`);
     // the weekly tracker: four files at four frequencies, a weekly model
     const w = await example(browser, `http://127.0.0.1:${port}/nowcast.html`, "weekly");
@@ -152,11 +154,14 @@ async function example(browser, url, which) {
       fail("weekly example: " + JSON.stringify({ status: w.status, base: w.base, freqs: w.freqs }));
     if (w.cards.join(" ") !== "Nowcast Forecast" || w.tracks !== "WMQ" || !w.trackShown || !(w.sd > 0))
       fail("weekly example results: " + JSON.stringify({ cards: w.cards, tracks: w.tracks, shown: w.trackShown, sd: w.sd }));
+    // the bands: the bootstrap (50 draws by default) widened the common component's, the noise the published figure's
+    if (!(w.param > 0 && w.pred > w.sd && /parameters/.test(w.parts) && /own noise/.test(w.parts)))
+      fail("weekly example bands: " + JSON.stringify({ sd: w.sd, pred: w.pred, param: w.param, parts: w.parts }));
     fs.writeFileSync(path.join(tmp, "nowcast_data.csv"), w.csv);
-    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), w.script + 'print("{:.17g} {:.17g}", n.value, n.sd)\n');
+    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), w.script + 'print("{:.17g} {:.17g} {:.17g}", n.value, n.sd, n.sdpred)\n');
     const wout = execFileSync(path.join(ROOT, "cozy"), ["nowcast_script.cz"], { cwd: tmp, encoding: "utf8" }).trim().split("\n").pop();
-    const [wv, ws] = wout.split(" ").map(Number);
-    if (!(Math.abs(wv - w.value) < 1e-9 && Math.abs(ws - w.sd) < 1e-9))
+    const [wv, ws, wp] = wout.split(" ").map(Number);
+    if (!(Math.abs(wv - w.value) < 1e-9 && Math.abs(ws - w.sd) < 1e-9 && Math.abs(wp - w.pred) < 1e-9))
       fail(`weekly example: the exported script gives ${wv} (sd ${ws}), the page ${w.value} (sd ${w.sd})`);
     // missing data: late starts, a gap, a discontinued series, irregular releases
     const m = await example(browser, `http://127.0.0.1:${port}/nowcast.html`, "missing");
@@ -164,7 +169,7 @@ async function example(browser, url, which) {
       fail("missing-data example: " + JSON.stringify({ status: m.status, cards: m.cards, base: m.base }));
     console.log(`nowcast page: served and standalone pages run (EM ${a.iters} iterations); news adds up; ` +
                 `the exported script reproduces the nowcast (${v.toFixed(6)}, |diff| ${Math.abs(v - a.value).toExponential(1)}); ` +
-                `weekly tracker (${w.iters} iterations, GDP ${w.value.toFixed(3)}, script agrees) and missing-data examples run`);
+                `weekly tracker (${w.iters} iterations + bootstrap, GDP ${w.value.toFixed(3)} ± ${w.pred.toFixed(3)}, script agrees) and missing-data examples run`);
   } finally {
     await browser.close(); server.close();
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -361,6 +361,13 @@ let nc_init = fn sp, r -> (
   let e = eig(Zm * Zm' / T);
   let nm = numel(mon);
   let V = e.vectors[:, nm - r + 1 : nm];
+  % an eigenvector's sign is arbitrary, and LAPACKs differ: each factor is
+  % turned so that its largest weight is positive — the same estimate on
+  % every build (the bootstrap simulates from the loadings, so it matters)
+  for j = 1 : r do (
+    let v = V[:, j]; let k = find(abs(v) == max(abs(v)));
+    if v[k[1]] < 0 then (V[:, j] = -v) end
+  ) end;
   let f = V' * Zm;
   let Zr = nc_rows(st, Z);
   let Lam = zeros(m, r); let R = ones(m, 1);
@@ -515,29 +522,15 @@ let nc_bad = fn p -> (
   else "" end
 )
 
-% fit(d, opts): estimate the factor model by EM from a principal-components
-% start (or opts.params). opts: r (1), agg ("mm"), maxit (500), tol (1e-5,
-% the relative change of the log-likelihood), standardize (true). To run
-% EM in pieces — a page showing progress — pass the previous piece's
-% params, P0 and its last log-likelihood as last (and the iterations
-% already run as offset, for the messages): the pieces then stop, and
-% end, exactly where one long run would. The result carries params
-% {A, Q, Lam, R}, the log-likelihood path loglik, iterations, converged,
-% status ("converged", "maxit" or "failed"), message, change (the last
-% relative change), warnings, and state {f, fsd, yhat, ysd, loglik, value,
-% valuesd}. A failed EM keeps the last parameters that were good.
-% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); [f.loglik[f.iterations] >= f.loglik[1], f.status == "converged"] %= [true, true]
-let nowcast_fit = fn d, opts = {} -> (
-  let sp = nowcast_model(d, opts);
-  let maxit = nc_opt(opts, "maxit", 500);
-  let tol = nc_opt(opts, "tol", 1e-5);
-  let T = size(sp.Z)[2];
-  let Zr = nc_rows(sp.st, sp.Z);
-  let hist = zeros(maxit, 1);
-  let p = sp.params; let it = 0; let conv = false; let failed = "";
+% internal: EM from parameters p on the rows Zr — the loop of fit, also
+% run by bootstrap on simulated data. Returns the last good parameters p,
+% the log-likelihood path hist, iterations it, conv, failed ("" or why)
+% and the last relative change.
+let nc_em = fn sp, Zr, p, maxit, tol, last, off -> (
+  let T = size(Zr)[2];
+  let hist = zeros(max(maxit, 1), 1);
+  let it = 0; let conv = false; let failed = "";
   let change = 0 / 0;
-  let last = nc_opt(opts, "last", 0 / 0);
-  let off = nc_opt(opts, "offset", 0);         % iterations run before this piece (messages count from the start)
   while (it < maxit) && !conv && (failed == "") do (
     let s = ksmooth(Zr, nc_ssm(sp, p, sp.st), {cov = false, stats = true});
     if !isfinite(s.loglik) then (
@@ -560,6 +553,32 @@ let nowcast_fit = fn d, opts = {} -> (
       ) end
     ) end
   ) end;
+  {p = p, hist = hist[1 : it], it = it, conv = conv, failed = failed, change = change}
+)
+
+% fit(d, opts): estimate the factor model by EM from a principal-components
+% start (or opts.params). opts: r (1), agg ("mm"), maxit (500), tol (1e-5,
+% the relative change of the log-likelihood), standardize (true). To run
+% EM in pieces — a page showing progress — pass the previous piece's
+% params, P0 and its last log-likelihood as last (and the iterations
+% already run as offset, for the messages): the pieces then stop, and
+% end, exactly where one long run would. The result carries params
+% {A, Q, Lam, R}, the log-likelihood path loglik, iterations, converged,
+% status ("converged", "maxit" or "failed"), message, change (the last
+% relative change), warnings, and state {f, fsd, yhat, ysd, loglik, value,
+% valuesd}. A failed EM keeps the last parameters that were good.
+% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); [f.loglik[f.iterations] >= f.loglik[1], f.status == "converged"] %= [true, true]
+let nowcast_fit = fn d, opts = {} -> (
+  let sp = nowcast_model(d, opts);
+  let maxit = nc_opt(opts, "maxit", 500);
+  let tol = nc_opt(opts, "tol", 1e-5);
+  let T = size(sp.Z)[2];
+  let Zr = nc_rows(sp.st, sp.Z);
+  let last = nc_opt(opts, "last", 0 / 0);
+  let off = nc_opt(opts, "offset", 0);         % iterations run before this piece (messages count from the start)
+  let em = nc_em(sp, Zr, sp.params, maxit, tol, last, off);
+  let p = em.p; let it = em.it; let conv = em.conv; let failed = em.failed; let change = em.change;
+  let hist = em.hist;
   let status = if failed != "" then "failed" elseif conv then "converged" else "maxit" end;
   let message = if status == "converged" then fmt("converged after {} iterations (relative change {:.2g}, tolerance {:.2g})", off + it, abs(change), tol)
                 elseif status == "maxit" then fmt("stopped at the limit of {} iterations before reaching the tolerance (last relative change {:.2g}, tolerance {:.2g})", off + maxit, abs(change), tol)
@@ -571,7 +590,7 @@ let nowcast_fit = fn d, opts = {} -> (
   let flat = find(p.R <= sp.Rmin * 1.0001);
   if numel(flat) > 0 then (warn = [warn; "the common factor fits " + strjoin(sp.names[flat], ", ") + " exactly (variance at the floor): a series may duplicate another or be the factor itself"]) end;
   let sp = setfield(sp, "params", p);
-  let sp = setfield(sp, "loglik", hist[1 : it]);
+  let sp = setfield(sp, "loglik", hist);
   let sp = setfield(sp, "iterations", it);
   let sp = setfield(sp, "converged", conv);
   let sp = setfield(sp, "status", status);
@@ -580,6 +599,93 @@ let nowcast_fit = fn d, opts = {} -> (
   let sp = setfield(sp, "tol", tol);
   let sp = setfield(sp, "warnings", warn[2 : numel(warn)]);
   setfield(sp, "state", nc_smooth(sp, p))
+)
+
+% internal: data simulated from the model with parameters p, on the rows
+% of sp and with the real data's missing pattern (standardized units)
+let nc_sim = fn sp, p -> (
+  let st = sp.st; let T = st.T; let r = size(p.A)[1];
+  let Zr = nc_rows(st, sp.Z);
+  let F = zeros(r, T + 1);
+  F[:, 1] = chol(sp.P0) * randn(r, 1);
+  let CQ = chol(p.Q);
+  let E = CQ * randn(r, T);
+  for t = 1 : T do F[:, t + 1] = p.A * F[:, t] + E[:, t] end;
+  let L = size(st.W)[2];
+  for k = 1 : numel(st.rser) do (
+    let i = st.rser[k];
+    let ok = find(!isnan(Zr[k, :]));
+    if numel(ok) > 0 then (
+      let v = sqrt(p.R[i]) * randn(1, numel(ok));
+      for l = 1 : L do (if st.W[k, l] != 0 then (v = v + st.W[k, l] * (p.Lam[i, :] * F[:, ok + 2 - l])) end) end;
+      Zr[k, ok] = v
+    ) end
+  ) end;
+  Zr
+)
+
+% bootstrap(f, opts): parameter uncertainty by the parametric bootstrap
+% (Pfeffermann and Tiller, 2005) — B times: simulate data from the fitted
+% model with the real data's missing pattern, re-estimate by EM from the
+% fit's parameters, keep the estimate. The fit comes back carrying the
+% draws (f.boot); nowcast and path then add the variance of the nowcast
+% across them to the smoother's own at the estimate (Hamilton, 1986):
+% sd^2 = sdfilter^2 + sdparam^2, sdfilter the old sd (parameters known),
+% sdparam the draws' spread — so the band never narrows. opts: B
+% (100 draws), seed (draw b uses rng(seed + b): results do not depend on
+% how the draws are split up — calls add to f.boot), steps (10 EM steps
+% per draw), or tol and maxit (200) to run each draw to a tolerance.
+% Draws whose EM failed are dropped and counted (f.boot.failed). Each
+% draw's EM starts at the fit's parameters, and a few steps are enough:
+% the directions they leave unconverged are the likelihood's flat ones,
+% which barely move a nowcast (on the weekly example the parameters' sd is
+% 0.0195 after 3, 5, 10 or 20 steps, and 0.0199 run to a tolerance of 1e-8,
+% at a hundred times the work). Fixed steps also make the result the same
+% on every machine to rounding: a tolerance can stop a draw one step
+% earlier or later on another BLAS.
+% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.bootstrap(nowcast.fit(nowcast.data(Y)), {B = 5}); let n = nowcast.nowcast(f, "y1"); [f.boot.B == 5, n.sd >= n.sdfilter] %= [true, true]
+let nowcast_bootstrap = fn f, opts = {} -> (
+  let B = nc_opt(opts, "B", 100);
+  let seed = nc_opt(opts, "seed", 1);
+  % a fixed number of EM steps per draw: the result then moves smoothly
+  % with rounding (a tolerance makes a draw stop one step earlier or later
+  % on another BLAS); with tol, each draw runs to it instead (up to maxit)
+  let tol = nc_opt(opts, "tol", -1);
+  let maxit = if tol < 0 then nc_opt(opts, "steps", 10) else nc_opt(opts, "maxit", 200) end;
+  let m = size(f.params.Lam)[1]; let r = size(f.params.A)[1];
+  let old = nc_opt(f, "boot", {B = 0, failed = 0, first = seed, A = zeros(r, 0), Q = zeros(r, 0), Lam = zeros(m, 0), R = zeros(m, 0)});
+  let As = old.A; let Qs = old.Q; let Ls = old.Lam; let Rs = old.R; let nf = old.failed;
+  let start = old.B + old.failed;
+  for b = 1 : B do (
+    rng(old.first + start + b);
+    let Zs = nc_sim(f, f.params);
+    let em = nc_em(f, Zs, f.params, maxit, tol, 0 / 0, 0);
+    if em.failed == "" then (As = [As, em.p.A]; Qs = [Qs, em.p.Q]; Ls = [Ls, em.p.Lam]; Rs = [Rs, em.p.R])
+    else (nf = nf + 1) end
+  ) end;
+  setfield(f, "boot", {B = size(Rs)[2], failed = nf, first = old.first, A = As, Q = Qs, Lam = Ls, R = Rs})
+)
+
+% internal: draw b of a bootstrapped fit's parameters
+let nc_draw = fn f, b -> (
+  let r = size(f.params.A)[1]; let k = (b - 1) * r + 1 : b * r;
+  {A = f.boot.A[:, k], Q = f.boot.Q[:, k], Lam = f.boot.Lam[:, k], R = f.boot.R[:, b]}
+)
+
+% internal: the spread across the bootstrap's draws of the model's fitted
+% values at cells (rows, cols): smooth Zr with every draw's parameters
+let nc_bootvar = fn f, st, Zr, rows, cols -> (
+  let n = numel(rows); let B = f.boot.B;
+  let s1 = zeros(n, 1); let s2 = zeros(n, 1);
+  for b = 1 : B do (
+    let s = ksmooth(Zr, nc_ssm(f, nc_draw(f, b), st), {cov = false, fit = true});
+    for q = 1 : n do (
+      let y = s.yhat[rows[q], cols[q]];
+      s1[q] = s1[q] + y; s2[q] = s2[q] + y * y
+    ) end
+  ) end;
+  let mean1 = s1 / B;
+  {spread = max(s2 / B - mean1 .* mean1, 0) * B / max(B - 1, 1)}
 )
 
 % report(f): print how the estimation ended — converged, stopped at the
@@ -688,7 +794,11 @@ let nc_endof = fn f, i, t -> (
 % its month or quarter: the estimate is the period's, at its last base
 % period (the panel is extended when that lies beyond it). sd is the
 % uncertainty of the common component, the signal without the series' own
-% noise; actual is the data's value there (NaN if not out).
+% noise; actual is the data's value there (NaN if not out). After
+% bootstrap, sd also counts the parameters' uncertainty (sdfilter, sdparam
+% the parts; B the draws). sdnoise is the series' own noise, and sdpred =
+% sqrt(sd^2 + sdnoise^2) the uncertainty of the figure that will be
+% published — the band to put around a nowcast of it.
 % e.g. let d = nowcast.data([1, 2, 3; 0/0, 0/0, 0/0], {names = ["ip"; "gdp"]}); let f = nowcast.model(d, {standardize = false, params = {A = 1, Q = 1, Lam = [1; 2], R = [1e-6; 1]}}); format(4); nowcast.nowcast(f, "gdp").value %= 6.000
 let nowcast_nowcast = fn f, name, t = 0 -> (
   let i = nc_index(f, name);
@@ -697,7 +807,17 @@ let nowcast_nowcast = fn f, name, t = 0 -> (
   let e = nc_endof(f, i, t);
   let g = if e > T then nowcast_update(f, nowcast_extend(f.Y, e - T)) else f end;
   if g.st.rowat[i, e] == 0 then error("nowcast.nowcast: series {} has no estimate in period {} (its period starts before the panel)", name, e) end;
-  {value = g.state.value[i, e], sd = g.state.valuesd[i, e], t = e, actual = g.Y[i, e]}
+  let sdf = g.state.valuesd[i, e];
+  let sdn = g.sd[i] * sqrt(g.params.R[i]);
+  if any(fields(g) == "boot") then (
+    let k = g.st.rowat[i, e];
+    let bv = nc_bootvar(g, g.st, nc_rows(g.st, g.Z), [k], [e]);
+    let sdp = g.sd[i] * sqrt(bv.spread[1]);
+    let sdt = sqrt(sdf ^ 2 + sdp ^ 2);
+    {value = g.state.value[i, e], sd = sdt, sdfilter = sdf, sdparam = sdp, sdnoise = sdn, sdpred = sqrt(sdt ^ 2 + sdn ^ 2),
+     t = e, actual = g.Y[i, e], B = g.boot.B}
+  ) else {value = g.state.value[i, e], sd = sdf, sdfilter = sdf, sdparam = 0, sdnoise = sdn, sdpred = sqrt(sdf ^ 2 + sdn ^ 2),
+          t = e, actual = g.Y[i, e], B = 0} end
 )
 
 % path(f, name, freq, agg): series name as the model sees it at frequency
@@ -709,6 +829,9 @@ let nowcast_nowcast = fn f, name, t = 0 -> (
 % "mm" for growth of the period's average level, at the base a growth per
 % base period). The path runs through the period holding the panel's last
 % base period. actual is the published value when freq is the series' own.
+% After bootstrap, sd counts the parameters' uncertainty too (sdfilter,
+% sdparam the parts). At the series' own frequency, sdpred adds its own
+% noise (sdnoise): the band for its published figures.
 % e.g. let d = nowcast.data([1, 2, 3, 4, 5, 6; 0/0, 0/0, 3, 0/0, 0/0, 0/0], {freqs = ["monthly"; "quarterly"], names = ["ip"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.9, Q = 1, Lam = [1; 1], R = [0.01; 0.01]}}); let p = nowcast.path(f, "gdp", "quarterly"); [numel(p.value), p.t'] %= [2, 3, 6]
 let nowcast_path = fn f, name, freq = "", agg = "" -> (
   let i = nc_index(f, name);
@@ -747,7 +870,17 @@ let nowcast_path = fn f, name, freq = "", agg = "" -> (
     if F == f.freqs[i] then (actual[q] = g.Y[i, e]) end;
     if g.cal.hasd then (dates[q] = nc_date(g.cal, e) - date(1970, 1, 1)) end
   ) end;
-  let out = {t = ends', value = value, sd = sd, actual = actual, freq = F, agg = a};
+  let sdfilter = sd; let sdparam = zeros(n, 1);
+  if any(fields(g) == "boot") then (
+    let rows = (nr + sx.rowat[1, ends])'; 
+    let bv = nc_bootvar(g, stx, Zr, rows, ends');
+    sdparam = g.sd[i] * sqrt(bv.spread);
+    sd = sqrt(sdfilter .^ 2 + sdparam .^ 2)
+  ) end;
+  % the series' own noise belongs to its published figures, at its own frequency only
+  let sdn = if F == f.freqs[i] then g.sd[i] * sqrt(g.params.R[i]) else 0 end;
+  let out = {t = ends', value = value, sd = sd, sdfilter = sdfilter, sdparam = sdparam, sdnoise = sdn,
+             sdpred = sqrt(sd .^ 2 + sdn ^ 2), actual = actual, freq = F, agg = a};
   if g.cal.hasd then setfield(out, "dates", date(1970, 1, 1) + dates) else out end
 )
 
@@ -811,6 +944,6 @@ let nowcast_news = fn f, Ynew, name, t = 0 -> (
 )
 
 let nowcast = {panel = nowcast_panel, data = nowcast_data, model = nowcast_model, fit = nowcast_fit,
-               report = nowcast_report, update = nowcast_update, extend = nowcast_extend,
+               report = nowcast_report, bootstrap = nowcast_bootstrap, update = nowcast_update, extend = nowcast_extend,
                transform = nowcast_transform, nowcast = nowcast_nowcast, path = nowcast_path,
                news = nowcast_news}
