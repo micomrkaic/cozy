@@ -60,6 +60,7 @@ ifeq ($(BACKEND),tier0)
   LINALG_LIBS =
 else ifeq ($(BACKEND),openblas)
   LINALG = linalg_openblas
+  CFLAGS += -DCOZY_OPENBLAS
   LINALG_LIBS = -lopenblas
 else ifeq ($(BACKEND),accelerate)
   LINALG = linalg_openblas

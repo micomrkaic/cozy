@@ -809,6 +809,28 @@ static void editor_auto_indent(editor_t* eb, const char* pre, const char* post )
   }
 }
 
+// COZY: blink-matching-paren, as readline does it: a typed closing brace
+// shows the cursor on its opening partner for up to half a second. A key
+// arriving meanwhile ends the blink and is kept, so typing and pasting
+// never wait.
+static void edit_blink_match(ic_env_t* env, editor_t* eb, char c) {
+  const char* braces = ic_env_get_match_braces(env);
+  if (env->no_bracematch || braces == NULL) return;
+  bool closing = false;
+  for (const char* b = braces; b[0] != 0 && b[1] != 0; b += 2) { if (b[1] == c) { closing = true; break; } }
+  if (!closing) return;
+  uint8_t key;
+  if (tty_readc_noblock(env->tty, &key, 0)) { tty_cpush_char(env->tty, key); return; }   // typing on: no blink
+  ssize_t match = find_matching_brace(sbuf_string(eb->input), eb->pos, braces, NULL);
+  if (match <= 0) return;
+  ssize_t save = eb->pos;
+  eb->pos = match - 1;                       // on the opening brace itself
+  edit_refresh(env, eb);
+  if (tty_readc_noblock(env->tty, &key, 500)) tty_cpush_char(env->tty, key);
+  eb->pos = save;
+  edit_refresh(env, eb);
+}
+
 static void edit_insert_char(ic_env_t* env, editor_t* eb, char c) {
   editor_start_modify(eb);
   ssize_t nextpos = sbuf_insert_char_at( eb->input, c, eb->pos );
@@ -1090,6 +1112,7 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
         unicode_t uchr;
         if (code_is_ascii_char(c,&chr)) {
           edit_insert_char(env,&eb,chr);
+          edit_blink_match(env,&eb,chr);     // COZY
         }
         else if (code_is_unicode(c, &uchr)) {
           edit_insert_unicode(env,&eb, uchr);

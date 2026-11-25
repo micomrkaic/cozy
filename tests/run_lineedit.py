@@ -3,7 +3,7 @@
 key, as a person would, and checks what comes back. Covers the line editor
 (isocline, 0.1.50) and the REPL around it:
 
-  editing keys, history (and across sessions), Ctrl-R search, tab completion
+  editing keys, blink-matching-paren, history (and across sessions), Ctrl-R search, tab completion
   of names and of file paths inside quotes, multi-line entries, Ctrl-C at the
   prompt and during evaluation, input() at the terminal, the demo's bare-Enter
   stepping, Ctrl-D.
@@ -141,6 +141,14 @@ try:
     run(s, "12" + LEFT + "+\r", "\n3", "left arrow, insert in the middle")
     run(s, "999 + 1" + CTRL_A + CTRL_K + "5\r", "\n5", "Ctrl-K kills to the end")
     run(s, "7 * 8 9" + CTRL_W + "\r", "\n56", "Ctrl-W deletes a word")
+    # a typed closing paren blinks the cursor to its partner, as readline's
+    # blink-matching-paren: "cozy> (" puts the "(" in column 6
+    s.send("(1 + 2"); s.settle(0.2, 1)
+    m = len(s.buf); os.write(s.fd, b")"); s.settle(0.7, 2)
+    blink = s.buf[m:]
+    check("a closing paren blinks the cursor to the opening one",
+          "\x1b[6C" in blink and blink.rfind("\x1b[6C") < blink.rfind("\x1b[13C"), repr(blink))
+    run(s, "\r", "\n3", "and the line still runs")
     run(s, "let hv = 40 + 2 + 0\r", "cozy> ", "a definition")
     out = run(s, "hv\r", "\n42", "the definition took")
     m = s.mark(); s.send(UP + "\r"); s.read_until("\n42", 3, m); s.settle(0.15, 1)
@@ -219,5 +227,5 @@ finally:
 if fails:
     print(f"lineedit: {len(fails)} check(s) failed")
     sys.exit(1)
-print("lineedit: editing keys, history (and across sessions), Ctrl-R, completion of names and paths, "
+print("lineedit: editing keys, blink-matching-paren, history (and across sessions), Ctrl-R, completion of names and paths, "
       "multi-line entries, Ctrl-C at the prompt and while running, input(), demo stepping, Ctrl-D — all at a real pty")
