@@ -479,7 +479,8 @@ int repl_run(void)
             if ((arg = match_command(q, "manual"))) {
                 /* manual [packages|changelog|lessons|design|readme] — render
                  * the document as ANSI-formatted text and page it. Files are
-                 * found in the cwd or /usr/local/share/cozy; set
+                 * found in the cwd, /usr/local/share/cozy, or beside the
+                 * binary (../share/cozy after make install); set
                  * COZY_MANUAL to override the main manual's path. */
                 static const struct { const char *name, *file; } docs[] = {
                     { "",          "MANUAL.md" },     { "packages", "PACKAGES.md" },
@@ -507,7 +508,7 @@ int repl_run(void)
                 if (!mf) mf = fopen_asset(file);          /* beside the binary, wherever we run */
                 if (!mf) {
                     fprintf(stderr, "manual: %s not found (run from the repo root, "
-                            "or set COZY_MANUAL for the main manual)\n", file);
+                            "make install, or set COZY_MANUAL for the main manual)\n", file);
                     goto manual_done;
                 }
                 bool tty = out_is_tty();

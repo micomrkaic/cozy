@@ -1,5 +1,16 @@
 # Cozy changelog
 
+## 0.1.54 — make install brings the books
+
+### Fixed
+- **`manual` works after `make install`.** The install copied packages,
+  data and docs but not the books, so an installed `cozy` started outside
+  the source tree answered `manual: MANUAL.md not found`, and the
+  installed workbench's Docs pane came up empty. `make install` now puts
+  MANUAL, BOOK, PACKAGES, CHANGELOG, LESSONS, DESIGN_NOTES and README in
+  `share/cozy`, where both already looked. CI's install smoke runs
+  `manual book` from /tmp to keep it that way.
+
 ## 0.1.53 — macOS by CI only
 
 The project no longer has Apple hardware. The macos CI job (the full

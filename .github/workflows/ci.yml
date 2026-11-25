@@ -42,6 +42,7 @@ jobs:
         run: |
           make BACKEND=openblas OPTIM=nlopt install PREFIX="$HOME/.local"
           cd /tmp && printf 'load("ts")\nlength(ls("packages")) > 10\n' | "$HOME/.local/bin/cozy" | grep -q true
+          printf 'manual book\n' | "$HOME/.local/bin/cozy" | grep -q -i 'problem'
 
   macos:
     runs-on: macos-latest

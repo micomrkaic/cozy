@@ -238,14 +238,18 @@ install:
 	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) $(BIN)
 	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) install-files
 
+# the books `manual` pages and the workbench's Docs pane serves; both look
+# in ../share/cozy beside the binary, so an installed cozy needs them there
+BOOKS = MANUAL.md BOOK.md PACKAGES.md CHANGELOG.md LESSONS.md DESIGN_NOTES.md README.md
 install-files: $(BIN)
 	install -d $(PREFIX)/bin $(PREFIX)/share/cozy $(PREFIX)/share/man/man1
 	install -m 755 $(BIN) $(PREFIX)/bin/cozy
 	install -m 755 tools/cozy-workbench $(PREFIX)/bin/cozy-workbench
 	rm -rf $(PREFIX)/share/cozy/packages $(PREFIX)/share/cozy/data $(PREFIX)/share/cozy/docs
 	cp -r packages data docs $(PREFIX)/share/cozy/
+	install -m 644 $(BOOKS) $(PREFIX)/share/cozy/
 	install -m 644 doc/cozy.1 $(PREFIX)/share/man/man1/cozy.1
-	@echo "installed: $(PREFIX)/bin/cozy, cozy-workbench, share/cozy/{packages,data,docs}, man1/cozy.1"
+	@echo "installed: $(PREFIX)/bin/cozy, cozy-workbench, share/cozy/{packages,data,docs,*.md}, man1/cozy.1"
 	@echo "note: ensure $(PREFIX)/bin is on PATH and $(PREFIX)/share/man on MANPATH (usually automatic)"
 
 uninstall:
