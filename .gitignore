@@ -7,3 +7,4 @@ vmtest
 vmtest-asan
 *.o
 *.d
+__pycache__/
