@@ -1,7 +1,11 @@
 # Cozy CI — the release rite, mechanized (quality-audit item 5).
 # Every push runs the full golden suite on Linux (tier0, openblas+nlopt,
-# ASan) and macOS (accelerate+nlopt) — the Mac acceptance layer that used
-# to wait for a trip to the machine now runs on every commit.
+# ASan) and macOS (accelerate+nlopt). There is no Apple hardware in the
+# project any more: the macos job IS the macOS acceptance run. The Linux
+# job also installs Playwright, so the browser tests (the playground on
+# both engines, the browser/terminal parity screen, the nowcast page) are
+# required there — COZY_REQUIRE_BROWSER turns their polite skip into a
+# failure.
 name: ci
 on:
   push:
@@ -12,10 +16,17 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    env:
+      COZY_REQUIRE_BROWSER: 1
     steps:
       - uses: actions/checkout@v4
       - name: deps
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libnlopt-dev libreadline-dev
+      - name: playwright + chromium (outside the tree, for the browser tests)
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save --no-package-lock playwright@1.63.0
+          "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+          echo "NODE_PATH=$RUNNER_TEMP/pw/node_modules" >> "$GITHUB_ENV"
       - name: GCC 14 builds it too (warnings are errors)
         run: |
           gcc-14 --version | head -1

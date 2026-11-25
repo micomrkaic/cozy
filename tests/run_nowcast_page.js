@@ -9,9 +9,10 @@
 //   - the script and data the page offers for download, run by the native
 //     interpreter, give the page's nowcast to 1e-9.
 // Run from the repository root: node tests/run_nowcast_page.js
+const SKIP = process.env.COZY_REQUIRE_BROWSER ? ", and COZY_REQUIRE_BROWSER is set: FAIL" : ", skipping";
 let chromium;
 try { chromium = require("playwright").chromium; }
-catch (e) { console.log("nowcast page: playwright not installed, skipping"); process.exit(0); }
+catch (e) { console.log("nowcast page: playwright not installed" + SKIP); process.exit(process.env.COZY_REQUIRE_BROWSER ? 1 : 0); }
 const fs = require("fs"), path = require("path"), http = require("http"), os = require("os");
 const { execFileSync } = require("child_process");
 
@@ -93,7 +94,7 @@ async function exercise(browser, url, label) {
   const port = server.address().port;
   let browser;
   try { browser = await chromium.launch(); }
-  catch (e) { console.log("nowcast page: no browser for playwright, skipping"); server.close(); process.exit(0); }
+  catch (e) { console.log("nowcast page: no browser for playwright" + SKIP); server.close(); process.exit(process.env.COZY_REQUIRE_BROWSER ? 1 : 0); }
   try {
     const a = await exercise(browser, `http://127.0.0.1:${port}/nowcast.html`, "served page");
     const b = await exercise(browser, "file://" + path.join(ROOT, "docs/nowcast-standalone.html"), "standalone file");
