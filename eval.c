@@ -3188,11 +3188,24 @@ static Value bi_names(Interp *I, Value *args, uint32_t n)
  * asked in the page's terminal (wasm_api.c). */
 bool cozy_stdin_ok = true;   /* the workbench server clears this: a one-shot
     HTTP eval must never block on the SERVER's stdin (owner's demo() hang) */
-/* The interactive REPL sets this to its line editor (lineedit.c), so input()
- * at a terminal is edited like the prompt; elsewhere (vmtest, pipes, the
- * embedding library) it stays null and input() reads a plain line. Returns
- * a malloc'd answer. */
+/* The interactive REPL — at a terminal, or in the browser's — sets these to
+ * its line editor (lineedit.c), so input() and pause() are edited like the
+ * prompt; elsewhere (vmtest, pipes, the embedding library, the API pages)
+ * they stay null. input's hook returns a malloc'd answer, or null when the
+ * question was abandoned with Ctrl-C; pause's returns false then. Either way
+ * Ctrl-C interrupts the computation, as SIGINT does natively. */
 char *(*cozy_input_hook)(const char *prompt) = nullptr;
+bool  (*cozy_pause_hook)(const char *msg) = nullptr;
+
+/* who's listing as text, for the browser REPL's workspace pane */
+static Value bi_who(Interp *I, Value *args, uint32_t n);
+void cozy_who_text(Interp *I, FILE *out)
+{
+    FILE *prev = vout();
+    value_set_out(out);
+    bi_who(I, nullptr, 0);
+    value_set_out(prev == stdout ? nullptr : prev);
+}
 
 static Value bi_input(Interp *I, Value *args, uint32_t n)
 {
@@ -3203,6 +3216,16 @@ static Value bi_input(Interp *I, Value *args, uint32_t n)
     }
     extern bool cozy_stdin_ok;
     if (!cozy_stdin_ok) return val_string("", 0);   /* workbench: never block */
+    if (cozy_input_hook) {                          /* the REPL's editor */
+        char pbuf[512];
+        snprintf(pbuf, sizeof pbuf, "%.*s", (int)plen, prompt);
+        fflush(vout());
+        char *ans = cozy_input_hook(pbuf);
+        if (!ans) runtime_error(I, "interrupted");
+        Value v = val_string(ans, (uint32_t)strlen(ans));
+        free(ans);
+        return v;
+    }
 #ifdef __EMSCRIPTEN__
     /* asked in the page's terminal (wasm_api.c nu_wasm_input) */
     extern char *nu_wasm_input(const char *, uint32_t);
@@ -3211,15 +3234,6 @@ static Value bi_input(Interp *I, Value *args, uint32_t n)
     free(ans);
     return v;
 #else
-    if (cozy_input_hook) {
-        char pbuf[512];
-        snprintf(pbuf, sizeof pbuf, "%.*s", (int)plen, prompt);
-        fflush(vout());
-        char *ans = cozy_input_hook(pbuf);
-        Value v = val_string(ans ? ans : "", ans ? (uint32_t)strlen(ans) : 0);
-        free(ans);
-        return v;
-    }
     if (plen) { fwrite(prompt, 1, plen, stdout); fflush(stdout); }
     char *line = NULL; size_t cap = 0;
     ssize_t got = getline(&line, &cap, stdin);
@@ -3241,6 +3255,13 @@ static Value bi_pause(Interp *I, Value *args, uint32_t n)
     }
     extern bool cozy_stdin_ok;
     if (!cozy_stdin_ok) return val_null();          /* workbench: never block */
+    if (cozy_pause_hook) {                          /* the REPL's editor: Enter continues */
+        char mbuf[512];
+        snprintf(mbuf, sizeof mbuf, "%.*s", (int)mlen, msg);
+        fflush(vout());
+        if (!cozy_pause_hook(mbuf)) runtime_error(I, "interrupted");
+        return val_null();
+    }
 #ifdef __EMSCRIPTEN__
     /* Real waiting in the browser: wasm_api streams pending output to the
      * page (so the terminal paints), then Asyncify-yields until the page's
@@ -5366,8 +5387,16 @@ static void lg_clear_shelf(Interp *I, int gi)
  * toggles, Enter applies (load newly checked, lg_clear_shelf newly
  * unchecked), q/ESC cancels. Raw termios + ANSI reverse video; no
  * ncurses. Headless (stdin or stdout not a tty): drawing skipped, keys
- * ride stdin (the pause precedent), EOF cancels. wasm declines. */
-#ifndef __EMSCRIPTEN__
+ * ride stdin (the pause precedent), EOF cancels. In the browser (0.1.51) it
+ * draws in the page's terminal and reads its keys (wasm_api.c); an API page
+ * without a terminal gets the headless path with no keys: cancelled. */
+#ifdef __EMSCRIPTEN__
+extern int cozy_term_active(void);
+extern int cozy_term_readbyte(long timeout_ms);
+static int pk_getc(void) { return cozy_term_active() ? cozy_term_readbyte(-1) : EOF; }
+#else
+static int pk_getc(void) { return getchar(); }
+#endif
 typedef struct { char name[256]; bool was; bool now; } PkRow;
 
 static int pk_cmp(const void *a, const void *b)
@@ -5410,6 +5439,9 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
         rows[i].was = rows[i].now = gi >= 0 && lg_live(I, &g_lg[gi]) > 0;
     }
 
+#ifdef __EMSCRIPTEN__
+    bool tty = cozy_term_active() != 0;              /* a terminal emulator is raw already */
+#else
     bool tty = isatty(0) && isatty(1);
     struct termios oldt;
     if (tty) {
@@ -5418,6 +5450,7 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
         raw.c_lflag &= (tcflag_t)~(ICANON | ECHO);
         tcsetattr(0, TCSANOW, &raw);
     }
+#endif
     int cur = 0; bool apply = false, done = false;
     while (!done) {
         if (tty) {
@@ -5428,12 +5461,12 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
                        i == cur ? "\033[0m" : "");
             fflush(stdout);
         }
-        int c = getchar();
-        if (c == EOF || c == 'q' || c == 27) {
+        int c = pk_getc();
+        if (c == EOF || c == 'q' || c == 27 || c == 3) {
             if (c == 27 && tty) {                     /* arrow keys: ESC [ A/B */
-                int c2 = getchar();
+                int c2 = pk_getc();
                 if (c2 == '[') {
-                    int c3 = getchar();
+                    int c3 = pk_getc();
                     if (c3 == 'A') { if (cur > 0) cur--; continue; }
                     if (c3 == 'B') { if (cur < nrows - 1) cur++; continue; }
                 }
@@ -5445,7 +5478,11 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
         else if (c == ' ') rows[cur].now = !rows[cur].now;
         else if (c == '\n' || c == '\r') { apply = true; done = true; }
     }
+#ifdef __EMSCRIPTEN__
+    if (tty) { printf("\033[2J\033[H"); fflush(stdout); }
+#else
     if (tty) { tcsetattr(0, TCSANOW, &oldt); printf("\033[2J\033[H"); fflush(stdout); }
+#endif
 
     int loaded = 0, cleared = 0;
     if (apply) {
@@ -5468,14 +5505,6 @@ static Value bi_packeur(Interp *I, Value *args, uint32_t n)
         printf(apply || loaded || cleared ? "packeur: no changes\n" : "packeur: cancelled\n");
     return val_null();
 }
-#else
-static Value bi_packeur(Interp *I, Value *args, uint32_t n)
-{
-    (void)args; (void)n;
-    runtime_error(I, "packeur: not available in the browser — use load(\"name\") "
-                     "or the Packages tab");
-}
-#endif
 
 static Value bi_clear(Interp *I, Value *args, uint32_t n)
 {

@@ -1,5 +1,45 @@
 # Cozy changelog
 
+## 0.1.51 — the browser runs the terminal's REPL (terminal stage 2)
+
+The playground is now the native REPL itself — `repl.c` and the isocline
+line editor, compiled to WebAssembly and run in a Web Worker — drawn by
+xterm.js (design entry 34). The page's own JavaScript REPL is gone, and
+with it the differences: what the terminal does, the browser does.
+
+### Changed
+- **docs/index.html is a terminal.** Line editing, Tab completion of
+  names and paths, history with up/down and Ctrl-R (kept across visits),
+  multi-line entries with the `...>` prompt, Ctrl-C at the prompt and to
+  stop a running loop, Ctrl-D to end the session (a key starts another),
+  `manual` with a pager, `pretty`, `format`, `more` — the same code as
+  natively. `input()`, `pause()`, the demo and `packeur` read the same
+  keyboard as everything else; no modal dialogs, no special cases.
+- **The side panes never evaluate.** Plots, Workspace and the Packages
+  ticks follow a notice the REPL sends before each prompt; ticking a
+  package, the Run button and the chips type at the prompt, visibly.
+- **On touch screens** a line field and Tab, arrow and Ctrl-C buttons type
+  into the same terminal.
+- **`input()` and `pause()` at a terminal use the line editor** (natively
+  too), and Ctrl-C there interrupts, as SIGINT did; a prompt containing
+  `[` or `\` is now shown as written (isocline read it as markup — the
+  demo's "[ Enter for the next problem ]" vanished).
+- The native workbench (`cozy --workbench`) serves the line-mode page,
+  kept as docs/workbench.html.
+
+### Added
+- WebAssembly: `cozy_repl()` and the terminal glue in wasm_api.c (keys
+  from the page with Asyncify, the page's size, a notice before each
+  prompt); the browser's Ctrl-C, polled by the VM at loop back-edges and
+  calls about every 40 ms; isocline's keyboard and size for the browser
+  (`__EMSCRIPTEN__`, marked COZY); a built-in pager where there is no
+  `less`. xterm.js 5.5.0 vendored in docs/vendor/xterm (MIT).
+- **tests/run_playground_page.js** types at the browser terminal key by
+  key and reads xterm's screen: editing, completion, history (and across a
+  reload), Ctrl-C at the prompt and in a loop, input, pause, the demo with
+  its pauses, the manual's pager, packeur, every pane, Ctrl-D — the
+  browser's counterpart of tests/run_lineedit.py.
+
 ## 0.1.50 — one line editor everywhere (terminal stage 1)
 
 The first of three stages that make the browser REPL behave exactly like

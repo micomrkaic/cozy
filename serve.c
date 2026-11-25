@@ -78,11 +78,13 @@ static void respond(int fd, const char *status, const char *ctype, const char *b
 
 static void serve_file(int fd, const char *urlpath)
 {
-    /* map "/" -> docs/index.html; "/x" -> docs/x; "/plot_N.svg" -> ./plot_N.svg */
+    /* map "/" -> docs/workbench.html (the line-mode page this native engine
+     * answers; the public playground, docs/index.html, runs the REPL itself
+     * in WebAssembly since 0.1.51); "/x" -> docs/x; "/plot_N.svg" -> ./plot_N.svg */
     char path[512];
     if (strstr(urlpath, "..") || strlen(urlpath) > 200)
         { respond(fd, "400 Bad Request", "text/plain", "no\n", 3); return; }
-    if (!strcmp(urlpath, "/")) snprintf(path, sizeof path, "docs/index.html");
+    if (!strcmp(urlpath, "/")) snprintf(path, sizeof path, "docs/workbench.html");
     else if (!strncmp(urlpath, "/plot_", 6)) snprintf(path, sizeof path, "%.220s", urlpath + 1);
     else snprintf(path, sizeof path, "docs%.220s", urlpath);
     /* docs/ resolves like any asset: cwd (the dev tree), beside the

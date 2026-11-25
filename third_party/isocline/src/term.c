@@ -899,11 +899,20 @@ static void term_set_cursor_pos( term_t* term, ssize_t row, ssize_t col ) {
   term_writef( term, IC_CSI "%zd;%zdH", row, col );
 }
 
+#if defined(__EMSCRIPTEN__)
+extern int cozy_term_cols(void);   // COZY: the page's terminal size (wasm_api.c)
+extern int cozy_term_rows(void);
+#endif
 ic_private bool term_update_dim(term_t* term) {
   ssize_t cols = 0;
   ssize_t rows = 0;
   struct winsize ws;
+  #if defined(__EMSCRIPTEN__)
+  ws.ws_col = (unsigned short)cozy_term_cols(); ws.ws_row = (unsigned short)cozy_term_rows();   // COZY
+  if (1) {
+  #else
   if (ioctl(term->fd_out, TIOCGWINSZ, &ws) >= 0) {
+  #endif
     // ioctl succeeded
     cols = ws.ws_col;  // debuggers return 0 for the column
     rows = ws.ws_row;

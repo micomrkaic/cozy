@@ -84,6 +84,20 @@ compiled.
   precision weights `wy`, `wx` are the time-varying part), and the kernel is
   real-valued, so dual numbers do not flow through it (design entry 31).
 
+## The browser REPL
+
+- **Ctrl-C reaches loops and calls, not one long builtin.** The browser has
+  no signals: the VM looks for a pending Ctrl-C about every 40 ms at loop
+  back-edges and calls, so a running loop stops promptly, but a single long
+  builtin (`eig` of a large matrix, say) finishes first. Natively SIGINT
+  interrupts anywhere.
+- **Keys typed during a computation are not echoed until read.** A tty
+  echoes type-ahead as it arrives; the browser's terminal shows it when
+  the next prompt reads it. Nothing is lost either way.
+- **No shell.** `!cmd` says so; `ls`, `cd` and `pwd` are builtins and work.
+  `manual` and `more on` page with a small built-in pager (space, Enter, q)
+  instead of `less`.
+
 ## Language features
 
 - **Block expressions sequence statements.** `( s1; s2; … ; expr )` is a scoped

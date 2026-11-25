@@ -278,8 +278,17 @@ static CallFrame *enter_closure(VM *st, Chunk *ch, Value closure, CloObj *clo, c
  * each: not null -> when the closure returns, hand the result to each->take,
  * ask each->next for the next arguments, and call it again in this same run
  * (nrt.h); the value returned is then null. */
+/* the browser REPL's interrupt check (wasm_api.c); null elsewhere */
+int (*cozy_interrupt_poll)(void) = nullptr;
+#ifdef __EMSCRIPTEN__
+static uint32_t vm_tick;
+#endif
+
 static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t argc, VMEach *each, bool *ok)
 {
+#ifdef __EMSCRIPTEN__
+    if (cozy_interrupt_poll && !(++vm_tick & 0x3FFF) && cozy_interrupt_poll()) runtime_error(I, "interrupted");
+#endif
     if (vm_depth >= VM_MAX_DEPTH) runtime_error(I, "maximum call depth exceeded");
     {
         char here;
@@ -339,7 +348,17 @@ static Value vm_run(Interp *I, Chunk *ch, Value closure, Value *args, uint32_t a
 #define RD_U8()   (fr->ip = ip + 1, code[ip++])
 #define RD_U16()  (ip += 2, fr->ip = ip, (uint16_t)(code[ip - 2] | (code[ip - 1] << 8)))
 #define JUMP_BY(d) (fr->ip = (ip += (d)))
+#ifdef __EMSCRIPTEN__
+/* The browser has no SIGINT: the REPL in the page sets cozy_interrupt_poll,
+ * and loops and calls ask it, every 16384th time, whether Ctrl-C was
+ * pressed (it yields to the page about every 40 ms to find out). */
+#define VM_TICK() do { if (cozy_interrupt_poll && !(++vm_tick & 0x3FFF) && cozy_interrupt_poll()) \
+                         runtime_error(I, "interrupted"); } while (0)
+#define JUMP_BACK(d) do { fr->ip = (ip -= (d)); VM_TICK(); } while (0)
+#else
+#define VM_TICK() ((void)0)
 #define JUMP_BACK(d) (fr->ip = (ip -= (d)))
+#endif
 
     for (;;) {
         /* no end-of-chunk test: the compiler ends every chunk in OP_RETURN */

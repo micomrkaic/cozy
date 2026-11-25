@@ -222,3 +222,98 @@ const char *cozy_eval(const char *line)
     g_running = 0;
     return (g_buf ? g_buf + g_streamed : "");   /* page gets the unstreamed tail */
 }
+
+
+/* ==================================================================== */
+/* The browser terminal (0.1.51): the native REPL — repl.c, the isocline */
+/* editor, the same commands — run in a Web Worker on the page's xterm.js. */
+/* ==================================================================== */
+/* The page posts keys to the worker, which appends their bytes to
+ * globalThis.__cozyKeys; output leaves through the Emscripten FS stdout and
+ * stderr devices (the page's worker sets them up with FS.init) and is handed
+ * to the page by globalThis.__cozyFlush. Reading a key suspends (Asyncify)
+ * until one arrives — the pause() mechanism, now the only way in. */
+#include "repl.h"
+
+static int g_term;                 /* the REPL is attached to the page's terminal */
+
+EMSCRIPTEN_KEEPALIVE int cozy_term_active(void) { return g_term; }
+
+int cozy_term_cols(void)
+{
+    int c = EM_ASM_INT({ return globalThis.__cozyCols | 0; });
+    return c > 0 ? c : 80;
+}
+int cozy_term_rows(void)
+{
+    int r = EM_ASM_INT({ return globalThis.__cozyRows | 0; });
+    return r > 0 ? r : 24;
+}
+
+static void term_flush(void)
+{
+    fflush(stdout); fflush(stderr);
+    EM_ASM({ if (globalThis.__cozyFlush) globalThis.__cozyFlush(); });
+}
+
+/* a byte the page sent, waiting for one when there is none: timeout_ms < 0
+ * waits for good, 0 only looks, > 0 waits that long (escape sequences) */
+int cozy_term_readbyte(long timeout_ms)
+{
+    double start = emscripten_get_now();
+    term_flush();
+    EM_ASM({ globalThis.__cozyReading = 1; });
+    int b = -1;
+    for (;;) {
+        b = EM_ASM_INT({ var q = globalThis.__cozyKeys; return (q && q.length) ? q.shift() : -1; });
+        if (b >= 0 || timeout_ms == 0) break;
+        double waited = emscripten_get_now() - start;
+        if (timeout_ms > 0 && waited >= (double)timeout_ms) break;
+        emscripten_sleep(timeout_ms > 0 && timeout_ms < 10 ? (unsigned)timeout_ms : 10);
+    }
+    EM_ASM({ globalThis.__cozyReading = 0; });
+    return b;
+}
+
+/* Ctrl-C while something runs: the VM asks here (vm.c); about every 40 ms
+ * this yields to the worker's event loop, which may have set the flag */
+static int interrupt_poll(void)
+{
+    static double last;
+    double now = emscripten_get_now();
+    if (now - last < 40.0) return 0;
+    last = now;
+    term_flush();
+    emscripten_sleep(0);
+    return EM_ASM_INT({ var f = globalThis.__cozyInterrupt | 0; globalThis.__cozyInterrupt = 0; return f; });
+}
+
+/* before each new prompt: the workspace, for the page's side panes */
+static void prompt_notice(Interp *I)
+{
+    extern void cozy_who_text(Interp *, FILE *);
+    char *buf = NULL; size_t sz = 0;
+    FILE *m = open_memstream(&buf, &sz);
+    if (m) { cozy_who_text(I, m); fclose(m); }
+    term_flush();
+    EM_ASM({ if (globalThis.__cozyNotice) globalThis.__cozyNotice(UTF8ToString($0)); }, buf ? buf : "");
+    free(buf);
+}
+
+/* the REPL itself; returns when the session ends (Ctrl-D). Call with
+ * ccall(..., {async: true}): it suspends while it waits for keys. */
+EMSCRIPTEN_KEEPALIVE int cozy_repl(void)
+{
+    extern int (*cozy_interrupt_poll)(void);
+    extern void (*repl_prompt_hook)(Interp *);
+    setenv("TERM", "xterm-256color", 1);          /* what xterm.js emulates */
+    g_term = 1;
+    cozy_interrupt_poll = interrupt_poll;
+    repl_prompt_hook = prompt_notice;
+    int rc = repl_run();
+    term_flush();
+    cozy_interrupt_poll = NULL;
+    repl_prompt_hook = NULL;
+    g_term = 0;
+    return rc;
+}

@@ -182,6 +182,9 @@ try:
     check("Tab completes a file path inside quotes", "tests/data/" in s.since(m), repr(s.since(m)[-160:]))
     s.send(CTRL_C); s.settle(0.2, 1)
     # input() is edited like the prompt
+    m = s.mark(); s.send('let yn = input("[y/n] ")\r')
+    check("a prompt with brackets is shown as typed", s.read_until("[y/n] ", 3, m), repr(s.since(m)[-120:]))
+    s.send("y\r"); s.settle(0.2, 1)
     m = s.mark(); s.send('let who = input("name? ")\r'); s.read_until("name? ", 3, m)
     s.send("Adx\x7fa" + CTRL_A + "\x1b[C" + "\r"); s.settle(0.2, 1)     # typo, backspace, move about
     run(s, "who\r", '"Ada"', "input() at the terminal, with editing")

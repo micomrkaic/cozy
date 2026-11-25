@@ -1,11 +1,11 @@
-// Headless page-wiring test: drives docs/index.html in jsdom with a
+// Headless page-wiring test: drives docs/workbench.html in jsdom with a
 // functional module stub, verifying the editor->terminal->module pipeline
 // crosses the script scope boundaries. Skips politely without jsdom.
 let JSDOM;
 try { JSDOM = require("jsdom").JSDOM; }
 catch (e) { console.log("page: jsdom not installed, skipping"); process.exit(0); }
 const fs = require("fs");
-const html = fs.readFileSync("docs/index.html", "utf8");
+const html = fs.readFileSync("docs/workbench.html", "utf8");
 const stub = `<script>
 window.__fsWrites = []; window.__evals = [];
 window.Cozy = function () {
@@ -52,7 +52,7 @@ setTimeout(() => {
   // ---- phase 2: the real bundle through the real page ----
   try {
     const bundle = fs.readFileSync("docs/cozy.js", "utf8");
-    const html2 = fs.readFileSync("docs/index.html", "utf8")
+    const html2 = fs.readFileSync("docs/workbench.html", "utf8")
       .replace(/<script src=[^>]*><\/script>/, "<script>" + bundle.replace(/<\/script>/g, "<\\/script>") + "</script>");
     const dom2 = new JSDOM(html2, { runScripts: "dangerously", pretendToBeVisual: true, url: "https://example.org/" });
     const w2 = dom2.window, d2 = w2.document;
