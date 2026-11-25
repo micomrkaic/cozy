@@ -162,6 +162,21 @@
         <button id="clear" type="button" class="hidden">Clear</button>
       </div>
     </div>
+    <details class="adv" id="fredbox"><summary>Or get series from FRED (the St. Louis Fed's database)</summary>
+      <div class="card" style="margin-top:10px">
+        <div class="row">
+          <label class="f" style="flex:1 1 360px">FRED series ids, separated by spaces or commas
+            <input type="text" id="fredids" value="GDPC1 INDPRO PAYEMS RSAFS UNRATE HOUST ICSA CCSA T10Y2Y"></label>
+          <button id="fredget" type="button" class="primary" style="align-self:flex-end">Get from FRED</button>
+        </div>
+        <p class="hint" style="margin:8px 0 0">The default is a US starter set of public-domain series: real GDP, industrial
+          production, payrolls, retail sales, the unemployment rate, housing starts, initial and continuing jobless claims,
+          and the 10-year minus 2-year Treasury spread. Each gets its usual transformation, and the model settings that work
+          best on it (monthly, two factors, from 2010, without the pandemic months) are set for you. Check the terms of any
+          other series on its FRED page.</p>
+        <div id="fredmsg"></div>
+      </div>
+    </details>
     <div id="datamsg"></div>
     <div class="tablewrap hidden" id="serieswrap">
       <table class="series" id="series">
@@ -196,6 +211,8 @@
         <div class="grid-controls" style="margin-top:10px">
           <label class="f">Maximum EM iterations <input type="number" id="maxit" value="500" min="1" max="5000"></label>
           <label class="f">Tolerance (relative change in log-likelihood) <input type="text" id="tol" value="1e-5"></label>
+          <label class="f">Sample starts (a year or a date; empty: all the data) <input type="text" id="start" value="" placeholder="e.g. 2010"></label>
+          <label class="f" style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="skip2020"> Treat March–September 2020 as missing (the pandemic)</label>
           <label class="f">Parameter uncertainty (bootstrap draws)
             <select id="boot"><option value="0">none</option><option>20</option><option selected>50</option><option>100</option><option>200</option></select></label>
         </div>
@@ -370,7 +387,7 @@ function cozyName(raw, idx) {
 /* the bundle the worker loads, with its content hash: a browser or CDN
    cache can never pair this page with an older engine. Stamped by
    tools/gen_dsge_page.py whenever docs/cozy.js changes; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=02b14ee9cc4a";
+var COZY_BUNDLE = "cozy.js?v=666fe4f215ce";
 const Engine = (() => {
   const WORKER = `
     self.window = self;
@@ -596,7 +613,12 @@ function tableToSeries(rows, fileName) {
     const obs = new Map();
     for (const [k, v] of sums) { const c = counts.get(k); if (c > 1) averaged = true; obs.set(k, v / c); }
     if (averaged) notes.push("repeated dates averaged");
-    out.push({ raw: head[j] || ("column " + (j + 1)), freq, obs, notes, file: fileName });
+    // a file from FRED: observation_date and the series id, named after the id
+    // as FRED names its downloads (GDPC1.csv; a browser may add " (1)")
+    const id = String(head[j] || "").trim();
+    const fred = /^observation_date$/i.test(head[dc].trim()) && head.length === 2 &&
+      new RegExp("^" + id.replace(/[^A-Za-z0-9_]/g, "") + "( ?\\(\\d+\\))?\\.csv$").test(String(fileName).split(/[\\/]/).pop());
+    out.push({ raw: head[j] || ("column " + (j + 1)), freq, obs, notes, file: fileName, fred });
   }
   if (!out.length) throw new Error(fileName + ": no numeric columns found");
   return out;
@@ -621,6 +643,11 @@ function suggestTransform(s) {
 const TRANSFORMS = [["level", "as is"], ["pct", "% change"], ["logdiff", "log change ×100"], ["diff", "change"], ["yoy", "% change on a year ago"]];
 const TLABEL = { level: "", pct: "% change on the previous period", logdiff: "log change ×100", diff: "change on the previous period", yoy: "% change on a year ago" };
 
+/* FRED series ids the page knows: their usual transformation (for FRED's files only) */
+const FRED_TRANSFORMS = { gdpc1: "pct", gdp: "pct", indpro: "pct", payems: "diff", rsafs: "pct", rrsfs: "pct", unrate: "diff",
+  houst: "pct", permit: "pct", icsa: "logdiff", ccsa: "logdiff", ic4wsa: "logdiff", t10y2y: "diff", t10y3m: "diff", dgs10: "diff",
+  pcec96: "pct", dspic96: "pct", cpiaucsl: "pct", pcepi: "pct", manemp: "diff", awhman: "diff", tcu: "diff", dtwexbgs: "logdiff",
+  dgorder: "pct", neworder: "pct", busloans: "pct", tottlsa: "pct", w875rx1: "pct", cmrmtspl: "pct", jtsjol: "pct" };
 function addSeries(list) {
   const taken = new Set(["date", ...S.series.map(s => s.name)]);
   for (const s of list) {
@@ -629,7 +656,7 @@ function addSeries(list) {
     taken.add(name);
     s.name = name;
     s.on = s.freq !== "A";
-    s.transform = suggestTransform(s);
+    s.transform = (s.fred && FRED_TRANSFORMS[name]) || suggestTransform(s);
     S.series.push(s);
   }
 }
@@ -651,10 +678,58 @@ const EXAMPLE_TRANSFORMS = {
   stock_index: "logdiff", credit_spread: "level", initial_claims: "level", card_spending: "logdiff", rail_traffic: "logdiff",
   industrial_production: "pct", retail_sales: "pct", payrolls: "diff", pmi: "level", unemployment_rate: "diff", gdp: "pct"
 };
+const FRED_STARTER = "GDPC1 INDPRO PAYEMS RSAFS UNRATE HOUST ICSA CCSA T10Y2Y";
+const fredURL = id => "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + id;
+/* the settings the starter set works best with (monthly, two factors, from 2010, no pandemic) */
+function fredDefaults() {
+  $("base").value = "M"; $("base").dataset.touched = "1";
+  $("r").value = "2"; $("r").dataset.touched = "1";
+  $("start").value = "2010"; $("skip2020").checked = true; $("agg").value = "auto";
+}
+async function fromFred() {
+  const raw = $("fredids").value.split(/[\s,;]+/).filter(Boolean);
+  const bad = raw.filter(x => !/^[A-Za-z0-9_]+$/.test(x));
+  if (bad.length) { message("fredmsg", "err", "Not a FRED series id: " + bad.join(", ") + " (letters, digits and _ only)."); return; }
+  const ids = [...new Set(raw.map(x => x.toUpperCase()))];
+  if (!ids.length) return;
+  message("fredmsg", "info", "Asking FRED for " + ids.join(", ") + "…");
+  $("fredget").disabled = true;
+  const got = [], failed = [];
+  try {
+    for (const id of ids) {
+      try {
+        const r = await fetch(fredURL(id));
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        const text = await r.text();
+        if (!/^observation_date,/i.test(text)) throw new Error("not a series");
+        got.push(...tableToSeries(parseDelimited(text), id + ".csv"));
+      } catch (e) { failed.push(id); }
+    }
+    if (got.length) {
+      S.series = S.series.filter(s => !got.some(g => cozyName(g.raw, 0) === s.name));
+      addSeries(got);
+      if ($("fredids").value.trim().split(/[\s,;]+/).join(" ").toUpperCase() === FRED_STARTER) fredDefaults();
+      renderSeries();
+    }
+    if (!failed.length) { message("fredmsg", "info", "From FRED: " + got.map(s => s.raw).join(", ") + "."); return; }
+    // the browser may not read FRED from another site: hand over the files instead
+    const box = $("fredmsg"); box.innerHTML = "";
+    const links = failed.map(id => el("a", { href: fredURL(id), target: "_blank", rel: "noopener", style: "margin-right:10px" }, id + ".csv"));
+    const all = el("button", { type: "button" }, "Download all " + failed.length);
+    all.onclick = () => failed.forEach((id, k) => setTimeout(() => { const a = el("a", { href: fredURL(id), target: "_blank", rel: "noopener" }); document.body.append(a); a.click(); a.remove(); }, 400 * k));
+    box.append(el("div", { class: "msg warn", id: "fredfallback" },
+      (got.length ? "Read " + got.length + " series; " : "") + "your browser would not let this page read " + failed.join(", ") +
+      " from FRED (FRED does not allow it from other sites). Download " + (failed.length > 1 ? "the files" : "the file") +
+      " — one click each, or all at once — and drop them on the box above; the page reads FRED's files as they come.",
+      el("div", { style: "margin-top:8px" }, all, " ", ...links)));
+    if ($("fredids").value.trim().split(/[\s,;]+/).join(" ").toUpperCase() === FRED_STARTER) fredDefaults();
+  } finally { $("fredget").disabled = false; }
+}
 function loadExample(kind) {
   kind = typeof kind === "string" ? kind : $("exsel").value;
   S.series = [];
   $("base").dataset.touched = ""; $("r").dataset.touched = "";
+  $("start").value = ""; $("skip2020").checked = false;
   if (kind === "weekly") {
     for (const f of EXAMPLE_FILES.weekly) addSeries(tableToSeries(parseDelimited(f.csv), f.name));
     S.series.forEach(s => { if (EXAMPLE_TRANSFORMS[s.name]) s.transform = EXAMPLE_TRANSFORMS[s.name]; });
@@ -745,6 +820,15 @@ function refreshTargets() {
 /* ================================================================== */
 /* the panel: series x base periods (months, or weeks ending on one weekday),
    through the end of the period after the current one of the coarsest series */
+/* "2010", "2010-06" or "2010-06-15" -> a day number, or null for none */
+function parseStart(v) {
+  const s = String(v || "").trim(); if (!s) return null;
+  let m;
+  if ((m = s.match(/^(\d{4})$/))) return dayOf(+m[1], 1, 1);
+  const d = parseDate(s);
+  if (!d) throw new Error("Sample start: could not read \"" + s + "\" — write a year (2010) or a date (2010-06-01).");
+  return d.day != null ? d.day : dayOf(yearOf(d.ym), monthOf(d.ym), 1);
+}
 function weekEndDay(list) {
   const count = new Array(7).fill(0);
   for (const s of list) if (s.freq === "W") for (const k of s.obs.keys()) count[dowOf(k)]++;
@@ -761,10 +845,18 @@ function buildPanel(list, base) {
     if (W) return s.freq === "D" || s.freq === "W" ? weekEnd(k) : lastWeekOfMonth(k);
     return s.freq === "D" ? ymOfDay(k) : s.freq === "W" ? ymOfDay(k - 3) : k;
   };
+  // the sample's start, and the pandemic months to treat as missing (a base period inside them)
+  const st = parseStart($("start").value);
+  const startUnit = st == null ? -Infinity : W ? weekEnd(st) : ymOfDay(st);
+  const skip = $("skip2020").checked;
+  const inPandemic = u => W ? (u >= dayOf(2020, 3, 1) && u <= dayOf(2020, 9, 30) + 6 && ymOfDay(u - 3) >= ymOf(2020, 3) && ymOfDay(u - 3) <= ymOf(2020, 9))
+                            : (u >= ymOf(2020, 3) && u <= ymOf(2020, 9));
   const aligned = list.map(s => {
     const sums = new Map(), cnt = new Map();
     for (const [k, v] of s.obs) { const u = unitOf(s, k); sums.set(u, (sums.get(u) || 0) + v); cnt.set(u, (cnt.get(u) || 0) + 1); }
-    const m = new Map(); for (const [u, v] of sums) m.set(u, v / cnt.get(u)); return m;
+    const m = new Map();
+    for (const [u, v] of sums) if (u >= startUnit && !(skip && inPandemic(u))) m.set(u, v / cnt.get(u));
+    return m;
   });
   const isBase = s => W ? s.freq === "D" || s.freq === "W" : s.freq !== "Q";
   let lo = Infinity, hi = -Infinity, lastB = -Infinity;
@@ -848,7 +940,9 @@ async function estimate() {
   const list = S.series.filter(s => s.on && s.freq !== "A");
   if (!list.length) return;
   const o = options();
-  const P = buildPanel(list, $("basewrap").classList.contains("hidden") ? "M" : $("base").value);
+  let P;
+  try { P = buildPanel(list, $("basewrap").classList.contains("hidden") ? "M" : $("base").value); }
+  catch (e) { message("modelmsg", "err", e.message); return; }
   const ti = P.names.indexOf(o.target);
   o.tfreq = P.freqs[ti];
   message("modelmsg", "", ""); $("emreport").innerHTML = "";
@@ -4549,6 +4643,7 @@ function wire() {
   $("r").onchange = () => { $("r").dataset.touched = "1"; };
   $("base").onchange = () => { $("base").dataset.touched = "1"; refreshTargets(); };
   $("trackfreq").onchange = () => drawCharts();
+  $("fredget").onclick = fromFred;
   $("annual").onchange = () => drawCharts();
   $("run").onclick = estimate;
   $("vintage").onchange = () => {
@@ -4565,7 +4660,7 @@ function wire() {
     setEngine("engine ready", "ready"); $("run").disabled = !S.series.some(s => s.on);
   }).catch(e => { setEngine("engine failed", "busy"); message("datamsg", "err", "The Cozy engine did not start: " + e.message); });
 }
-window.NowcastApp = { S, Engine, estimate, runNews, loadExample, cleanCSV, scriptText, parseDate, tableToSeries, parseDelimited, cozyName, buildPanel };
+window.NowcastApp = { S, Engine, fromFred, estimate, runNews, loadExample, cleanCSV, scriptText, parseDate, tableToSeries, parseDelimited, cozyName, buildPanel };
 wire();
 </script>
 </body>

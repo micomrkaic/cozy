@@ -1,0 +1,212 @@
+% fred.cz — economic data from FRED (the St. Louis Fed's database) into
+% nowcasting panels.
+%
+%   load("fred"); load("nowcast");
+%   let s = fred.us;                                  % a starter set: ids, codes, agg
+%   let d = fred.panel(s.ids, {start = date(2010, 1, 1), skip = fred.pandemic});
+%   let d = setfield(d, "Y", nowcast.transform(d.Y, s.codes, d));
+%   let f = nowcast.fit(d, {agg = s.agg});
+%   nowcast.nowcast(f, "gdpc1")
+%
+% A series is fetched by its FRED id from the public CSV download
+% (fred.stlouisfed.org/graph/fredgraph.csv?id=ID: no API key) with curl,
+% and kept in a cache directory (opts.dir, default "fred"): the next run
+% reads the file and needs no network, and a directory of saved files is a
+% vintage you can come back to (opts.refresh = true fetches again). Each
+% series' frequency comes from its own dates. fred.panel puts series of
+% any frequencies on one calendar: weekly when any series is daily or
+% weekly (daily ones averaged to weeks), else monthly — monthly and
+% quarterly series in the last week or month of their period, which is
+% where nowcast.cz looks for them.
+%
+% Mind the terms of each series: most US government data on FRED (BEA,
+% BLS, Census, the Fed, the Labor Department) are in the public domain,
+% but some series carry their owners' copyright; FRED's page for a series
+% says which. Needs curl (or wget) and the network; not in the browser,
+% where the nowcast page takes FRED's files instead.
+%
+% Helpers are prefixed fr_; keep() must spare them.
+
+% internal: the value of field k of record r, or dflt when absent
+let fr_opt = fn r, k, dflt -> if any(fields(r) == k) then getfield(r, k) else dflt end
+
+% internal: a FRED id, upper-cased and checked (letters, digits, underscore
+% only — it goes into a shell command and a file name)
+let fr_id = fn id -> (
+  let s = upper(trim(id));
+  let rest = s;
+  let ok = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
+  for k = 1 : 37 do (rest = strrep(rest, ok[k], "")) end;
+  if (s == "") || (rest != "") then error("fred: \"{}\" is not a FRED series id (letters, digits and _ only)", id) end;
+  s
+)
+
+% download(id, opts): the path of series id's CSV in the cache directory
+% (opts.dir, default "fred"), fetched from FRED when it is not there yet or
+% opts.refresh is true. Returns the path.
+% e.g. fred.download("gdpc1", {dir = "tests/data/fred"}) %= "tests/data/fred/GDPC1.csv"
+let fred_download = fn id, opts = {} -> (
+  let s = fr_id(id);
+  let dir = fr_opt(opts, "dir", "fred");
+  let path = dir + "/" + s + ".csv";
+  let have = system("test -s '" + path + "'") == 0;
+  if !have || fr_opt(opts, "refresh", false) then (
+    let url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=" + s;
+    let tmp = path + ".part";
+    system("mkdir -p '" + dir + "'");
+    let rc = system("curl -sfL --max-time 120 -o '" + tmp + "' '" + url + "' 2>/dev/null || wget -q -T 120 -O '" + tmp + "' '" + url + "' 2>/dev/null");
+    if rc != 0 then (
+      system("rm -f '" + tmp + "'");
+      error("fred: could not download {} ({}): no network, no curl or wget, or no such series on FRED", s, url)
+    ) end;
+    if system("head -1 '" + tmp + "' | grep -q '^observation_date,'") != 0 then (
+      system("rm -f '" + tmp + "'");
+      error("fred: FRED did not send a series for \"{}\" — check the id at fred.stlouisfed.org", s)
+    ) end;
+    system("mv '" + tmp + "' '" + path + "'")
+  ) end;
+  path
+)
+
+% internal: a frequency name from the typical gap between dates, in days
+let fr_freq = fn days -> (
+  if numel(days) < 2 then "monthly"
+  else (
+    let g = median(diff(days));
+    if g <= 4 then "daily" elseif g <= 10 then "weekly" elseif g <= 40 then "monthly"
+    elseif g <= 120 then "quarterly" else "annual" end
+  ) end
+)
+
+% series(id, opts): series id as {id, name, dates, values, freq} — the
+% name lower-case (as readtable names columns), freq "daily", "weekly",
+% "monthly", "quarterly" or "annual" from its dates. Missing values are NaN.
+% opts as for download.
+% e.g. let s = fred.series("ICSA", {dir = "tests/data/fred"}); [s.name, s.freq] %= ["icsa", "weekly"]
+let fred_series = fn id, opts = {} -> (
+  let path = fred_download(id, opts);
+  let t = readtable(path);
+  let cols = fields(t);
+  if !any(cols == "observation_date") || (numel(cols) != 2) then error("fred: {} is not a FRED series file", path) end;
+  let name = cols[find(cols != "observation_date")[1]];
+  let dates = t.observation_date;
+  {id = fr_id(id), name = name, dates = dates, values = getfield(t, name), freq = fr_freq(dates - dates[1])}
+)
+
+% internal: the Date of the last day of the month holding Date d
+let fr_monthend = fn d -> (let y = year(d); let m = month(d); date(y + floor(m / 12), mod(m, 12) + 1, 1) - 1)
+
+% panel(ids, opts): FRED series as one nowcasting panel (what nowcast.data
+% builds: {Y, names, dates, freq, freqs, quarterly}). opts: freq (the base,
+% "weekly" if any series is daily or weekly, else "monthly"), start (a
+% Date; default the first of January fifteen years before the newest
+% data), skip (a [from; to] pair of Dates, or several as rows of a 2-column
+% Date array: values in those periods become NaN — fred.pandemic is March
+% to September 2020), dir and refresh (as for download). Daily series are
+% averaged to the base period; a weekly panel's weeks end on the weekday
+% of its weekly series (FRED's: Saturday).
+% e.g. let d = fred.panel(["GDPC1"; "INDPRO"; "ICSA"], {dir = "tests/data/fred", start = date(2024, 1, 1)}); [d.freq, d.freqs'] %= ["weekly", "quarterly", "monthly", "weekly"]
+let fred_panel = fn ids, opts = {} -> (
+  let ids = reshape(ids, numel(ids), 1);
+  let m = numel(ids);
+  let ser = fred_series(ids[1], opts);
+  let all = {s1 = ser};
+  let names = [ser.name]; let freqs = [ser.freq];
+  for i = 2 : m do (
+    let s = fred_series(ids[i], opts);
+    all = setfield(all, "s" + str(i), s);
+    names = [names; s.name]; freqs = [freqs; s.freq]
+  ) end;
+  let an = find(freqs == "annual");
+  if numel(an) > 0 then error("fred.panel: {} is annual; nowcast panels are weekly or monthly (quarterly at the coarsest)", ids[an[1]]) end;
+  let hf = any(freqs == "daily") || any(freqs == "weekly");
+  let base = fr_opt(opts, "freq", if hf then "weekly" else "monthly" end);
+  % weekly: weeks end on the weekly series' weekday (FRED's weekly data: Saturday)
+  let E = 6;
+  let wk = find(freqs == "weekly");
+  if numel(wk) > 0 then (let s = getfield(all, "s" + str(wk[1])); E = weekday(s.dates[numel(s.dates)])) end;
+  let wend = fn d -> d + mod(E - weekday(d), 7);
+  % the base period that holds an observation dated d of a series at frequency fq
+  % (monthly and quarterly dated by their first day: the last week or month of the period)
+  let place = fn d, fq -> (
+    if (fq == "daily") || (fq == "weekly") then (if base == "weekly" then wend(d) else date(year(d), month(d), 1) end)
+    else (
+      let lm = if fq == "quarterly" then date(year(d) + floor((month(d) + 1) / 12), mod(month(d) + 1, 12) + 1, 1) else d end;
+      if base == "weekly" then (
+        let e = wend(fr_monthend(lm));
+        if (year(e - 3) * 12 + month(e - 3)) != (year(lm) * 12 + month(lm)) then e - 7 else e end
+      ) else date(year(lm), month(lm), 1) end
+    ) end
+  );
+  % the calendar: from start through the latest period any observation needs
+  let newest = date(1900, 1, 1); let stop = date(1900, 1, 1);
+  for i = 1 : m do (
+    let s = getfield(all, "s" + str(i));
+    let ok = find(!isnan(s.values));
+    if numel(ok) > 0 then (
+      let dl = s.dates[ok[numel(ok)]];
+      if dl - newest > 0 then (newest = dl) end;
+      let p = place(dl, s.freq);
+      if p - stop > 0 then (stop = p) end
+    ) end
+  ) end;
+  let start = fr_opt(opts, "start", date(year(newest) - 15, 1, 1));
+  let d0 = if base == "weekly" then wend(start) else date(year(start), month(start), 1) end;
+  % the base periods from d0 through stop, counted (an integer, as sizes must be)
+  let T = 0; let x = d0;
+  while x - stop <= 0 do (
+    T = T + 1;
+    x = if base == "weekly" then x + 7 else date(year(x) + floor(month(x) / 12), mod(month(x), 12) + 1, 1) end
+  ) end;
+  let dates = if base == "weekly" then d0 + 7 * (0 : T - 1)' else (0 : T - 1)' ~> (fn k -> date(year(d0) + floor((month(d0) - 1 + k) / 12), mod(month(d0) - 1 + k, 12) + 1, 1)) end;
+  % each base period's days since d0, to find an observation's period
+  let dd = dates - d0;
+  let Y = (0 / 0) * ones(m, T);
+  let F = (ids ~> (fn x -> base));
+  for i = 1 : m do (
+    let s = getfield(all, "s" + str(i));
+    let ok = find(!isnan(s.values) & ((s.dates - start) >= -100));
+    let sums = zeros(1, T); let cnt = zeros(1, T);
+    for q = 1 : numel(ok) do (
+      let p = place(s.dates[ok[q]], s.freq) - d0;
+      let t = find(dd == p);
+      if numel(t) > 0 then (let k = t[1]; sums[k] = sums[k] + s.values[ok[q]]; cnt[k] = cnt[k] + 1) end
+    ) end;
+    let have = find(cnt > 0);
+    Y[i, have] = sums[have] ./ cnt[have];
+    F[i] = if (s.freq == "monthly") && (base == "weekly") then "monthly" elseif s.freq == "quarterly" then "quarterly" else base end
+  ) end;
+  % periods to skip
+  let skip = fr_opt(opts, "skip", zeros(0, 2));
+  if numel(skip) > 0 then (
+    let sk = skip;                                   % rows of [from, to]
+    for k = 1 : size(sk)[1] do (
+      let off = find(((dates - sk[k, 1]) >= 0) & ((dates - sk[k, 2]) <= 0));
+      if numel(off) > 0 then (Y[:, off] = 0 / 0) end
+    ) end
+  ) end;
+  let q = zeros(m, 1); q[find(F == "quarterly")] = 1;
+  {Y = Y, names = names, dates = dates, freq = base, freqs = F, quarterly = q, ids = ids}
+)
+
+% the pandemic months, for opts.skip: March to September 2020
+let fred_pandemic = [date(2020, 3, 1), date(2020, 9, 30)]
+
+% a starter set for the US (public-domain series): real GDP (BEA),
+% industrial production (the Fed), payrolls, the unemployment rate (BLS),
+% retail sales, housing starts (Census), initial and continuing jobless
+% claims (Labor), and the 10-year minus 2-year Treasury spread (the Fed,
+% daily) — with the transformation and aggregation that suit each (all
+% changes, so all "mm"), and the model that works best on it: monthly (the
+% weekly and daily series averaged to months), two factors. On 2010-2026
+% without the pandemic months its quarterly path follows published GDP at
+% a correlation of 0.88; a weekly model, or one factor, about 0.3 — weekly
+% changes in claims are mostly noise, and one factor goes to them.
+let fred_us = {
+  ids = ["GDPC1"; "INDPRO"; "PAYEMS"; "RSAFS"; "UNRATE"; "HOUST"; "ICSA"; "CCSA"; "T10Y2Y"],
+  codes = ["pct"; "pct"; "diff"; "pct"; "diff"; "pct"; "logdiff"; "logdiff"; "diff"],
+  agg = ["mm"; "mm"; "mm"; "mm"; "mm"; "mm"; "mm"; "mm"; "mm"],
+  freq = "monthly", r = 2
+}
+
+let fred = {download = fred_download, series = fred_series, panel = fred_panel, pandemic = fred_pandemic, us = fred_us}

@@ -1,0 +1,42 @@
+# fred.cz — FRED series into nowcasting panels. Every case reads the snapshot
+# in tests/data/fred (the starter set since 2015, as FRED serves it: one CSV per
+# series, observation_date and the id, an empty cell for a missing value), so
+# no case touches the network: a file in the cache directory is not fetched again.
+
+# the cache: a series already there is read, not downloaded
+load("fred"); fred.download("icsa", {dir = "tests/data/fred"})
+=> "tests/data/fred/ICSA.csv"
+# ids go into a shell command and a file name: letters, digits and _ only
+load("fred"); fred.download("IC;SA", {dir = "tests/data/fred"})
+=> !"IC;SA" is not a FRED series id (letters, digits and _ only)
+load("fred"); fred.download("", {dir = "tests/data/fred"})
+=> !is not a FRED series id
+# each series' frequency from its own dates
+load("fred"); ["GDPC1"; "INDPRO"; "ICSA"; "T10Y2Y"] ~> (fn id -> fred.series(id, {dir = "tests/data/fred"}).freq)
+=> ["quarterly"; "monthly"; "weekly"; "daily"]
+load("fred"); let s = fred.series("UNRATE", {dir = "tests/data/fred"}); [s.name == "unrate", s.id == "UNRATE", sum(isnan(s.values)) == 1]
+=> [true, true, true]
+# a weekly panel when any series is daily or weekly: weeks end on Saturday,
+# as FRED's weekly data do; the daily spread is averaged to weeks
+load("fred"); let d = fred.panel(["GDPC1"; "INDPRO"; "ICSA"; "T10Y2Y"], {dir = "tests/data/fred", start = date(2024, 1, 1)}); [d.freq, d.freqs']
+=> ["weekly", "quarterly", "monthly", "weekly", "weekly"]
+load("fred"); let d = fred.panel(["ICSA"; "T10Y2Y"], {dir = "tests/data/fred", start = date(2024, 1, 1)}); [weekday(d.dates[1]) == 6, all(diff(d.dates - d.dates[1]) == 7)]
+=> [true, true]
+load("fred"); let d = fred.panel(["T10Y2Y"], {dir = "tests/data/fred", start = date(2025, 1, 1)}); let s = fred.series("T10Y2Y", {dir = "tests/data/fred"}); let k = find(((s.dates - d.dates[2]) <= 0) & ((s.dates - d.dates[2]) > -7) & !isnan(s.values)); abs(d.Y[1, 2] - mean(s.values[k])) < 1e-12
+=> true
+# a quarter's value in its last week, a month's in its last (the week whose middle day is in it)
+load("fred"); let d = fred.panel(["GDPC1"; "INDPRO"; "ICSA"], {dir = "tests/data/fred", start = date(2024, 1, 1)}); let g = find(!isnan(d.Y[1, :])); let p = find(!isnan(d.Y[2, :])); [month(d.dates[g[1]] - 3) == 3, month(d.dates[g[1]] + 4) != month(d.dates[g[1]] - 3), month(d.dates[p[1]] - 3) == 1]
+=> [true, true, true]
+# monthly when asked (or when no series is daily or weekly): claims averaged to months
+load("fred"); let d = fred.panel(["GDPC1"; "INDPRO"; "ICSA"], {dir = "tests/data/fred", start = date(2024, 1, 1), freq = "monthly"}); [d.freq, d.freqs']
+=> ["monthly", "quarterly", "monthly", "monthly"]
+load("fred"); let d = fred.panel(["GDPC1"; "INDPRO"], {dir = "tests/data/fred", start = date(2024, 1, 1)}); [d.freq, datestr(d.dates[1])]
+=> ["monthly", "2024-01-01"]
+# skip: the pandemic months become missing
+load("fred"); let d = fred.panel(["INDPRO"; "ICSA"], {dir = "tests/data/fred", start = date(2019, 1, 1), skip = fred.pandemic, freq = "monthly"}); let k = find(year(d.dates) == 2020); [all(isnan(d.Y[1, k[3 : 9]])), !isnan(d.Y[1, k[2]]), !isnan(d.Y[1, k[10]])]
+=> [true, true, true]
+# the panel is what nowcast.data builds: it estimates, and every value sits where the model expects it
+load("fred"); load("nowcast"); let s = fred.us; let d = fred.panel(s.ids, {dir = "tests/data/fred", start = date(2016, 1, 1), skip = fred.pandemic, freq = s.freq}); let d = setfield(d, "Y", nowcast.transform(d.Y, s.codes, d)); let f = nowcast.fit(d, {r = s.r, agg = s.agg}); let n = nowcast.nowcast(f, "gdpc1"); [f.status == "converged", isnan(n.actual), n.sdpred > 0]
+=> [true, true, true]
+load("fred"); load("nowcast"); let d = fred.panel(["GDPC1"; "INDPRO"; "PAYEMS"; "ICSA"; "T10Y2Y"], {dir = "tests/data/fred", start = date(2022, 1, 1)}); let f = nowcast.model(nowcast.data(d.Y, {freq = d.freq, freqs = d.freqs, dates = d.dates, names = d.names})); f.freq
+=> "weekly"

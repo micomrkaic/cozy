@@ -78,7 +78,8 @@ random matrices), **phys** (CODATA constants), **scatter** (scatter plots),
 Dynare: models in Dynare's notation, solved to first order with exact
 derivatives), **nowcast** (a mixed-frequency dynamic factor model:
 EM estimation, nowcasts with standard errors, and the exact news
-decomposition of each data release), and
+decomposition of each data release), **fred** (series from the St. Louis
+Fed's FRED database into nowcasting panels, with a US starter set), and
 **demo** — the guided tour: load it and watch the greatest hits compute live.
 
 ## As a library

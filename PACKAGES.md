@@ -3,7 +3,7 @@
 *The standard packages that ship with Cozy: probability distributions,
 polynomials, finance, a solar almanac, structured random matrices,
 physical constants, scatter plots,
-symbolic differentiation, time series, DSGE models, nowcasting, and a guided tour — all written in Cozy itself.*
+symbolic differentiation, time series, DSGE models, nowcasting, FRED data, and a guided tour — all written in Cozy itself.*
 
 A package is a file of `let` definitions; `load("packages/name.cz")` runs it
 in the current session and its bindings persist. Records of closures act as
@@ -1075,6 +1075,72 @@ In the table, `d` is the full panel (all 120 months, the same names) and `f` its
 | `nowcast.report(f)` | `f.status` | `"converged"` |
 | `nowcast.bootstrap(f, opts)` | `nowcast.bootstrap(f, {B = 3}).boot.B` | `3` |
 | `nowcast.transform(Y, codes, d)` | `nowcast.transform([100, 104], ["pct"], [0])` | `[nan, 4.00]` |
+
+## 16. fred.cz — economic data from FRED, into a nowcasting panel
+
+FRED, the St. Louis Fed's database, holds most of the series a nowcast
+reads. `fred.series(id)` fetches one by its FRED id from the public CSV
+download (no API key) with curl, and keeps the file in a cache directory
+(`opts.dir`, default `fred`): the next run reads it without the network,
+and a directory of saved files is a data vintage you can come back to
+(`opts.refresh = true` fetches again). Each series' frequency comes from
+its own dates. `fred.panel(ids, opts)` puts series of any frequencies on
+one calendar — weekly when any is daily or weekly (daily ones averaged to
+weeks, weeks ending on Saturday as FRED's weekly data do), else monthly,
+or as `opts.freq` says — with monthly and quarterly values in the last
+week or month of their period, exactly what `nowcast.cz` expects. `start`
+cuts the history (default: fifteen years back), and `skip` turns periods
+into missing values: `fred.pandemic` is March to September 2020, months
+no Gaussian factor model should be asked to fit.
+
+`fred.us` is a starter set of public-domain US series — real GDP,
+industrial production, payrolls, retail sales, the unemployment rate,
+housing starts, initial and continuing jobless claims, the 10-year minus
+2-year Treasury spread — with the transformation and aggregation that suit
+each, and the model that does best on it: monthly, two factors. On
+2010-2026 without the pandemic months its quarterly path follows published
+GDP at a correlation of 0.88; a weekly model, or one factor, manages about
+0.3, because weekly changes in claims are mostly noise and a lone factor
+goes to them. The whole nowcast, from the database to the number:
+
+```
+cozy> load("fred"); load("nowcast")
+cozy> let s = fred.us; s.ids'
+["GDPC1", "INDPRO", "PAYEMS", "RSAFS", "UNRATE", "HOUST", "ICSA", "CCSA", "T10Y2Y"]
+cozy> let d = fred.panel(s.ids, {dir = "tests/data/fred", start = date(2016, 1, 1), skip = fred.pandemic, freq = s.freq});
+cozy> d.freqs'
+["quarterly", "monthly", "monthly", "monthly", "monthly", "monthly", "monthly", "monthly", "monthly"]
+cozy> let d = setfield(d, "Y", nowcast.transform(d.Y, s.codes, d));
+cozy> let f = nowcast.fit(d, {r = s.r, agg = s.agg}); f.status
+"converged"
+cozy> format(3); let n = nowcast.nowcast(f, "gdpc1"); [n.value, n.sdpred]
+[0.729, 0.363]
+cozy> datestr(nowcast.path(f, "gdpc1", "quarterly").dates[numel(nowcast.path(f, "gdpc1", "quarterly").dates)])
+"2026-12-31"
+```
+
+The transcript reads `tests/data/fred`, a snapshot of the starter set as
+FRED served it in November 2026 (since 2015), so it runs without the
+network; drop `dir` and it fetches today's data. The nowcast is real GDP's
+growth in the fourth quarter of 2026, quarter on quarter, in percent
+(about 2.9% annualized), with the standard error of the figure the BEA
+will publish. Ids are checked before they reach the shell (letters,
+digits and `_`); a download that fails says why. Most US government
+series on FRED are in the public domain, but some carry their owners'
+copyright — FRED's page for a series says which. The package needs curl
+or wget, so it is not in the browser; the [nowcast page](https://micomrkaic.github.io/cozy/nowcast.html)
+asks FRED itself and, as browsers do not let a page read FRED from another
+site, hands over the download links and reads the files dropped back in.
+
+In the table, `o = {dir = "tests/data/fred"}` (the snapshot).
+
+| Function | Worked example | Result |
+|---|---|---|
+| `fred.download(id, opts)` | `fred.download("gdpc1", o)` | `"tests/data/fred/GDPC1.csv"` |
+| `fred.series(id, opts)` | `fred.series("ICSA", o).freq` | `"weekly"` |
+| `fred.panel(ids, opts)` | `size(fred.panel(["GDPC1"; "INDPRO"], {dir = "tests/data/fred", start = date(2024, 1, 1)}).Y)` | `[2, 34]` |
+| `fred.us` | `numel(fred.us.ids)` | `9` |
+| `fred.pandemic` | `datestr(fred.pandemic[1])` | `"2020-03-01"` |
 
 ## Writing your own
 
