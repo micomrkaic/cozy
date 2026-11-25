@@ -1113,11 +1113,15 @@ panes from a notice the REPL emits, never commands of their own, and one
 parity test running the same key scripts at a pty and in the browser.
 STAGE 1: lineedit.c holds every decision (completion of names and of paths
 in strings; whole entries in the history, isocline's own per-line entries
-undone; plain prompts; no hints). Two local changes to isocline, marked
+undone; plain prompts; no hints). Three local changes to isocline, marked
 COZY (third_party/isocline/COZY.md): ic_last_cancelled(), since it returns
 "" for Ctrl-C and for an empty Enter alike and the REPL needs to tell them
-apart; and a line feed as Enter in single-line mode, as readline had it
-(the pager test types "manual\n"). input() reaches the editor through a
+apart; a line feed as Enter in single-line mode, as readline had it (the
+pager test types "manual\n"); and raw mode switched with TCSADRAIN, not
+TCSAFLUSH — the flush threw away type-ahead, and on the slower macOS CI it
+swallowed a Ctrl-C typed just after Enter, so the loop it was meant to stop
+ran on (found by a probe on the macOS runner: the REPL's own signal
+handling was right). input() reaches the editor through a
 hook the REPL sets, so vmtest, pipes and the embedding library stay free
 of it. tests/run_lineedit.py types at the real REPL on a pty. NOTED:
 Ctrl-R's Enter accepts into the line (readline ran it). TRIGGER for

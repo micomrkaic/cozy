@@ -157,11 +157,18 @@ try:
     m = s.mark(); s.send(CTRL_C); s.read_until("cozy> ", 3, m); s.settle(0.15, 1)
     run(s, "7\r", "\n7", "Ctrl-C returned to the main prompt")
     run(s, "zz\r", "undefined name 'zz'", "the abandoned entry was not evaluated")
-    # Ctrl-C during evaluation
-    m = s.mark(); s.send("while true do 1 end\r"); time.sleep(0.6); s.send(CTRL_C)
+    # Ctrl-C during evaluation: wait until the loop is surely running (the
+    # editor has finished with the line), then interrupt; a fresh prompt and
+    # a working session must follow
+    s.send("while true do 1 end\r"); s.settle(0.3, 3); time.sleep(1.0)
+    m = s.mark(); s.send(CTRL_C)
     ok = s.read_until("cozy> ", 5, m); s.settle(0.2, 1)
-    check("Ctrl-C interrupts a running loop", ok and "cozy> " in s.since(m), repr(s.since(m)[-160:]))
+    check("Ctrl-C interrupts a running loop", ok, repr(s.since(m)[-160:]))
     run(s, "40 + 1\r", "\n41", "and the session goes on")
+    # type-ahead: what you type while a computation runs is kept for the next prompt
+    m = s.mark(); s.send("let ta = 0; for i = 1:400000 do ta = ta + 1 end; ta\r", 0.002); s.send("ta + 1\r", 0.002)
+    ok = s.read_until("400001", 20, m); s.settle(0.2, 1)
+    check("typing ahead during a computation is kept", ok and "400000" in s.since(m), repr(s.since(m)[-200:]))
     # completion: names, and file names inside a string
     m = s.mark(); s.send("sqr" + TAB); s.settle(0.3, 2)
     check("Tab completes a builtin name", "sqrt" in s.since(m), repr(s.since(m)[-120:]))

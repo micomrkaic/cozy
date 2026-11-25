@@ -9,7 +9,7 @@ the same REPL, in the browser.
 
 ### Changed
 - **Line editing is isocline** (third_party/isocline, MIT, vendored with
-  two small marked changes), not GNU readline: no library to install or
+  three small marked changes), not GNU readline: no library to install or
   detect, no macOS libedit differences. At the prompt: Emacs keys
   (Ctrl-A/E, Ctrl-K/U/W, Alt-B/F, arrows), history with up/down and
   Ctrl-R search, persisted to `~/.cozy_history` (a multi-line entry is one
@@ -18,7 +18,9 @@ the same REPL, in the browser.
   abandon an entry or stop a computation, Ctrl-D to leave. `input()` at
   the terminal is edited the same way. Not carried over: `~/.inputrc` and
   vi mode. In Ctrl-R search, Enter takes the entry found into the line; a
-  second Enter runs it.
+  second Enter runs it. What you type while a computation runs is kept for
+  the next prompt, as with readline (isocline's own terminal handling
+  discarded it; changed here).
 - The demo's bare-Enter step no longer lands in the history as `next`.
 - `make READLINE=0` is gone (nothing to turn off).
 
@@ -26,7 +28,8 @@ the same REPL, in the browser.
 - **tests/run_lineedit.py**: the REPL in a pseudo-terminal, typed at as a
   person would — editing keys, history within and across sessions, Ctrl-R,
   completion of names and paths, multi-line entries, Ctrl-C at the prompt
-  and during a computation, input(), the demo's stepping, Ctrl-D — run by
+  and during a computation, typing ahead, input(), the demo's stepping,
+  Ctrl-D — run by
   `make test`. It replaces the completion smoke test, whose failures
   `make test` used to ignore.
 

@@ -22,5 +22,12 @@ Built as one translation unit (`src/isocline.c` includes the rest) with
   in readline; upstream ignores it then. Some terminals and pasted text
   send it, and so do scripts that drive the REPL. `src/editline.c`.
 
+- Raw mode is entered and left with `TCSADRAIN`, not `TCSAFLUSH`
+  (`src/tty.c`, `tty_start_raw` / `tty_end_raw`). The flush discarded
+  whatever was typed but not yet read: a command typed ahead while a
+  computation ran was lost when the prompt came back (readline keeps it),
+  and a Ctrl-C typed just after Enter could vanish as the editor let go of
+  the terminal — which is how the macOS CI lost one (0.1.50).
+
 To update: copy upstream's `src`, `include` and `LICENSE` over these, and
 re-apply the changes above (each is marked with a `COZY` comment).
