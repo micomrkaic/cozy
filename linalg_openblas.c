@@ -73,7 +73,7 @@ static int ob_single(void)
 static void ob_restore(int *t) { if (*t > 0) openblas_set_num_threads(*t); }
 #define OB_SMALL(n) __attribute__((cleanup(ob_restore))) int ob_saved_ = ((n) < OB_SMALL_N ? ob_single() : 0); (void)ob_saved_
 #else
-#define OB_SMALL(n) ((void)0)
+#define OB_SMALL(n) ((void)(n))           /* evaluated, so its helpers count as used */
 #endif
 /* the side of the cube with as many multiply-adds as an m x k by k x n product */
 static inline uint32_t ob_cube_side(uint32_t m, uint32_t k, uint32_t n)
