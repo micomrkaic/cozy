@@ -14,6 +14,7 @@ CC      ?= cc
 STD     ?= c2x
 WERROR  ?= -Werror
 CFLAGS   = -std=$(STD) -Wall -Wextra $(WERROR) -O2
+ASANFLAGS_BASE = -std=$(STD) -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
 LDFLAGS ?=
 SRCS     = lexer.c arena.c ast.c parser.c value.c eval.c chunk.c compile.c vm.c repl.c lineedit.c main.c sparse.c kalman.c linalg_tier0.c serve.c
 HDRS     = lexer.h arena.h ast.h parser.h value.h eval.h repl.h chunk.h compile.h vm.h nrt.h linalg.h sparse.h kalman.h lineedit.h
@@ -32,15 +33,23 @@ PTY_LIBS := $(shell printf '\043include <stdlib.h>\nint forkpty(int*,char*,void*
               | $(CC) -xc - -o /dev/null 2>/dev/null || echo -lutil)
 
 # ---------------------------------------------------------------------------
-# Object build: each .c compiles once into build/obj/, with compiler-generated
-# header dependencies (-MMD -MP), so an edit recompiles exactly the affected
-# translation units and `make -jN` parallelizes the rest. The core objects are
-# shared between `cozy` and `vmtest` (identical flags); the sanitizer
-# build lives in its own tree (build/asan/) because ASan objects cannot mix.
+# Object build: each .c compiles once into build/obj-BACKEND-OPTIM/, with
+# compiler-generated header dependencies (-MMD -MP), so an edit recompiles
+# exactly the affected translation units and `make -jN` parallelizes the
+# rest. The core objects are shared between `cozy` and `vmtest` (identical
+# flags); the sanitizer build lives in its own tree (build/asan/) because
+# ASan objects cannot mix.
+#
+# One object tree per configuration (0.1.55): `make install` (openblas+nlopt)
+# followed by a plain `make test` (tier0) once reused the NLopt-built eval.o
+# — timestamps said it was current — and the link died on nlopt_create. Now
+# each BACKEND/OPTIM pair has its own tree, a flags stamp in each tree
+# recompiles it when CC or CFLAGS change, and a link stamp relinks cozy,
+# vmtest and libcozy.a whenever the configuration differs from the last
+# link. Switching back and forth costs a relink, not a rebuild.
 # Tip:  make -j$(nproc)
 # ---------------------------------------------------------------------------
 .DEFAULT_GOAL := $(BIN)
-OBJDIR   = build/obj
 ASANDIR  = build/asan
 # Linear-algebra backend (design entry 2): one kernel table, chosen here.
 # tier0 = the hand-rolled kernels (zero dependencies; always works). Future
@@ -87,30 +96,44 @@ ifeq ($(OPTIM),nlopt)
 else
   OPTIM_LIBS =
 endif
+OBJDIR   = build/obj-$(BACKEND)-$(OPTIM)
+# Stamps: a file whose content is the configuration, rewritten only when
+# that content changes, so its mtime marks the last change. Written at parse
+# time with $(shell), quotes escaped for sh (accelerate's CFLAGS carry some).
+# No hash character anywhere: macOS ships GNU make 3.81.
+stamp = $(shell mkdir -p $(dir $(1)) && printf '%s\n' '$(subst ','"'"',$(2))' > $(1).new && \
+          { cmp -s $(1).new $(1) && rm -f $(1).new || mv -f $(1).new $(1); } && echo $(1))
+ifeq ($(filter clean wasm% install,$(MAKECMDGOALS)),)
+  FLAGS_STAMP := $(call stamp,$(OBJDIR)/flags,$(CC) $(CFLAGS))
+  ifneq ($(filter %asan,$(MAKECMDGOALS)),)
+    ASAN_STAMP := $(call stamp,$(ASANDIR)/flags,$(CC) $(ASANFLAGS_BASE))
+  endif
+  LINK_STAMP  := $(call stamp,build/link-config,$(CC) $(CFLAGS) $(LDFLAGS) $(LIBS) $(OBJDIR))
+endif
 CORE     = lexer arena ast parser value eval chunk compile vm sparse kalman $(LINALG)
 CORE_O   = $(CORE:%=$(OBJDIR)/%.o)
 ASAN_O   = $(CORE:%=$(ASANDIR)/%.o) $(ASANDIR)/vmtest.o
-ASANFLAGS = -std=$(STD) -Wall -Wextra -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
+ASANFLAGS = $(ASANFLAGS_BASE)
 
 $(OBJDIR) $(ASANDIR):
 	mkdir -p $@
 
-$(OBJDIR)/%.o: %.c | $(OBJDIR)
+$(OBJDIR)/%.o: %.c $(FLAGS_STAMP) | $(OBJDIR)
 	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
 # ASan/UBSan objects: -O1 matters — setjmp-clobber bugs (handlers reading
 # register-cached locals) only manifest when the optimizer register-allocates;
 # at -O0 they hide.
-$(ASANDIR)/%.o: %.c | $(ASANDIR)
+$(ASANDIR)/%.o: %.c $(ASAN_STAMP) | $(ASANDIR)
 	$(CC) $(ASANFLAGS) -MMD -MP -c $< -o $@
 
 -include $(wildcard $(OBJDIR)/*.d) $(wildcard $(ASANDIR)/*.d)
 
-$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/lineedit.o $(OBJDIR)/isocline.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) $(PTY_LIBS) -o $@
+$(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/lineedit.o $(OBJDIR)/isocline.o $(OBJDIR)/serve.o $(OBJDIR)/main.o $(LINK_STAMP)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.o,$^) $(LIBS) $(PTY_LIBS) -o $@
 
 # isocline is vendored, not ours: its own warning set, never -Werror (third_party/isocline/COZY.md)
-$(OBJDIR)/isocline.o: third_party/isocline/src/isocline.c $(wildcard third_party/isocline/src/*.[ch]) third_party/isocline/include/isocline.h | $(OBJDIR)
+$(OBJDIR)/isocline.o: third_party/isocline/src/isocline.c $(wildcard third_party/isocline/src/*.[ch]) third_party/isocline/include/isocline.h $(FLAGS_STAMP) | $(OBJDIR)
 	$(CC) -std=$(STD) -O2 -Wall -Wno-unused-function $(ISOCLINE_INC) -c $< -o $@
 
 # Headless test driver: same VM as `cozy`, but reads stdin line by line and
@@ -120,14 +143,14 @@ $(OBJDIR)/isocline.o: third_party/isocline/src/isocline.c $(wildcard third_party
 # numbers-out session API, for C programs that want the language as their
 # numerical engine. Link with -lm, plus whatever BACKEND and OPTIM add.
 lib: build/libcozy.a
-build/libcozy.a: $(CORE_O) $(OBJDIR)/embed.o
-	rm -f $@ && ar rcs $@ $^
+build/libcozy.a: $(CORE_O) $(OBJDIR)/embed.o $(LINK_STAMP)
+	rm -f $@ && ar rcs $@ $(filter %.o,$^)
 
-vmtest: $(CORE_O) $(OBJDIR)/vmtest.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
+vmtest: $(CORE_O) $(OBJDIR)/vmtest.o $(LINK_STAMP)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(filter %.o,$^) -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
 
-vmtest-asan: $(ASAN_O)
-	$(CC) $(ASANFLAGS) $^ -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
+vmtest-asan: $(ASAN_O) $(LINK_STAMP)
+	$(CC) $(ASANFLAGS) $(filter %.o,$^) -lm $(LINALG_LIBS) $(OPTIM_LIBS) -o $@
 
 # Regression suite: golden-output tests in tests/*.test (see tests/run.sh),
 # plus bytecode-disassembly goldens in tests/dis/ (see tests/run_dis.sh).
@@ -201,9 +224,9 @@ PREFIX ?= $(HOME)/.local
 # nlopt.h, with the brew prefix on macOS) unless BACKEND= / OPTIM= were
 # given explicitly. Plain `make` stays tier0: the charter's floor is
 # untouched; install is where ambition lives. Hash-free probes: macOS
-# ships GNU make 3.81. The build is cleaned first so stale objects from
-# another configuration can never be linked (the install-time twin of
-# the "equal mtimes" trap).
+# ships GNU make 3.81. No clean first since 0.1.55: the configuration
+# builds in its own object tree (build/obj-BACKEND-OPTIM) and the link
+# stamp relinks, so your everyday tier0 tree survives an install.
 ifeq ($(origin BACKEND),command line)
   INST_BACKEND = $(BACKEND)
 else ifeq ($(shell uname -s),Darwin)
@@ -234,7 +257,6 @@ install:
 	@echo "install: building BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM)"
 	@if [ "$(INST_BACKEND)" = tier0 ]; then echo "install: NOTE no OpenBLAS found (sudo apt install libopenblas-dev for LAPACK speed)"; fi
 	@if [ "$(INST_OPTIM)" = none ]; then echo "install: NOTE no NLopt found (libnlopt-dev / brew install nlopt for the professional optimizer)"; fi
-	$(MAKE) clean
 	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) $(BIN)
 	$(MAKE) BACKEND=$(INST_BACKEND) OPTIM=$(INST_OPTIM) install-files
 

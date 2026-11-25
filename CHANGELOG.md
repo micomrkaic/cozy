@@ -1,5 +1,21 @@
 # Cozy changelog
 
+## 0.1.55 — no more `make clean` between configurations
+
+### Fixed
+- **`make install` then `make test` failed to link** with
+  `undefined reference to nlopt_create`. Install builds with OpenBLAS and
+  NLopt, plain `make` builds tier0, and both shared `build/obj/`: make saw
+  an up-to-date `eval.o` (the NLopt one) and linked it without `-lnlopt`.
+  Each BACKEND/OPTIM pair now builds in its own tree,
+  `build/obj-BACKEND-OPTIM/`. A flags stamp in each tree recompiles it when
+  `CC` or `CFLAGS` change, and a link stamp relinks `cozy`, `vmtest` and
+  `libcozy.a` whenever the configuration differs from the last link.
+  Switching back and forth costs a relink, not a rebuild, and `make install`
+  no longer cleans (your everyday tier0 objects survive it). CI now builds
+  openblas+nlopt, then tier0, then openblas+nlopt again without a clean and
+  checks which one it linked.
+
 ## 0.1.54 — make install brings the books
 
 ### Fixed

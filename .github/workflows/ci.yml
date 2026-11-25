@@ -36,6 +36,13 @@ jobs:
         run: make clean && make -j4 && make test
       - name: openblas+nlopt suite
         run: make clean && make BACKEND=openblas OPTIM=nlopt -j4 && make BACKEND=openblas OPTIM=nlopt test
+      - name: switching configurations needs no clean
+        run: |
+          make BACKEND=openblas OPTIM=nlopt -j4 cozy
+          make -j4 cozy vmtest
+          ! ldd ./cozy | grep -q nlopt
+          make BACKEND=openblas OPTIM=nlopt -j4 cozy
+          ldd ./cozy | grep -q nlopt
       - name: sanitizers
         run: make test-asan
       - name: install smoke

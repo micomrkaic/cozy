@@ -365,6 +365,18 @@ evicts previously-committed artifacts with git rm --cached); and when
 a link fails strangely, first read the build log for the object that
 was never compiled. Remedy on any poisoned clone: make clean.
 
+### Trap: two configurations, one object tree (fourth costume)
+
+0.1.54: make install (openblas+nlopt) then a plain make test (tier0)
+died on "undefined reference to nlopt_create". Both builds wrote
+build/obj/; eval.o compiled with -DCOZY_NLOPT was newer than eval.c, so
+tier0 reused it and linked without -lnlopt. Timestamps cannot see flags.
+Law (0.1.55): every configuration gets its own object tree
+(build/obj-BACKEND-OPTIM), every tree a flags stamp (CC + CFLAGS, its
+mtime moved only when the content changes), and the binaries a link
+stamp. Anything that changes what a .o means must be in a stamp or in
+the directory name — never only in a command-line variable.
+
 ### Recipe drift: Ubuntu 24's time64 renames
 
 The emscripten recipe's clang-15 runtime libs now carry t64 suffixes:
