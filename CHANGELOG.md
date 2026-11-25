@@ -1,5 +1,28 @@
 # Cozy changelog
 
+## 0.1.57 — the cursor blinks to the open paren; small LAPACK calls on one thread
+
+### Added
+- **Blink-matching-paren, as readline had it.** Typing `)`, `]` or `}`
+  puts the cursor on the matching opening bracket for half a second, then
+  back. A key typed meanwhile ends the blink and is kept; fast typing and
+  pastes never wait (if a key is already pending there is no blink). In
+  the terminal and in the browser. Vendored isocline change, recorded in
+  third_party/isocline/COZY.md; checked at a real pty by
+  tests/run_lineedit.py.
+
+### Fixed
+- **Small dense linear algebra was slow with OpenBLAS** — `inv(rand(100))`
+  took 5-50 ms at the REPL on a many-core laptop, about what
+  `inv(rand(1000))` takes. OpenBLAS threads LU from 100x100 up, and each
+  threaded call wakes its whole worker pool; from idle, on a CPU in deep
+  power-saving states, that wake costs far more than the 0.3 ms of work.
+  The OpenBLAS backend now runs LAPACK calls on matrices smaller than
+  160x160 on one thread (restoring the thread count afterwards) and
+  leaves larger ones and matrix multiplication to OpenBLAS's own
+  threading. Measured on 4 cores: one thread is as fast or faster below
+  160, threads win from 200. Accelerate builds are unchanged.
+
 ## 0.1.56 — help(dist): quotes optional everywhere
 
 ### Changed

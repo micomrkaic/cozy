@@ -48,6 +48,31 @@ extern void zgesdd_(const char *jobz, const int *m, const int *n, double *a,
 extern void zpotrf_(const char *uplo, const int *n, double *a, const int *lda,
                     int *info);
 
+/* Small problems run on one thread (OpenBLAS only, 0.1.57). OpenBLAS
+ * threads LU from 100x100 up (m*n >= 10000), and every threaded call wakes
+ * the whole worker pool: on a laptop with many cores and deep idle states
+ * that cost 5-50 ms per call at the REPL, for a 100x100 inverse that takes
+ * 0.3 ms on one core. Below OB_SMALL_N the call drops to one thread and
+ * the cleanup attribute restores the count on every return path. gemm is
+ * left alone: OpenBLAS sizes its own threading there. Accelerate (the
+ * other user of this file) manages its own threads and has no such call. */
+#ifdef COZY_OPENBLAS
+extern void openblas_set_num_threads(int);
+extern int  openblas_get_num_threads(void);
+#define OB_SMALL_N 160
+static int ob_single(void)
+{
+    int t = openblas_get_num_threads();
+    if (t <= 1) return 0;
+    openblas_set_num_threads(1);
+    return t;
+}
+static void ob_restore(int *t) { if (*t > 0) openblas_set_num_threads(*t); }
+#define OB_SMALL(n) __attribute__((cleanup(ob_restore))) int ob_saved_ = ((n) < OB_SMALL_N ? ob_single() : 0); (void)ob_saved_
+#else
+#define OB_SMALL(n) ((void)0)
+#endif
+
 /* row-major (r x c) -> new column-major buffer */
 static Cplx *to_cm(const Cplx *rm, uint32_t r, uint32_t c)
 {
@@ -66,6 +91,7 @@ static void from_cm(Cplx *rm, const Cplx *cm, uint32_t r, uint32_t c)
 
 static int ob_solve(Cplx *A, Cplx *B, uint32_t n, uint32_t m)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, M = (int)m, info = 0;
     Cplx *a = to_cm(A, n, n);
@@ -96,6 +122,7 @@ static void from_cm_d(double *A, const double *cm, uint32_t r, uint32_t c)
 }
 static int ob_solve_d(double *A, double *B, uint32_t n, uint32_t m)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, M = (int)m, info = 0;
     double *a = to_cm_d(A, n, n);
@@ -108,6 +135,7 @@ static int ob_solve_d(double *A, double *B, uint32_t n, uint32_t m)
 }
 static int ob_det_d(double *A, uint32_t n, double *out)
 {
+    OB_SMALL(n);
     if (n == 0) { *out = 1.0; return 0; }
     int N = (int)n, info = 0;
     int *ipiv = malloc((size_t)n * sizeof *ipiv);
@@ -125,6 +153,7 @@ static int ob_det_d(double *A, uint32_t n, double *out)
 
 static int ob_det(Cplx *A, uint32_t n, Cplx *out)
 {
+    OB_SMALL(n);
     if (n == 0) { *out = (Cplx){ 1, 0 }; return 0; }
     int N = (int)n, info = 0;
     int *ipiv = malloc((size_t)n * sizeof *ipiv);
@@ -145,6 +174,7 @@ static int ob_det(Cplx *A, uint32_t n, Cplx *out)
 
 static int ob_eig_herm(Cplx *A, uint32_t n, double *w, Cplx *V)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1, lrwork = -1, liwork = -1;
     Cplx *a = to_cm(A, n, n);
@@ -162,6 +192,7 @@ static int ob_eig_herm(Cplx *A, uint32_t n, double *w, Cplx *V)
 
 static int ob_eig_gen(const Cplx *A0, uint32_t n, Cplx *w, Cplx *V)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1;
     Cplx *a = to_cm(A0, n, n);
@@ -183,6 +214,7 @@ static int ob_eig_gen(const Cplx *A0, uint32_t n, Cplx *w, Cplx *V)
 static int ob_svd(const Cplx *A, uint32_t m, uint32_t n,
                   Cplx *U, double *s, Cplx *V)
 {
+    OB_SMALL((m > n ? m : n));
     uint32_t k = m < n ? m : n;
     if (k == 0) return 0;
     int M = (int)m, N = (int)n, K = (int)k, info = 0, lwork = -1;
@@ -216,6 +248,7 @@ static int ob_svd(const Cplx *A, uint32_t m, uint32_t n,
 
 static int ob_chol(const Cplx *A, uint32_t n, Cplx *L)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0;
     Cplx *a = to_cm(A, n, n);
@@ -246,6 +279,7 @@ extern void dpotrf_(const char *uplo, const int *n, double *a, const int *lda, i
 
 static int ob_eig_sym_d(double *A, uint32_t n, double *w, double *V)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1, liwork = -1;
     double *a = to_cm_d(A, n, n);
@@ -262,6 +296,7 @@ static int ob_eig_sym_d(double *A, uint32_t n, double *w, double *V)
 static int ob_svd_d(const double *A, uint32_t m, uint32_t n,
                     double *U, double *s, double *V)
 {
+    OB_SMALL((m > n ? m : n));
     if (m == 0 || n == 0) return 0;
     int M = (int)m, N = (int)n, K = m < n ? (int)m : (int)n, info = 0, lwork = -1;
     double *a = to_cm_d(A, m, n);
@@ -284,6 +319,7 @@ static int ob_svd_d(const double *A, uint32_t m, uint32_t n,
 }
 static int ob_chol_d(const double *A, uint32_t n, double *L)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0;
     double *a = to_cm_d(A, n, n);          /* symmetric: transpose immaterial */
@@ -334,6 +370,7 @@ extern void dgeev_(const char *jl, const char *jr, const int *n, double *a,
  * eigenvectors are v and conj(v). Real eigenvalues use one real column. */
 static int ob_eig_gen_d(const double *A, uint32_t n, Cplx *w, Cplx *V)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1;
     double *a = to_cm_d(A, n, n);
@@ -378,6 +415,7 @@ extern void zgees_(const char *jobvs, const char *sort, void *select, const int 
 
 static int ob_schur_d(const double *A, uint32_t n, double *T, double *U)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1, sdim = 0;
     double *a = to_cm_d(A, n, n);
@@ -399,6 +437,7 @@ static int ob_schur_d(const double *A, uint32_t n, double *T, double *U)
 
 static int ob_schur(const Cplx *A, uint32_t n, Cplx *T, Cplx *U)
 {
+    OB_SMALL(n);
     if (n == 0) return 0;
     int N = (int)n, info = 0, lwork = -1, sdim = 0;
     Cplx *a = to_cm(A, n, n);
@@ -432,6 +471,7 @@ extern void ztrsen_(const char *job, const char *compq, const int *select, const
 
 static int ob_ordschur_d(double *T, double *U, uint32_t n, const unsigned char *sel, uint32_t *k)
 {
+    OB_SMALL(n);
     *k = 0;
     if (n == 0) return 0;
     int N = (int)n, info = 0, m = 0, lwork = N > 1 ? N : 1, liwork = 1, iwork[1];
@@ -451,6 +491,7 @@ static int ob_ordschur_d(double *T, double *U, uint32_t n, const unsigned char *
 
 static int ob_ordschur(Cplx *T, Cplx *U, uint32_t n, const unsigned char *sel, uint32_t *k)
 {
+    OB_SMALL(n);
     *k = 0;
     if (n == 0) return 0;
     int N = (int)n, info = 0, m = 0, lwork = 1;

@@ -36,6 +36,12 @@ Built as one translation unit (`src/isocline.c` includes the rest) with
   in that time — macOS CI's pager test lost the "m" of "manual". Cozy
   paints nothing that needs the palette.
 
+- **Blink-matching-paren**, as in readline (`src/editline.c`,
+  `edit_blink_match`, 0.1.57): a typed closing brace puts the cursor on
+  its opening partner for up to 500 ms. A key typed meanwhile ends the
+  blink and is kept; when a key is already waiting (fast typing, a paste)
+  there is no blink at all. Upstream only colours the pair.
+
 - **The browser build** (`#if defined(__EMSCRIPTEN__)`, from 0.1.51): keys
   come from Cozy's `cozy_term_readbyte` (wasm_api.c), which suspends until
   the page delivers one; there is no termios, so raw mode is a flag and no
