@@ -361,6 +361,13 @@ let nc_init = fn sp, r -> (
   let e = eig(Zm * Zm' / T);
   let nm = numel(mon);
   let V = e.vectors[:, nm - r + 1 : nm];
+  % an eigenvector's sign is arbitrary, and LAPACKs differ: each factor is
+  % turned so that its largest weight is positive — the same estimate on
+  % every build (the bootstrap simulates from the loadings, so it matters)
+  for j = 1 : r do (
+    let v = V[:, j]; let k = find(abs(v) == max(abs(v)));
+    if v[k[1]] < 0 then (V[:, j] = -v) end
+  ) end;
   let f = V' * Zm;
   let Zr = nc_rows(st, Z);
   let Lam = zeros(m, r); let R = ones(m, 1);
@@ -621,22 +628,30 @@ let nc_sim = fn sp, p -> (
 % (Pfeffermann and Tiller, 2005) — B times: simulate data from the fitted
 % model with the real data's missing pattern, re-estimate by EM from the
 % fit's parameters, keep the estimate. The fit comes back carrying the
-% draws (f.boot); nowcast and path then add the spread of the nowcast
-% across them to the smoother's own variance: sd is the total, sdfilter
-% the old one (parameters known), sdparam the parameters' part. opts: B
+% draws (f.boot); nowcast and path then add the variance of the nowcast
+% across them to the smoother's own at the estimate (Hamilton, 1986):
+% sd^2 = sdfilter^2 + sdparam^2, sdfilter the old sd (parameters known),
+% sdparam the draws' spread — so the band never narrows. opts: B
 % (100 draws), seed (draw b uses rng(seed + b): results do not depend on
-% how the draws are split up — calls add to f.boot), maxit (200), tol (the
-% fit's). Draws whose EM failed are dropped and counted (f.boot.failed).
-% Each draw's EM starts at the fit's parameters: the directions it leaves
-% unconverged are the likelihood's flat ones, which barely move a nowcast
-% (on the weekly example the parameters' sd is 0.0195 at tol 1e-5, 0.0199
-% at 1e-8, forty times the work).
+% how the draws are split up — calls add to f.boot), steps (10 EM steps
+% per draw), or tol and maxit (200) to run each draw to a tolerance.
+% Draws whose EM failed are dropped and counted (f.boot.failed). Each
+% draw's EM starts at the fit's parameters, and a few steps are enough:
+% the directions they leave unconverged are the likelihood's flat ones,
+% which barely move a nowcast (on the weekly example the parameters' sd is
+% 0.0195 after 3, 5, 10 or 20 steps, and 0.0199 run to a tolerance of 1e-8,
+% at a hundred times the work). Fixed steps also make the result the same
+% on every machine to rounding: a tolerance can stop a draw one step
+% earlier or later on another BLAS.
 % e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.bootstrap(nowcast.fit(nowcast.data(Y)), {B = 5}); let n = nowcast.nowcast(f, "y1"); [f.boot.B == 5, n.sd >= n.sdfilter] %= [true, true]
 let nowcast_bootstrap = fn f, opts = {} -> (
   let B = nc_opt(opts, "B", 100);
   let seed = nc_opt(opts, "seed", 1);
-  let maxit = nc_opt(opts, "maxit", 200);
-  let tol = nc_opt(opts, "tol", nc_opt(f, "tol", 1e-5));
+  % a fixed number of EM steps per draw: the result then moves smoothly
+  % with rounding (a tolerance makes a draw stop one step earlier or later
+  % on another BLAS); with tol, each draw runs to it instead (up to maxit)
+  let tol = nc_opt(opts, "tol", -1);
+  let maxit = if tol < 0 then nc_opt(opts, "steps", 10) else nc_opt(opts, "maxit", 200) end;
   let m = size(f.params.Lam)[1]; let r = size(f.params.A)[1];
   let old = nc_opt(f, "boot", {B = 0, failed = 0, first = seed, A = zeros(r, 0), Q = zeros(r, 0), Lam = zeros(m, 0), R = zeros(m, 0)});
   let As = old.A; let Qs = old.Q; let Ls = old.Lam; let Rs = old.R; let nf = old.failed;
@@ -657,20 +672,20 @@ let nc_draw = fn f, b -> (
   {A = f.boot.A[:, k], Q = f.boot.Q[:, k], Lam = f.boot.Lam[:, k], R = f.boot.R[:, b]}
 )
 
-% internal: the bootstrap's mean variance and spread at cells (rows, cols)
-% of the model's fitted values: smooth Zr with every draw's parameters
+% internal: the spread across the bootstrap's draws of the model's fitted
+% values at cells (rows, cols): smooth Zr with every draw's parameters
 let nc_bootvar = fn f, st, Zr, rows, cols -> (
   let n = numel(rows); let B = f.boot.B;
-  let s1 = zeros(n, 1); let s2 = zeros(n, 1); let sv = zeros(n, 1);
+  let s1 = zeros(n, 1); let s2 = zeros(n, 1);
   for b = 1 : B do (
-    let s = ksmooth(Zr, nc_ssm(f, nc_draw(f, b), st), {fit = true});
+    let s = ksmooth(Zr, nc_ssm(f, nc_draw(f, b), st), {cov = false, fit = true});
     for q = 1 : n do (
       let y = s.yhat[rows[q], cols[q]];
-      s1[q] = s1[q] + y; s2[q] = s2[q] + y * y; sv[q] = sv[q] + s.ysd[rows[q], cols[q]] ^ 2
+      s1[q] = s1[q] + y; s2[q] = s2[q] + y * y
     ) end
   ) end;
   let mean1 = s1 / B;
-  {filt = sv / B, spread = max(s2 / B - mean1 .* mean1, 0) * B / max(B - 1, 1)}
+  {spread = max(s2 / B - mean1 .* mean1, 0) * B / max(B - 1, 1)}
 )
 
 % report(f): print how the estimation ended — converged, stopped at the
@@ -798,7 +813,7 @@ let nowcast_nowcast = fn f, name, t = 0 -> (
     let k = g.st.rowat[i, e];
     let bv = nc_bootvar(g, g.st, nc_rows(g.st, g.Z), [k], [e]);
     let sdp = g.sd[i] * sqrt(bv.spread[1]);
-    let sdt = g.sd[i] * sqrt(bv.filt[1] + bv.spread[1]);
+    let sdt = sqrt(sdf ^ 2 + sdp ^ 2);
     {value = g.state.value[i, e], sd = sdt, sdfilter = sdf, sdparam = sdp, sdnoise = sdn, sdpred = sqrt(sdt ^ 2 + sdn ^ 2),
      t = e, actual = g.Y[i, e], B = g.boot.B}
   ) else {value = g.state.value[i, e], sd = sdf, sdfilter = sdf, sdparam = 0, sdnoise = sdn, sdpred = sqrt(sdf ^ 2 + sdn ^ 2),
@@ -860,7 +875,7 @@ let nowcast_path = fn f, name, freq = "", agg = "" -> (
     let rows = (nr + sx.rowat[1, ends])'; 
     let bv = nc_bootvar(g, stx, Zr, rows, ends');
     sdparam = g.sd[i] * sqrt(bv.spread);
-    sd = g.sd[i] * sqrt(bv.filt + bv.spread)
+    sd = sqrt(sdfilter .^ 2 + sdparam .^ 2)
   ) end;
   % the series' own noise belongs to its published figures, at its own frequency only
   let sdn = if F == f.freqs[i] then g.sd[i] * sqrt(g.params.R[i]) else 0 end;

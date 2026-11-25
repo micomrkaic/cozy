@@ -293,7 +293,7 @@
       underneath solves for the whole factor path as one sparse linear system — Cozy's <code>ksmooth</code> — and the
       model is Cozy's <code>nowcast</code> package, running here as WebAssembly.</p>
     <p>The bands around the target's own figures are for the number that will be published: the uncertainty of the common
-      component given the data, plus the parameters' (a parametric bootstrap — simulate data from the fitted model with the
+      component given the data, plus the parameters' (the variance across a parametric bootstrap — simulate data from the fitted model with the
       real data's gaps, re-estimate, re-smooth; Pfeffermann and Tiller), plus the series' own noise. The finer-frequency
       tracker has no published figures, so its bands are the common component's and the parameters'.</p>
   </footer>
@@ -370,7 +370,7 @@ function cozyName(raw, idx) {
 /* the bundle the worker loads, with its content hash: a browser or CDN
    cache can never pair this page with an older engine. Stamped by
    tools/gen_dsge_page.py whenever docs/cozy.js changes; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=072405da0656";
+var COZY_BUNDLE = "cozy.js?v=02b14ee9cc4a";
 const Engine = (() => {
   const WORKER = `
     self.window = self;

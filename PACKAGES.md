@@ -1026,7 +1026,7 @@ uncertainty: `nowcast.bootstrap(f, {B = 50})` adds it by the parametric
 bootstrap (Pfeffermann and Tiller) — simulate data from the fitted model
 with the real data's gaps, re-estimate, re-smooth the real data with each
 draw — and `nowcast` and `path` then fold the draws' spread into `sd`
-(`sdfilter` and `sdparam` are the parts). The second matters more for a
+(`sd^2 = sdfilter^2 + sdparam^2`, Hamilton's form: the band never narrows). The second matters more for a
 published figure: the series' own noise, `sdnoise`. `sdpred`, the root of
 `sd^2 + sdnoise^2`, is the band to put around a nowcast of the number that
 will be released. The last lines of the weekly transcript above give, for

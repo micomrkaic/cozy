@@ -6,13 +6,16 @@
 - **`nowcast.bootstrap(f, opts)`: parameter uncertainty** by the parametric
   bootstrap (Pfeffermann and Tiller). For each of B draws (default 100):
   simulate data from the fitted model with the real data's gaps,
-  re-estimate by EM from the fit's parameters, and re-smooth the real data
-  with the draw. `nowcast` and `path` then fold the draws' spread into `sd`
-  (`sdfilter` and `sdparam` are the parts). Draw b uses `rng(seed + b)`, so
+  re-estimate by EM from the fit's parameters (ten steps, a fixed number:
+  a tolerance would let a draw stop a step apart on another BLAS, and the
+  bands differ in the third digit), and re-smooth the real data with the
+  draw. `nowcast` and `path` then fold the draws' spread into `sd`
+  (`sdfilter` and `sdparam` are the parts; their variances add, Hamilton's
+  1986 form, so the band never narrows). Draw b uses `rng(seed + b)`, so
   draws can be added in pieces and repeat exactly; a draw whose EM failed is
   dropped and counted. Starting each draw at the fit's parameters is enough:
-  on the weekly example the parameters' sd is 0.0195 at the fit's tolerance
-  and 0.0199 at 1e-8 (forty times the work).
+  on the weekly example the parameters' sd is 0.0195 after 3, 5, 10 or 20
+  steps and 0.0199 run to a tolerance of 1e-8 (a hundred times the work).
 - **`sdnoise` and `sdpred`.** The band for a figure that will be published
   must include the series' own noise, not only the common component:
   `sdpred` = sqrt(sd^2 + sdnoise^2), from `nowcast` and, at the series' own
@@ -30,8 +33,14 @@
   bands; the browser test checks it.
 
 ### Changed
-- `fit`'s EM loop is now `nc_em`, shared with the bootstrap; fits are
-  unchanged.
+- `fit`'s EM loop is now `nc_em`, shared with the bootstrap.
+- **The factors' sign is fixed**: the principal-components start turns each
+  factor so its largest weight is positive. An eigenvector's sign is
+  arbitrary and LAPACKs differ, so OpenBLAS builds estimated the mirror
+  image of the reference build's factor. Nowcasts were the same, but the
+  bootstrap, which simulates from the loadings, drew different data and
+  the bands differed by 6%. CI's cross-build page test caught it: the
+  OpenBLAS build's script against the browser's engine.
 
 ## 0.1.59 — nowcasting with weekly and daily data, GDP week by week, and a convergence report
 
