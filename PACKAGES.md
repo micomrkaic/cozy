@@ -960,10 +960,80 @@ formula taken literally — both to 1e-15 (`tests/ref_nowcast.py`,
 time and across series, and the factors follow a VAR(1); both are the
 first generalizations a production desk would ask for.
 
+**Weekly data, and GDP week by week** (0.1.59). A panel can be weekly:
+one column per week, dated by the week's last day. Monthly and quarterly
+series sit in the last week of their month or quarter and load on exactly
+its weeks — a month has four or five, a quarter thirteen or fourteen, and
+each length is its own measurement row sharing the series' loading — with
+the same two aggregations, `"mm"` (growth of the period's average level,
+the factor a growth per week) or `"mean"`, now chosen per series.
+`data/nowcast_weekly.csv` is the page's weekly example as one table: a
+stock index and a credit spread (daily, averaged to weeks), three weekly
+indicators, five monthly ones and quarterly GDP, simulated from a weekly
+factor with each series ending where its release calendar puts it on 20
+November 2025. `nowcast.panel` reads the base frequency from the dates and
+each series' frequency from where its values sit; `nowcast.transform` takes
+the panel, so a monthly series' change is on its previous month:
+
+```
+cozy> load("nowcast")
+cozy> let d = nowcast.panel(readtable("data/nowcast_weekly.csv")); size(d.Y)
+[11, 464]
+cozy> d.freqs'
+["weekly", "weekly", "weekly", "weekly", "weekly", "monthly", "monthly", "monthly", "monthly", "monthly", "quarterly"]
+cozy> let codes = ["logdiff"; "level"; "level"; "logdiff"; "logdiff"; "pct"; "pct"; "diff"; "level"; "diff"; "pct"];
+cozy> let d = setfield(d, "Y", nowcast.transform(d.Y, codes, d));
+cozy> let agg = ["mean"; "mean"; "mean"; "mean"; "mean"; "mm"; "mm"; "mean"; "mean"; "mean"; "mm"];
+cozy> let f = nowcast.fit(d, {agg = agg});
+cozy> nowcast.report(f)
+  EM converged
+    converged after 130 iterations (relative change 9.8e-06, tolerance 1.0e-05)
+    log-likelihood -3004.25 at the start, -2837.99 at the end (130 iterations)
+    no warnings
+cozy> format(3); let n = nowcast.nowcast(f, "gdp"); [n.value, n.sd]
+[1.04, 0.0415]
+cozy> datestr(d.dates[1] + 7 * (n.t - 1))
+"2026-01-03"
+cozy> let pm = nowcast.path(f, "gdp", "monthly"); let k = numel(pm.value); pm.value[k - 2 : k]
+[0.247, 0.367, 0.389]
+cozy> datestr(pm.dates[k])
+"2025-11-29"
+cozy> let pw = nowcast.path(f, "gdp", "weekly"); numel(pw.value)
+464
+```
+
+The default nowcast is the quarter holding the panel's last week (its last
+week, 3 January 2026, is past the data: the panel is extended for it).
+`nowcast.path(f, name, freq)` is the target at any frequency from the
+panel's own up — GDP month by month above, week by week in `pw` (a growth
+per week for an `"mm"` series; a weekly reading in the series' own units
+for `"mean"`), quarter by quarter with the published values beside it —
+each with its standard error, the same model read through other weights.
+The true weekly growth the example was built from is in
+`data/nowcast_weekly_truth.csv`: the weekly path follows it at a
+correlation of 0.92 with one factor. Daily data enter averaged to weeks;
+a daily model is not offered, since aggregation windows of a month or a
+quarter of days make each EM step seconds long, and the averages carry
+the signal.
+
+**Did the EM work?** `fit` records how it ended: `f.status` is
+`"converged"`, `"maxit"` (stopped at the iteration limit) or `"failed"` —
+a log-likelihood that fell or stopped being finite, or an M-step that
+broke the model — and a failed fit keeps the last good parameters.
+`f.message` says what happened, `f.warnings` lists what a converged fit
+can still get wrong (factors that are not stationary, a series fitted
+exactly — a duplicate, or the factor itself), and `nowcast.report(f)`
+prints all of it, as above.
+
 The same package drives a page: [nowcast.html](https://micomrkaic.github.io/cozy/nowcast.html)
-takes a spreadsheet (CSV or Excel, monthly and quarterly series together,
-most date styles), runs everything above in the browser, and hands back
-the script — `nowcast.transform` included — that reproduces its numbers.
+takes spreadsheets (CSV or Excel; daily, weekly, monthly and quarterly
+series in one file or several, most date styles), runs everything above in
+the browser — weekly or monthly, with GDP tracked at every frequency the
+data allow and a convergence report — and hands back the script,
+`nowcast.transform` included, that reproduces its numbers. Its examples
+are a monthly panel, the weekly tracker above, and a panel with the
+missing data a real one has (`data/nowcast_missing.csv`: a late start, a
+suspended survey, a discontinued series, irregular releases).
 
 In the table, `d` is the full panel (all 120 months, the same names) and `f` its fit.
 
@@ -977,6 +1047,9 @@ In the table, `d` is the full panel (all 120 months, the same names) and `f` its
 | `nowcast.update(f, Ynew)` | `size(nowcast.update(f, nowcast.extend(Y, 3)).state.yhat)` | `[6, 123]` |
 | `nowcast.extend(Y, h)` | `size(nowcast.extend(Y, 3))` | `[6, 123]` |
 | `nowcast.news(f, Ynew, name, t)` | `let Y2 = Y; Y2[1, 120] = Y[1, 120] + 1; nowcast.news(f, Y2, "gdp").revisions[1]` | `0.194` |
+| `nowcast.path(f, name, freq)` | `numel(nowcast.path(f, "gdp", "quarterly").value)` | `40` |
+| `nowcast.report(f)` | `f.status` | `"converged"` |
+| `nowcast.transform(Y, codes, d)` | `nowcast.transform([100, 104], ["pct"], [0])` | `[nan, 4.00]` |
 
 ## Writing your own
 

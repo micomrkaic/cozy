@@ -3,44 +3,76 @@
 %
 %   let d = nowcast.panel(readtable("data.csv"))   % date column + one per series
 %   let f = nowcast.fit(d, {r = 2})                 % PCA start, then EM
-%   nowcast.nowcast(f, "gdp")                       % {value, sd, period, ...}
+%   nowcast.report(f)                               % did the EM converge?
+%   nowcast.nowcast(f, "gdp")                       % {value, sd, t, actual}
+%   nowcast.path(f, "gdp", "monthly")               % GDP month by month
 %   let f2 = nowcast.update(f, d2.Y)                % new data, same parameters
 %   nowcast.news(f, d2.Y, "gdp")                    % what moved the nowcast, by series
 %
-% The model, on standardized data (each series minus its mean, over its sd):
+% The panel has a base frequency, monthly (the default) or weekly: one
+% column per month or per week (a weekly panel is dated by the last day of
+% each week). Each series is observed at the base frequency or a lower one
+% (monthly, quarterly) and sits in the last base period of its own period,
+% NaN in the others. The model, on standardized data:
 %
-%     f_t = A f_{t-1} + e_t,                 e_t ~ N(0, Q)       (r factors, monthly)
-%     y_it = lambda_i' f_t + u_it                                (a monthly series)
-%     y_it = lambda_i' (w_0 f_t + w_1 f_{t-1} + ... ) + u_it      (a quarterly series)
+%     f_t = A f_{t-1} + e_t,                 e_t ~ N(0, Q)       (r factors, base frequency)
+%     y_it = c_i + sd_i (lambda_i' f_t + u_it)                    (a base-frequency series)
+%     y_it = c_i sum_k w_k + sd_i (lambda_i' sum_k w_k f_{t-k} + u_it)   (a lower-frequency one)
 %     u_it ~ N(0, R_i), independent across series
 %
-% A quarterly series sits in its quarter's third month, NaN in the other
-% two, and loads on its months through fixed weights w: "mm" (Mariano and
-% Murasawa, 1 2 3 2 1 over 3 — quarterly growth of a monthly growth factor;
-% the default) or "mean" (1 1 1 over 3 — a quarterly average). The weights
-% are measurement lags of the smoother, so the state is just the r factors.
-% Missing values are NaN anywhere: ragged edges, gaps, short histories.
+% The weights w aggregate the base periods of the series' period, exactly
+% by the calendar — a month has four or five weeks, a quarter thirteen or
+% fourteen. "mean": the period is the average of its base periods (a level,
+% a rate, a growth rate already at the period's own frequency). "mm": the
+% series is the growth of the period's average level, and the base factor
+% a growth per base period (Mariano and Murasawa: 1 2 3 2 1 over 3 for a
+% quarter of months; the same construction for any calendar). The weights
+% are measurement lags of the smoother, so the state is just the r factors;
+% periods of different lengths are measurement rows that share the
+% series' loading and variance. Missing values are NaN anywhere: ragged
+% edges, gaps, short histories, discontinued series. An observation whose
+% period reaches back before the panel starts is not used.
 %
 % Estimation is the Gaussian EM of Banbura and Modugno (2014) for this
 % model (iid idiosyncratic errors): the E-step is one ksmooth with stats =
-% true, the M-step closed form, and the log-likelihood never falls. The
-% prior on f_0 is the stationary distribution of the starting parameters,
-% held fixed so that the EM is exact. The news decomposition is exact: for
+% true, the M-step closed form (pooled over a series' rows), and the
+% log-likelihood never falls. The prior on f_0 is the stationary
+% distribution of the starting parameters, held fixed so that the EM is
+% exact. fit records how the EM ended — converged, stopped at the
+% iteration limit, or failed (a log-likelihood that fell or stopped being
+% finite, an M-step that broke the model), keeping the last good
+% parameters — and report prints it. The news decomposition is exact: for
 % fixed parameters the nowcast is linear in the data, so each series'
-% contribution is one more smoothing run (Banbura and Modugno's weights,
-% without forming them). Cross-checked against a dense numpy reference
-% and the simksmoother package; see tests/87_nowcast.test.
+% contribution is one more smoothing run. Cross-checked against a dense
+% numpy reference and the simksmoother package; see tests/87_nowcast.test.
 %
 % Helpers are prefixed nc_; keep() must spare them.
 
 % internal: the value of field k of record r, or dflt when absent
 let nc_opt = fn r, k, dflt -> if any(fields(r) == k) then getfield(r, k) else dflt end
 
-% internal: aggregation weights for a quarterly series, as a row
-let nc_weights = fn agg -> (
-  if agg == "mm" then [1, 2, 3, 2, 1] / 3
-  elseif agg == "mean" then [1, 1, 1] / 3
-  else error("nowcast: agg must be \"mm\" or \"mean\", got \"{}\"", agg) end
+% internal: the frequencies a panel knows, finest first
+let nc_freqs = ["weekly"; "monthly"; "quarterly"]
+
+% internal: a frequency's place in nc_freqs (1 = finest), or an error naming the known ones
+let nc_rank = fn F -> (
+  let k = find(nc_freqs == F);
+  if numel(k) == 0 then error("nowcast: unknown frequency \"{}\" (weekly, monthly, quarterly)", F) end;
+  k[1]
+)
+% internal: periods per year at a frequency (for "yoy")
+let nc_peryear = fn F -> if F == "weekly" then 52 elseif F == "monthly" then 12 else 4 end
+
+% internal: an r x c array of integer zeros (index-typed, unlike zeros)
+let nc_izeros = fn r, c -> if r * c == 0 then find(zeros(r, c) > 0) else 0 * reshape(1 : r * c, r, c) end
+
+% internal: a logical array as 0/1 numbers
+let nc_num = fn b -> (let z = zeros(size(b)[1], size(b)[2]); z[find(b)] = 1; z)
+
+% internal: check an aggregation name
+let nc_aggok = fn agg -> (
+  if (agg != "mm") && (agg != "mean") then error("nowcast: agg must be \"mm\" or \"mean\", got \"{}\"", agg) end;
+  agg
 )
 
 % internal: the position of series name in a fit or panel
@@ -50,26 +82,169 @@ let nc_index = fn d, name -> (
   k[1]
 )
 
-% internal: mean and sd of each row, omitting NaN
-let nc_scale = fn Y -> (
-  let m = size(Y)[1];
-  let mu = zeros(m, 1); let sd = ones(m, 1);
-  for i = 1 : m do (
-    let y = Y[i, :];
-    let ok = find(!isnan(y));
-    if numel(ok) == 0 then error("nowcast: series {} has no observations", i) end;
-    mu[i] = mean(y[ok]);
-    if numel(ok) > 1 then (let s = std(y[ok]); if s > 0 then (sd[i] = s) end) end
+% internal: the calendar of a panel — base frequency, the Date of period 1
+% (if dated), and the month number of period 1 for a monthly panel
+let nc_cal = fn d -> (
+  let base = d.freq;
+  let hasd = numel(d.dates) > 0;
+  if (base == "weekly") && !hasd then error("nowcast: a weekly panel needs dates, the last day of each week (opts.dates)") end;
+  let d1 = if hasd then d.dates[1] else 0 end;
+  let m0 = 0;
+  if base == "monthly" then (
+    if hasd then (m0 = year(d1) * 12 + month(d1) - 1)
+    else (
+      % undated: put the quarter ends where the quarterly series are observed
+      let q = find(d.freqs == "quarterly");
+      if numel(q) > 0 then (
+        let first = 0;
+        for i = 1 : numel(q) do (
+          let ok = find(!isnan(d.Y[q[i], :]));
+          if (numel(ok) > 0) && ((first == 0) || (ok[1] < first)) then (first = ok[1]) end
+        ) end;
+        if first > 0 then (m0 = mod(2 - (first - 1), 3)) end
+      ) end
+    ) end
   ) end;
-  {mu = mu, sd = sd}
+  {base = base, hasd = hasd, d1 = d1, m0 = m0, dates = d.dates}
+)
+
+% internal: the period number at frequency F of base periods t (a row;
+% any t, before the panel or after it)
+let nc_pid = fn cal, F, t -> (
+  if F == cal.base then t
+  elseif cal.base == "monthly" then floor((cal.m0 + t - 1) / 3)
+  else (
+    let dd = cal.d1 + 7 * (t' - 1) - 3;
+    let mid = (year(dd) * 12 + month(dd) - 1)';
+    if F == "monthly" then mid else floor(mid / 3) end
+  ) end
+)
+
+% internal: the Date of base period t (NaN for an undated panel)
+let nc_date = fn cal, t -> (
+  if !cal.hasd then 0 / 0
+  elseif t <= numel(cal.dates) then cal.dates[t]
+  elseif cal.base == "weekly" then cal.d1 + 7 * (t - 1)
+  else (
+    let mid = year(cal.d1) * 12 + month(cal.d1) + t - 1;    % the next month, whose first day ends ours
+    date(floor(mid / 12), mod(mid, 12) + 1, 1) - 1
+  ) end
+)
+
+% internal: the aggregation weights of the period ending at base period e
+% (lag 0 first), from the period numbers P over base periods lo .. lo+n-1
+let nc_wvec = fn P, lo, e, base, F, agg -> (
+  if F == base then [1]
+  else (
+    let at = fn t -> P[t - lo + 1];
+    let p = at(e);
+    let s = e;
+    while at(s - 1) == p do s = s - 1 end;
+    let nc = e - s + 1;
+    if agg == "mean" then ones(1, nc) / nc
+    else (
+      let a = s - 1;
+      while at(a - 1) == p - 1 do a = a - 1 end;
+      let np = s - a;
+      let w = zeros(1, e - a);
+      for j = s : e do (w[e - j + 1] = (e - j + 1) / nc) end;
+      for j = a + 1 : s - 1 do (w[e - j + 1] = (j - a) / np) end;
+      w
+    ) end
+  ) end
+)
+
+% internal: the measurement structure of a panel of T base periods — one
+% row per series and distinct weight pattern. Returns W (rows x L), rser
+% (each row's series), rowat (series x T: the row that measures the series
+% in period t, 0 for none) and sumw (series x T: that row's weight sum).
+let nc_struct = fn cal, freqs, aggs, T -> (
+  let m = numel(freqs);
+  let pad = if cal.base == "monthly" then 8 else 32 end;
+  let lo = 1 - pad;
+  let tt = lo : T + 2;
+  let Pm = if cal.base == "weekly" then nc_pid(cal, "monthly", tt) else tt end;
+  let Pq = nc_pid(cal, "quarterly", tt);
+  let cap = m * T + 1;
+  let pats = zeros(0, 1); let plen = nc_izeros(cap, 1); let rser = nc_izeros(cap, 1);
+  let rowat = nc_izeros(m, T); let sumw = zeros(m, T); let isend = zeros(m, T);
+  let nr = 0;
+  for i = 1 : m do (
+    let F = freqs[i];
+    let P = if F == cal.base then tt elseif F == "monthly" then Pm else Pq end;
+    let mine = nc_izeros(T + 1, 1); let nm = 0;   % this series' rows
+    for e = 1 : T do (
+      let isend_t = P[e - lo + 2] != P[e - lo + 1];
+      if isend_t then (
+        isend[i, e] = 1;
+        let w = nc_wvec(P, lo, e, cal.base, F, aggs[i]);
+        let L = numel(w);
+        if e - L + 1 >= 0 then (
+          % the row with this pattern, or a new one
+          let k = 0;
+          for j = 1 : nm do (
+            let rj = mine[j];
+            if (k == 0) && (plen[rj] == L) then (
+              if max(abs(pats[rj, 1 : L] - w)) < 1e-12 then (k = rj) end
+            ) end
+          ) end;
+          if k == 0 then (
+            nr = nr + 1; k = nr;
+            let wide = max(size(pats)[2], L);
+            let grown = zeros(nr, wide);
+            if nr > 1 then (grown[1 : nr - 1, 1 : size(pats)[2]] = pats) end;
+            grown[nr, 1 : L] = w;
+            pats = grown;
+            plen[k] = L; rser[k] = i; nm = nm + 1; mine[nm] = k
+          ) end;
+          rowat[i, e] = k; sumw[i, e] = sum(w)
+        ) end
+      ) end
+    ) end;
+    % a series measured by one pattern only has it in every period (the
+    % monthly model's quarterly series: a rolling quarter between the ends)
+    if (nm == 1) && (F != cal.base) then (
+      let k = mine[1];
+      for t = plen[k] - 1 : T do (if (t >= 1) && (rowat[i, t] == 0) then (rowat[i, t] = k; sumw[i, t] = sum(pats[k, :])) end) end
+    ) end
+  ) end;
+  {W = pats, rser = reshape(rser[1 : nr], nr, 1), rowat = rowat, sumw = sumw, isend = isend, T = T}
+)
+
+% internal: series x T standardized data to the rows that measure them
+let nc_rows = fn st, Z -> (
+  let nr = numel(st.rser); let T = st.T;
+  let Zr = (0 / 0) * ones(nr, T);
+  for k = 1 : nr do (
+    let i = st.rser[k];
+    let on = st.rowat[i, :] == k;
+    Zr[k, on] = Z[i, on]
+  ) end;
+  Zr
+)
+
+% internal: rows x T fitted values back to the series, NaN where no row measures it
+let nc_unrows = fn st, X -> (
+  let m = size(st.rowat)[1]; let T = st.T;
+  let out = (0 / 0) * ones(m, T);
+  for k = 1 : numel(st.rser) do (
+    let i = st.rser[k];
+    let on = st.rowat[i, :] == k;
+    out[i, on] = X[k, on]
+  ) end;
+  out
 )
 
 % panel(t, opts): a nowcasting panel from a table — a readtable record with
 % a date column (opts.date, default "date") and one numeric column per
-% series, monthly rows. A series observed only in March, June, September
-% and December is taken as quarterly. Returns {Y, names, dates, quarterly}
-% with Y series x months; nowcast.data builds the same from a matrix.
+% series, one row per month or per week (the base frequency, opts.freq,
+% read from the dates when not given; a weekly panel is dated by the last
+% day of each week, seven days apart). A series observed only in the last
+% base period of months is monthly, only in quarters' last, quarterly
+% (opts.freqs = {gdp = "quarterly"} overrides). Returns {Y, names, dates,
+% freq, freqs, quarterly} with Y series x base periods.
 % e.g. let p = nowcast.panel({date = [date(2024, 1, 31); date(2024, 2, 29); date(2024, 3, 31)], ip = [1.0; 2; 3], gdp = [0/0; 0/0; 5]}); p.quarterly' %= [0, 1]
+% e.g. let w = nowcast.panel({date = date(2024, 1, 7) + 7 * (0 : 8)', claims = (1.0 : 9)', ip = [0/0; 0/0; 0/0; 4; 0/0; 0/0; 0/0; 0/0; 6]}); [w.freq, w.freqs'] %= ["weekly", "weekly", "monthly"]
 let nowcast_panel = fn t, opts = {} -> (
   let dc = nc_opt(opts, "date", "date");
   let cols = fields(t);
@@ -78,41 +253,61 @@ let nowcast_panel = fn t, opts = {} -> (
   let keep = find(cols != dc);
   let names = cols[keep];
   let m = numel(keep); let T = numel(dates);
-  let Y = zeros(m, T); let q = zeros(m, 1);
-  let mo = month(dates);
-  for i = 1 : m do (
-    let col = getfield(t, names[i]);
-    Y[i, :] = col';
-    let ok = find(!isnan(col));
-    if numel(ok) > 0 then
-      if all(mod(mo[ok], 3) == 0) && numel(ok) < T then (q[i] = 1) end
-    end
+  let days = dates - dates[1];
+  let gap = if T > 1 then median(diff(days)) else 30 end;
+  let base = nc_opt(opts, "freq", if gap < 15 then "weekly" else "monthly" end);
+  if (base != "weekly") && (base != "monthly") then error("nowcast.panel: freq must be \"weekly\" or \"monthly\", got \"{}\"", base) end;
+  if (base == "weekly") && (T > 1) then (
+    if any(diff(days) != 7) then error("nowcast.panel: a weekly panel needs one row per week, seven days apart (average daily data to weeks first)") end
   ) end;
-  {Y = Y, names = names, dates = dates, quarterly = q}
+  let Y = zeros(m, T);
+  for i = 1 : m do (Y[i, :] = getfield(t, names[i])') end;
+  let cal = nc_cal({Y = Y, names = names, dates = dates, freq = base, freqs = (names ~> (fn s -> base))});
+  let tt = 1 : T + 1;
+  let ends = fn F -> (let P = nc_pid(cal, F, tt); P[2 : T + 1] != P[1 : T]);
+  let mend = if base == "weekly" then ends("monthly") else ones(1, T) > 0 end;
+  let qend = ends("quarterly");
+  let over = nc_opt(opts, "freqs", {});
+  let freqs = (names ~> (fn s -> base));
+  for i = 1 : m do (
+    let ok = find(!isnan(Y[i, :]));
+    let F = base;
+    if (numel(ok) > 0) && (numel(ok) < T) then (
+      if all(qend[ok]) then (F = "quarterly")
+      elseif (base == "weekly") && all(mend[ok]) then (F = "monthly") end
+    ) end;
+    if any(fields(over) == names[i]) then (F = getfield(over, names[i]); nc_rank(F)) end;
+    freqs[i] = F
+  ) end;
+  {Y = Y, names = names, dates = dates, freq = base, freqs = freqs, quarterly = nc_num(freqs == "quarterly")}
 )
 
-% data(Y, opts): a nowcasting panel from a series x months matrix. opts:
-% names (a string column; default y1, y2, ...), quarterly (one 0/1 per
-% series; default all monthly), dates (optional, one per month).
+% data(Y, opts): a nowcasting panel from a series x periods matrix. opts:
+% names (a string column; default y1, y2, ...), freq (the base, "monthly"
+% or "weekly"), freqs (one frequency per series, default all at the base;
+% or quarterly, one 0/1 per series, as before), dates (one Date per base
+% period; a weekly panel needs them).
 % e.g. nowcast.data([1, 2, 3; 0/0, 0/0, 4], {quarterly = [0; 1]}).names' %= ["y1", "y2"]
+% e.g. nowcast.data([1, 2, 3; 0/0, 0/0, 4], {freqs = ["monthly"; "quarterly"]}).quarterly' %= [0, 1]
 let nowcast_data = fn Y, opts = {} -> (
   let m = size(Y)[1];
   let names = nc_opt(opts, "names", (1 : m) ~> (fn k -> "y" + str(k)));
   let names = reshape(names, numel(names), 1);
   if numel(names) != m then error("nowcast.data: {} names for {} series", numel(names), m) end;
-  let q = nc_opt(opts, "quarterly", zeros(m, 1));
-  let q = reshape(q, numel(q), 1);
-  if numel(q) != m then error("nowcast.data: quarterly needs one 0/1 per series ({})", m) end;
-  {Y = Y, names = names, dates = nc_opt(opts, "dates", zeros(0, 1)), quarterly = q}
-)
-
-% internal: the m x L weight matrix (monthly rows [1, 0, ...])
-let nc_wmat = fn q, agg -> (
-  let w = nc_weights(agg);
-  let L = numel(w);
-  let W = zeros(numel(q), L);
-  for i = 1 : numel(q) do (if q[i] > 0 then (W[i, :] = w) else (W[i, 1] = 1) end) end;
-  W
+  let base = nc_opt(opts, "freq", "monthly");
+  if (base != "weekly") && (base != "monthly") then error("nowcast.data: freq must be \"weekly\" or \"monthly\", got \"{}\"", base) end;
+  let freqs = (names ~> (fn s -> base));
+  if any(fields(opts) == "freqs") then (
+    let fq = reshape(opts.freqs, numel(opts.freqs), 1);
+    if numel(fq) != m then error("nowcast.data: freqs needs one frequency per series ({})", m) end;
+    for i = 1 : m do (nc_rank(fq[i]); if nc_rank(fq[i]) < nc_rank(base) then error("nowcast.data: series {} is {}, more frequent than the {} panel", names[i], fq[i], base) end; freqs[i] = fq[i]) end
+  ) elseif any(fields(opts) == "quarterly") then (
+    let q = reshape(opts.quarterly, numel(opts.quarterly), 1);
+    if numel(q) != m then error("nowcast.data: quarterly needs one 0/1 per series ({})", m) end;
+    for i = 1 : m do (if q[i] > 0 then (freqs[i] = "quarterly") end) end
+  ) end;
+  let dates = nc_opt(opts, "dates", zeros(0, 1));
+  {Y = Y, names = names, dates = dates, freq = base, freqs = freqs, quarterly = nc_num(freqs == "quarterly")}
 )
 
 % internal: x as an r x c matrix (a scalar is 1 x 1)
@@ -130,12 +325,16 @@ let nc_params = fn p, m -> (
   {A = nc_mat(p.A, r, r), Q = nc_mat(p.Q, r, r), Lam = nc_mat(p.Lam, m, r), R = nc_mat(p.R, m, 1)}
 )
 
-% internal: the state-space model for ksmooth from the parameters
-let nc_ssm = fn sp, p -> (
-  let m = size(sp.W)[1]; let L = size(sp.W)[2]; let r = size(p.A)[1];
-  let H = zeros(m, r * L);
-  for k = 1 : L do H[:, (k - 1) * r + 1 : k * r] = (sp.W[:, k] * ones(1, r)) .* p.Lam end;
-  {F = p.A, Q = p.Q, H = H, R = p.R, P0 = sp.P0}
+% internal: the state-space model for ksmooth from the parameters, over
+% the rows of measurement structure st (extra rows: more of them, with
+% weights Wx and series rx — the targets of path)
+let nc_ssm = fn sp, p, st -> (
+  let W = st.W; let rs = st.rser;
+  let nr = size(W)[1]; let L = size(W)[2]; let r = size(p.A)[1];
+  let H = zeros(nr, r * L);
+  let Lr = p.Lam[rs, :];
+  for k = 1 : L do H[:, (k - 1) * r + 1 : k * r] = (W[:, k] * ones(1, r)) .* Lr end;
+  {F = p.A, Q = p.Q, H = H, R = p.R[rs], P0 = sp.P0}
 )
 
 % internal: the stationary covariance of f_t = A f_{t-1} + e, or 10 I
@@ -149,29 +348,39 @@ let nc_stat = fn A, Q -> (
   ) end
 )
 
-% internal: principal-components start — factors from the monthly series
-% (NaN as zero), loadings and variances by regression, a VAR(1) by OLS
-let nc_init = fn Z, W, q, r -> (
-  let m = size(Z)[1]; let T = size(Z)[2]; let L = size(W)[2];
-  let mon = find(q == 0);
-  if numel(mon) < r then error("nowcast: {} factors need at least {} monthly series (have {})", r, r, numel(mon)) end;
+% internal: principal-components start — factors from the base-frequency
+% series (NaN as zero), loadings and variances by regression on every
+% row of a series, a VAR(1) by OLS
+let nc_init = fn sp, r -> (
+  let Z = sp.Z; let st = sp.st;
+  let m = size(Z)[1]; let T = size(Z)[2];
+  let mon = find(sp.freqs == sp.freq);
+  if numel(mon) < r then error("nowcast: {} factors need at least {} {} series (have {})", r, r, sp.freq, numel(mon)) end;
   let Zm = Z[mon, :];
   Zm[isnan(Zm)] = 0;
   let e = eig(Zm * Zm' / T);
   let nm = numel(mon);
   let V = e.vectors[:, nm - r + 1 : nm];
   let f = V' * Zm;
+  let Zr = nc_rows(st, Z);
   let Lam = zeros(m, r); let R = ones(m, 1);
   for i = 1 : m do (
-    % the regressor: the factor through the series' weights (lags before t = 1 skipped)
-    let g = zeros(r, T);
-    for k = 1 : L do (
-      if W[i, k] != 0 then (g[:, k : T] = g[:, k : T] + W[i, k] * f[:, 1 : T - k + 1]) end
+    let G = zeros(r, 0); let y = zeros(1, 0);
+    let rows = find(st.rser == i);
+    for q = 1 : numel(rows) do (
+      let k = rows[q];
+      let L = size(st.W)[2];
+      let g = zeros(r, T);
+      for l = 1 : L do (
+        if st.W[k, l] != 0 then (g[:, l : T] = g[:, l : T] + st.W[k, l] * f[:, 1 : T - l + 1]) end
+      ) end;
+      let used = find(st.W[k, :] != 0);
+      let span = if numel(used) > 0 then used[numel(used)] else 1 end;
+      let ok = find(!isnan(Zr[k, :]));
+      let ok = ok[find(ok >= span)];
+      if numel(ok) > 0 then (G = [G, g[:, ok]]; y = [y, Zr[k, ok]]) end
     ) end;
-    let ok = find(!isnan(Z[i, :]));
-    let ok = ok[find(ok >= L * q[i] + 1)];
-    if numel(ok) > r then (
-      let G = g[:, ok]; let y = Z[i, ok];
+    if numel(y) > r then (
       let lam = (G * G') \ (G * y');
       Lam[i, :] = lam';
       let u = y - lam' * G;
@@ -184,125 +393,265 @@ let nc_init = fn Z, W, q, r -> (
   {A = A, Q = (Q + Q') / 2 + 1e-6 * eye(r), Lam = Lam, R = R}
 )
 
-% internal: one EM M-step from the sufficient statistics of ksmooth
-let nc_mstep = fn sp, p, st, T -> (
-  let m = size(sp.W)[1]; let L = size(sp.W)[2]; let r = size(p.A)[1]; let np = r * L;
-  let A = st.S10 / st.S00;
-  let Q = (st.S11 - A * st.S10') / T;
+% internal: one EM M-step from the sufficient statistics of ksmooth, the
+% rows of a series pooled (they share its loading and variance)
+let nc_mstep = fn sp, p, stats, T -> (
+  let st = sp.st;
+  let m = size(p.Lam)[1]; let L = size(st.W)[2]; let r = size(p.A)[1]; let np = r * L;
+  let A = stats.S10 / stats.S00;
+  let Q = (stats.S11 - A * stats.S10') / T;
   let Lam = p.Lam; let R = p.R;
   for i = 1 : m do (
-    if st.nT[i] > 0 then (
-      let Wk = kron(sp.W[i, :]', eye(r));
-      let Ss = Wk' * st.Sss[:, (i - 1) * np + 1 : i * np] * Wk;
-      let b = Wk' * st.Sys[i, :]';
+    let rows = find(st.rser == i);
+    let Ss = zeros(r, r); let b = zeros(r, 1); let syy = 0; let n = 0;
+    for q = 1 : numel(rows) do (
+      let k = rows[q];
+      if stats.nT[k] > 0 then (
+        let Wk = kron(st.W[k, :]', eye(r));
+        Ss = Ss + Wk' * stats.Sss[:, (k - 1) * np + 1 : k * np] * Wk;
+        b = b + Wk' * stats.Sys[k, :]';
+        syy = syy + stats.Syy[k]; n = n + stats.nT[k]
+      ) end
+    ) end;
+    if n > 0 then (
       let lam = Ss \ b;
       Lam[i, :] = lam';
-      R[i] = max((st.Syy[i] - b' * lam) / st.nT[i], sp.Rmin)
+      R[i] = max((syy - b' * lam) / n, sp.Rmin)
     ) end
   ) end;
   {A = A, Q = (Q + Q') / 2, Lam = Lam, R = R}
 )
 
 % internal: smooth with the parameters and keep what the nowcasts read
+% (series-level fitted values, standardized and in the data's units)
 let nc_smooth = fn sp, p -> (
-  let s = ksmooth(sp.Z, nc_ssm(sp, p), {fit = true});
-  {f = s.x, fsd = s.sd, yhat = s.yhat, ysd = s.ysd, loglik = s.loglik}
+  let st = sp.st;
+  let s = ksmooth(nc_rows(st, sp.Z), nc_ssm(sp, p, st), {fit = true});
+  let yhat = nc_unrows(st, s.yhat); let ysd = nc_unrows(st, s.ysd);
+  let T = st.T; let one = ones(1, T);
+  {f = s.x, fsd = s.sd, yhat = yhat, ysd = ysd, loglik = s.loglik,
+   value = (sp.c * one) .* st.sumw + (sp.sd * one) .* yhat, valuesd = (sp.sd * one) .* ysd}
 )
 
-% internal: a fit record from a panel, standardization and parameters
-let nc_make = fn d, opts, params -> (
-  let agg = nc_opt(opts, "agg", "mm");
-  let W = nc_wmat(d.quarterly, agg);
-  let stdz = nc_opt(opts, "standardize", true);
-  let sc = if stdz then nc_scale(d.Y) else {mu = zeros(size(d.Y)[1], 1), sd = ones(size(d.Y)[1], 1)} end;
+% internal: data in the units of a fit to standardized, over structure st
+let nc_std = fn sp, st, Y -> (
+  let T = size(Y)[2]; let one = ones(1, T);
+  (Y - (sp.c * one) .* st.sumw) ./ (sp.sd * one)
+)
+
+% internal: a fit record from a panel and options — calendar, measurement
+% structure, intercepts and scales
+let nc_make = fn d, opts -> (
   let m = size(d.Y)[1]; let T = size(d.Y)[2];
-  let Z = (d.Y - sc.mu * ones(1, T)) ./ (sc.sd * ones(1, T));
-  {names = d.names, dates = d.dates, quarterly = d.quarterly, agg = agg, W = W,
-   Y = d.Y, Z = Z, mu = sc.mu, sd = sc.sd, Rmin = nc_opt(opts, "Rmin", 1e-4)}
+  let freqs = nc_opt(d, "freqs", (d.names ~> (fn s -> "monthly")));
+  let d = setfield(setfield(d, "freqs", freqs), "freq", nc_opt(d, "freq", "monthly"));
+  let d = setfield(d, "dates", nc_opt(d, "dates", zeros(0, 1)));
+  let agg = nc_opt(opts, "agg", "mm");
+  let aggs = if numel(agg) == 1 then (d.names ~> (fn s -> agg)) else reshape(agg, numel(agg), 1) end;
+  if numel(aggs) != m then error("nowcast: agg needs one name, or one per series ({})", m) end;
+  for i = 1 : m do (nc_aggok(aggs[i])) end;
+  let cal = nc_cal(d);
+  let st = nc_struct(cal, d.freqs, aggs, T);
+  % every value must sit in the last base period of its own period
+  for i = 1 : m do (
+    let off = find(!isnan(d.Y[i, :]) & (st.isend[i, :] == 0));
+    if numel(off) > 0 then
+      error("nowcast: series {} ({}) has a value in period {} that is not the last {} of its {}", d.names[i], d.freqs[i], off[1],
+            if d.freq == "weekly" then "week" else "month" end, if d.freqs[i] == "monthly" then "month" else "quarter" end)
+    end
+  ) end;
+  let stdz = nc_opt(opts, "standardize", true);
+  let c = zeros(m, 1); let sd = ones(m, 1);
+  if stdz then (
+    for i = 1 : m do (
+      let ok = find(!isnan(d.Y[i, :]) & (st.sumw[i, :] > 0));
+      if numel(ok) == 0 then error("nowcast: series {} has no observations", i) end;
+      let y = d.Y[i, ok]; let w = st.sumw[i, ok];
+      c[i] = mean(y) / mean(w);
+      let u = y - c[i] * w;
+      if numel(ok) > 1 then (let s = std(u); if s > 0 then (sd[i] = s) end) end
+    ) end
+  ) end;
+  let sp = {names = d.names, dates = d.dates, freq = d.freq, freqs = d.freqs, quarterly = nc_num(d.freqs == "quarterly"),
+            agg = agg, aggs = aggs, cal = cal, st = st, W = st.W, Y = d.Y, c = c, sd = sd,
+            Rmin = nc_opt(opts, "Rmin", 1e-4)};
+  let sp = setfield(sp, "Z", nc_std(sp, st, d.Y));
+  % the mean of each series at its own frequency (the old field, for reading)
+  let mu = zeros(m, 1);
+  for i = 1 : m do (let rows = find(st.rser == i); if numel(rows) > 0 then (mu[i] = c[i] * sum(st.W[rows[1], :])) end) end;
+  setfield(sp, "mu", mu)
+)
+
+% internal: the fit record with a panel of T base periods and data Y
+let nc_retime = fn f, Y -> (
+  let st = nc_struct(f.cal, f.freqs, f.aggs, size(Y)[2]);
+  let g = setfield(setfield(f, "st", st), "W", st.W);
+  let g = setfield(g, "Y", Y);
+  setfield(g, "Z", nc_std(g, st, Y))
 )
 
 % model(d, opts): the factor model with given or starting parameters, no
 % estimation — for known parameters (opts.params = {A, Q, Lam, R}, in the
 % units of the data when opts.standardize = false) or to look at the start.
-% opts: r (factors, 1), agg ("mm" or "mean"), standardize (true), params.
+% opts: r (factors, 1), agg ("mm" or "mean", or one per series),
+% standardize (true), params.
 % e.g. let d = nowcast.data([1, 2, 3, 2; 0/0, 0/0, 6, 0/0], {quarterly = [0; 1]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.5, Q = 1, Lam = [1; 1], R = [0.1; 0.1]}}); size(f.state.f) %= [1, 5]
 let nowcast_model = fn d, opts = {} -> (
-  let sp = nc_make(d, opts, {});
+  let sp = nc_make(d, opts);
   let r = nc_opt(opts, "r", 1);
   let p = nc_opt(opts, "params", {});
-  let p = if numel(fields(p)) == 0 then nc_init(sp.Z, sp.W, sp.quarterly, r) else nc_params(p, size(d.Y)[1]) end;
+  let p = if numel(fields(p)) == 0 then nc_init(sp, r) else nc_params(p, size(d.Y)[1]) end;
   let sp = setfield(sp, "P0", nc_opt(opts, "P0", nc_stat(p.A, p.Q)));
   let sp = setfield(sp, "params", p);
   let sp = setfield(sp, "iterations", 0);
+  let sp = setfield(sp, "status", "not estimated");
   setfield(sp, "state", nc_smooth(sp, p))
+)
+
+% internal: what is wrong with a parameter set, or ""
+let nc_bad = fn p -> (
+  if !all(all(isfinite(p.A))) || !all(all(isfinite(p.Q))) || !all(all(isfinite(p.Lam))) || !all(isfinite(p.R)) then "a parameter is not finite"
+  elseif min(eig(p.Q).values) <= 0 then "the factor innovation covariance Q is not positive definite"
+  else "" end
 )
 
 % fit(d, opts): estimate the factor model by EM from a principal-components
 % start (or opts.params). opts: r (1), agg ("mm"), maxit (500), tol (1e-5,
 % the relative change of the log-likelihood), standardize (true). To run
 % EM in pieces — a page showing progress — pass the previous piece's
-% params, P0 and its last log-likelihood as last: the pieces then stop,
-% and end, exactly where one long run would. The
-% result carries params {A, Q, Lam, R}, the log-likelihood path loglik,
-% iterations, converged, and state {f, fsd, yhat, ysd, loglik}.
-% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); f.loglik[f.iterations] >= f.loglik[1] %= true
+% params, P0 and its last log-likelihood as last (and the iterations
+% already run as offset, for the messages): the pieces then stop, and
+% end, exactly where one long run would. The result carries params
+% {A, Q, Lam, R}, the log-likelihood path loglik, iterations, converged,
+% status ("converged", "maxit" or "failed"), message, change (the last
+% relative change), warnings, and state {f, fsd, yhat, ysd, loglik, value,
+% valuesd}. A failed EM keeps the last parameters that were good.
+% e.g. rng(4); let f0 = cumsum(randn(1, 60)) / 5; let Y = [f0; 0.8 * f0; -f0] + 0.3 * randn(3, 60); let f = nowcast.fit(nowcast.data(Y), {tol = 1e-6}); [f.loglik[f.iterations] >= f.loglik[1], f.status == "converged"] %= [true, true]
 let nowcast_fit = fn d, opts = {} -> (
   let sp = nowcast_model(d, opts);
   let maxit = nc_opt(opts, "maxit", 500);
   let tol = nc_opt(opts, "tol", 1e-5);
   let T = size(sp.Z)[2];
+  let Zr = nc_rows(sp.st, sp.Z);
   let hist = zeros(maxit, 1);
-  let p = sp.params; let it = 0; let conv = false;
+  let p = sp.params; let it = 0; let conv = false; let failed = "";
+  let change = 0 / 0;
   let last = nc_opt(opts, "last", 0 / 0);
-  while (it < maxit) && !conv do (
-    it = it + 1;
-    let s = ksmooth(sp.Z, nc_ssm(sp, p), {cov = false, stats = true});
-    hist[it] = s.loglik;
-    let b = if it > 1 then hist[it - 1] else last end;
-    if !isnan(b) then (
-      let a = hist[it];
-      if abs(a - b) / ((abs(a) + abs(b)) / 2) < tol then (conv = true) end
-    ) end;
-    if !conv then (p = nc_mstep(sp, p, s.stats, T)) end
+  let off = nc_opt(opts, "offset", 0);         % iterations run before this piece (messages count from the start)
+  while (it < maxit) && !conv && (failed == "") do (
+    let s = ksmooth(Zr, nc_ssm(sp, p, sp.st), {cov = false, stats = true});
+    if !isfinite(s.loglik) then (
+      failed = fmt("the log-likelihood is not finite at iteration {}", off + it + 1)
+    ) else (
+      it = it + 1;
+      hist[it] = s.loglik;
+      let b = if it > 1 then hist[it - 1] else last end;
+      if !isnan(b) then (
+        let a = hist[it];
+        change = (a - b) / ((abs(a) + abs(b)) / 2);
+        if change < -1e-6 then (
+          failed = fmt("the log-likelihood fell at iteration {}, from {:.6g} to {:.6g}", off + it, b, a)
+        ) elseif abs(change) < tol then (conv = true) end
+      ) end;
+      if !conv && (failed == "") then (
+        let pn = nc_mstep(sp, p, s.stats, T);
+        let why = nc_bad(pn);
+        if why == "" then (p = pn) else (failed = fmt("the M-step after iteration {} broke the model: {}", off + it, why)) end
+      ) end
+    ) end
   ) end;
+  let status = if failed != "" then "failed" elseif conv then "converged" else "maxit" end;
+  let message = if status == "converged" then fmt("converged after {} iterations (relative change {:.2g}, tolerance {:.2g})", off + it, abs(change), tol)
+                elseif status == "maxit" then fmt("stopped at the limit of {} iterations before reaching the tolerance (last relative change {:.2g}, tolerance {:.2g})", off + maxit, abs(change), tol)
+                else failed + "; the estimates are the last good ones" end;
+  % warnings: what a converged fit can still get wrong
+  let warn = [""];
+  let rho = max(abs(eig(p.A).values));
+  if rho >= 1 then (warn = [warn; fmt("the factors are not stationary (largest |eigenvalue| of A is {:.3f})", rho)]) end;
+  let flat = find(p.R <= sp.Rmin * 1.0001);
+  if numel(flat) > 0 then (warn = [warn; "the common factor fits " + strjoin(sp.names[flat], ", ") + " exactly (variance at the floor): a series may duplicate another or be the factor itself"]) end;
   let sp = setfield(sp, "params", p);
   let sp = setfield(sp, "loglik", hist[1 : it]);
   let sp = setfield(sp, "iterations", it);
   let sp = setfield(sp, "converged", conv);
+  let sp = setfield(sp, "status", status);
+  let sp = setfield(sp, "message", message);
+  let sp = setfield(sp, "change", change);
+  let sp = setfield(sp, "tol", tol);
+  let sp = setfield(sp, "warnings", warn[2 : numel(warn)]);
   setfield(sp, "state", nc_smooth(sp, p))
 )
 
-% update(f, Ynew): the same model and parameters on new data (more months,
-% new releases, revisions) — standardized with the fit's own means and sds.
+% report(f): print how the estimation ended — converged, stopped at the
+% iteration limit, or failed and why — the log-likelihood from start to
+% end, and the warnings worth reading before using the nowcast.
+% e.g. let d = nowcast.data([1, 2, 3, 2, 1; 2, 4, 5, 4, 3]); let f = nowcast.fit(d, {maxit = 2}); f.status %= "maxit"
+let nowcast_report = fn f -> (
+  let st = nc_opt(f, "status", "not estimated");
+  let head = if st == "converged" then "EM converged" elseif st == "maxit" then "EM did not converge" elseif st == "failed" then "EM FAILED" else "not estimated (model with given or starting parameters)" end;
+  print("  {}", head);
+  if any(fields(f) == "message") then (print("    {}", f.message)) end;
+  if f.iterations > 0 then (
+    let ll = f.loglik;
+    print("    log-likelihood {:.6g} at the start, {:.6g} at the end ({} iterations)", ll[1], ll[numel(ll)], numel(ll))
+  ) end;
+  let w = nc_opt(f, "warnings", zeros(0, 1));
+  if numel(w) == 0 then (if st != "not estimated" then print("    no warnings") end)
+  else (for k = 1 : numel(w) do print("    warning: {}", w[k]) end) end;
+  if st == "maxit" then (print("    raise maxit, or loosen tol, for a converged fit")) end;
+  if st == "failed" then (print("    try fewer factors (r), fewer or better-transformed series, or check the data for outliers")) end
+)
+
+% update(f, Ynew): the same model and parameters on new data (more periods,
+% new releases, revisions) — standardized with the fit's own scales.
 % e.g. let d = nowcast.data([1, 2, 3; 2, 4, 5]); let f = nowcast.model(d, {params = {A = 0.5, Q = 1, Lam = [1; 1], R = [0.1; 0.1]}}); size(nowcast.update(f, [1, 2, 3, 4; 2, 4, 5, 0/0]).state.yhat) %= [2, 4]
 let nowcast_update = fn f, Ynew -> (
   if size(Ynew)[1] != size(f.Y)[1] then error("nowcast.update: {} series, the fit has {}", size(Ynew)[1], size(f.Y)[1]) end;
-  let T = size(Ynew)[2];
-  let g = setfield(f, "Y", Ynew);
-  let g = setfield(g, "Z", (Ynew - f.mu * ones(1, T)) ./ (f.sd * ones(1, T)));
+  let g = nc_retime(f, Ynew);
   setfield(g, "state", nc_smooth(g, f.params))
 )
 
-% transform(Y, codes, quarterly): each series (row of Y, months as columns)
+% transform(Y, codes, d): each series (row of Y, periods as columns)
 % transformed by its code — "level" (as is), "diff" (change on the previous
 % period), "pct" (percent change on the previous period), "logdiff" (100
 % times the change in logs), "yoy" (percent change on a year before). The
-% previous period of a quarterly series (quarterly[i] = 1) is three months
-% back, its previous observation. Heads come out NaN, the length unchanged.
+% previous period is the series' own: its previous month or quarter for a
+% series observed less often than the panel. d is the panel (for its
+% calendar), or, for a monthly panel, one 0/1 per series marking the
+% quarterly ones. Heads come out NaN, the length unchanged.
 % e.g. nowcast.transform([100, 102, 104.04], ["pct"], [0]) %= [nan, 2, 2]
 % e.g. nowcast.transform([0/0, 0/0, 100, 0/0, 0/0, 110], ["pct"], [1]) %= [nan, nan, nan, nan, nan, 10]
-let nowcast_transform = fn Y, codes, quarterly -> (
+let nowcast_transform = fn Y, codes, d -> (
   let m = size(Y)[1]; let T = size(Y)[2];
-  if (numel(codes) != m) || (numel(quarterly) != m) then
-    error("nowcast.transform: {} series need {} codes and {} quarterly flags (got {} and {})", m, m, m, numel(codes), numel(quarterly))
+  % a panel record (its calendar), or the monthly panel's quarterly flags
+  let isp = startswith(str(d), "{");
+  let nf = if isp then numel(d.freqs) else numel(d) end;
+  if (numel(codes) != m) || (nf != m) then
+    error("nowcast.transform: {} series need {} codes and {} {} (got {} and {})", m, m, m,
+          if isp then "frequencies" else "quarterly flags" end, numel(codes), nf)
   end;
+  let d = if isp then d else nowcast_data(Y, {quarterly = d}) end;
+  let cal = nc_cal(setfield(d, "Y", Y));
+  let tt = 1 - 60 : T + 1;
   let out = Y;
   for i = 1 : m do (
-    let c = codes[i];
-    let k = if quarterly[i] > 0 then 3 else 1 end;
-    let k = if c == "yoy" then 12 else k end;
+    let c = codes[i]; let F = d.freqs[i];
+    let P = nc_pid(cal, F, tt);
     let y = Y[i, :];
-    let lagged = if T > k then [(0 / 0) * ones(1, k), y[1 : T - k]] else (0 / 0) * ones(1, T) end;
+    % the base period holding each period's value: its last
+    let isend = P[62 : T + 61] != P[61 : T + 60];
+    let pid = P[61 : T + 60];
+    let back = if c == "yoy" then nc_peryear(F) else 1 end;
+    let lagged = (0 / 0) * ones(1, T);
+    let ends = find(isend);
+    for k = 1 : numel(ends) do (
+      let e = ends[k];
+      let j = ends[find(pid[ends] == pid[e] - back)];
+      if numel(j) > 0 then (lagged[e] = y[j[1]]) end
+    ) end;
+    if F == d.freq then (
+      lagged = if T > back then [(0 / 0) * ones(1, back), y[1 : T - back]] else (0 / 0) * ones(1, T) end
+    ) end;
     if c == "level" then (out[i, :] = y)
     elseif c == "diff" then (out[i, :] = y - lagged)
     elseif (c == "pct") || (c == "yoy") then (out[i, :] = 100 * (y ./ lagged - 1))
@@ -316,78 +665,152 @@ let nowcast_transform = fn Y, codes, quarterly -> (
   out
 )
 
-% extend(Y, h): Y with h months of NaN appended — the months to nowcast
-% or forecast into (a quarter's nowcast needs its third month).
+% extend(Y, h): Y with h periods of NaN appended — the periods to nowcast
+% or forecast into (a quarter's nowcast needs its last period).
 % e.g. size(nowcast.extend([1, 2; 3, 4], 2)) %= [2, 4]
 let nowcast_extend = fn Y, h -> [Y, (0 / 0) * ones(size(Y)[1], h)]
 
-% nowcast(f, name, t): the model's estimate of series name in month t
-% (default the last month), in the data's units: {value, sd, t, actual}.
-% sd is the uncertainty of the common component, the signal without the
-% series' own noise; actual is the data's value there (NaN if not out).
+% internal: the base period that ends the period of series i containing t
+% (t itself for a base-frequency series), possibly past the panel's end
+let nc_endof = fn f, i, t -> (
+  let F = f.freqs[i];
+  if F == f.freq then t
+  else (
+    let P = nc_pid(f.cal, F, t : t + 20);
+    let k = find(P[2 : 21] != P[1 : 20]);
+    t + k[1] - 1
+  ) end
+)
+
+% nowcast(f, name, t): the model's estimate of series name in base period
+% t (default the last), in the data's units: {value, sd, t, actual}. For a
+% series observed less often than the panel, t may be any base period of
+% its month or quarter: the estimate is the period's, at its last base
+% period (the panel is extended when that lies beyond it). sd is the
+% uncertainty of the common component, the signal without the series' own
+% noise; actual is the data's value there (NaN if not out).
 % e.g. let d = nowcast.data([1, 2, 3; 0/0, 0/0, 0/0], {names = ["ip"; "gdp"]}); let f = nowcast.model(d, {standardize = false, params = {A = 1, Q = 1, Lam = [1; 2], R = [1e-6; 1]}}); format(4); nowcast.nowcast(f, "gdp").value %= 6.000
 let nowcast_nowcast = fn f, name, t = 0 -> (
   let i = nc_index(f, name);
   let T = size(f.Y)[2];
   let t = if t == 0 then T else t end;
-  {value = f.mu[i] + f.sd[i] * f.state.yhat[i, t], sd = f.sd[i] * f.state.ysd[i, t],
-   t = t, actual = f.Y[i, t]}
+  let e = nc_endof(f, i, t);
+  let g = if e > T then nowcast_update(f, nowcast_extend(f.Y, e - T)) else f end;
+  if g.st.rowat[i, e] == 0 then error("nowcast.nowcast: series {} has no estimate in period {} (its period starts before the panel)", name, e) end;
+  {value = g.state.value[i, e], sd = g.state.valuesd[i, e], t = e, actual = g.Y[i, e]}
+)
+
+% path(f, name, freq, agg): series name as the model sees it at frequency
+% freq ("weekly", "monthly", "quarterly"; default the panel's base), every
+% period of the panel: {t (each period's last base period), dates, value,
+% sd, actual}. Higher than the series' own frequency, it is the series
+% inside its periods — weekly or monthly GDP from a quarterly series; the
+% aggregation is the series' (agg overrides: "mean" for levels and rates,
+% "mm" for growth of the period's average level, at the base a growth per
+% base period). The path runs through the period holding the panel's last
+% base period. actual is the published value when freq is the series' own.
+% e.g. let d = nowcast.data([1, 2, 3, 4, 5, 6; 0/0, 0/0, 3, 0/0, 0/0, 0/0], {freqs = ["monthly"; "quarterly"], names = ["ip"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.9, Q = 1, Lam = [1; 1], R = [0.01; 0.01]}}); let p = nowcast.path(f, "gdp", "quarterly"); [numel(p.value), p.t'] %= [2, 3, 6]
+let nowcast_path = fn f, name, freq = "", agg = "" -> (
+  let i = nc_index(f, name);
+  let F = if freq == "" then f.freq else freq end;
+  if nc_rank(F) < nc_rank(f.freq) then error("nowcast.path: the panel is {}; {} is finer than its periods", f.freq, F) end;
+  let a = if agg != "" then nc_aggok(agg) elseif f.freqs[i] == f.freq then "mean" else f.aggs[i] end;
+  % run to the end of the period holding the panel's last base period
+  let T0 = size(f.Y)[2];
+  let P = nc_pid(f.cal, F, T0 : T0 + 20);
+  let k = find(P[2 : 21] != P[1 : 20]);
+  let Te = T0 + k[1] - 1;
+  let g = if Te > T0 then nowcast_update(f, nowcast_extend(f.Y, Te - T0)) else f end;
+  % the target: one more series with these weights, no data, the loading of name
+  let tf = ([name] ~> (fn s -> F));
+  let sx = nc_struct(g.cal, tf, ([name] ~> (fn s -> a)), Te);
+  let st = g.st;
+  let L = max(size(st.W)[2], size(sx.W)[2]);
+  let W = zeros(size(st.W)[1] + size(sx.W)[1], L);
+  W[1 : size(st.W)[1], 1 : size(st.W)[2]] = st.W;
+  W[size(st.W)[1] + 1 : size(W)[1], 1 : size(sx.W)[2]] = sx.W;
+  let stx = {W = W, rser = [st.rser; i + 0 * (1 : size(sx.W)[1])'], T = Te};
+  let Zr = [nc_rows(st, g.Z); (0 / 0) * ones(size(sx.W)[1], Te)];
+  let s = ksmooth(Zr, nc_ssm(g, g.params, stx), {fit = true});
+  let nr = size(st.W)[1];
+  let ends = find(sx.sumw[1, :] > 0 & sx.rowat[1, :] > 0);
+  % only the periods' last base periods (a lone pattern also fills the rest)
+  let Pall = nc_pid(g.cal, F, 1 : Te + 1);
+  let ends = ends[find(Pall[ends + 1] != Pall[ends])];
+  let n = numel(ends);
+  let value = zeros(n, 1); let sd = zeros(n, 1); let actual = (0 / 0) * ones(n, 1); let dates = zeros(n, 1);
+  for q = 1 : n do (
+    let e = ends[q];
+    let row = nr + sx.rowat[1, e];
+    value[q] = g.c[i] * sx.sumw[1, e] + g.sd[i] * s.yhat[row, e];
+    sd[q] = g.sd[i] * s.ysd[row, e];
+    if F == f.freqs[i] then (actual[q] = g.Y[i, e]) end;
+    if g.cal.hasd then (dates[q] = nc_date(g.cal, e) - date(1970, 1, 1)) end
+  ) end;
+  let out = {t = ends', value = value, sd = sd, actual = actual, freq = F, agg = a};
+  if g.cal.hasd then setfield(out, "dates", date(1970, 1, 1) + dates) else out end
 )
 
 % internal: the target in standardized units, with the parameters fixed
-let nc_target = fn f, Z, i, t -> ksmooth(Z, nc_ssm(f, f.params), {cov = false, fit = true}).yhat[i, t]
+let nc_target = fn f, st, Z, i, t -> nc_unrows(st, ksmooth(nc_rows(st, Z), nc_ssm(f, f.params, st), {cov = false, fit = true}).yhat)[i, t]
 
-% news(f, Ynew, name, t): why the nowcast of series name in month t moved
-% from the data the fit was smoothed on (f.Y) to Ynew, parameters fixed —
-% Banbura and Modugno's decomposition. Revisions come first: revisions[j]
-% is what series j's changed values did to the nowcast on the old
-% releases; then news[j] is what series j's new releases did, each judged
-% against what the revised data expected of it (surprise[j], the mean of
-% release minus expectation, in data units). Exact and additive: old +
-% sum(revisions) + sum(news) = new. Ynew may have more months than f.Y.
+% news(f, Ynew, name, t): why the nowcast of series name in base period t
+% moved from the data the fit was smoothed on (f.Y) to Ynew, parameters
+% fixed — Banbura and Modugno's decomposition. Revisions come first:
+% revisions[j] is what series j's changed values did to the nowcast on the
+% old releases; then news[j] is what series j's new releases did, each
+% judged against what the revised data expected of it (surprise[j], the
+% mean of release minus expectation, in data units). Exact and additive:
+% old + sum(revisions) + sum(news) = new. Ynew may have more periods than f.Y.
 % e.g. let d = nowcast.data([1, 2, 0/0; 0/0, 0/0, 0/0], {names = ["ip"; "gdp"]}); let f = nowcast.model(d, {standardize = false, params = {A = 0.9, Q = 1, Lam = [1; 1], R = [0.5; 0.5]}}); let n = nowcast.news(f, [1, 2, 4; 0/0, 0/0, 0/0], "gdp"); abs(n.old + sum(n.news) + sum(n.revisions) - n.new) < 1e-12 %= true
 let nowcast_news = fn f, Ynew, name, t = 0 -> (
   let i = nc_index(f, name);
   let m = size(f.Y)[1]; let To = size(f.Y)[2]; let T = size(Ynew)[2];
   if size(Ynew)[1] != m then error("nowcast.news: {} series, the fit has {}", size(Ynew)[1], m) end;
-  if T < To then error("nowcast.news: Ynew has {} months, the fit {}", T, To) end;
+  if T < To then error("nowcast.news: Ynew has {} periods, the fit {}", T, To) end;
   let t = if t == 0 then T else t end;
-  let sc = fn Y -> (Y - f.mu * ones(1, size(Y)[2])) ./ (f.sd * ones(1, size(Y)[2]));
-  let Zo = sc(nowcast_extend(f.Y, T - To));
-  let Zn = sc(Ynew);
+  let e = nc_endof(f, i, t);
+  let Tn = max(T, e);
+  let Yn = nowcast_extend(Ynew, Tn - T);
+  let g = nc_retime(f, Yn);
+  let st = g.st;
+  let Zo = nc_std(g, st, nowcast_extend(f.Y, Tn - To));
+  let Zn = g.Z;
   let gone = !isnan(Zo) & isnan(Zn);
   if any(any(gone)) then error("nowcast.news: Ynew drops {} value(s) the old data had", sum(sum(gone))) end;
   let isnew = isnan(Zo) & !isnan(Zn);
   let isrev = !isnan(Zo) & !isnan(Zn) & (abs(Zo - Zn) > 0);
-  let old = nc_target(f, Zo, i, t);
+  let t = e;
+  let old = nc_target(g, st, Zo, i, t);
   % the old releases, revised: the revisions' effect is from Zo to Zr
   let Zr = Zo; Zr[isrev] = Zn[isrev];
-  let yr = ksmooth(Zr, nc_ssm(f, f.params), {cov = false, fit = true}).yhat;
+  let yr = nc_unrows(st, ksmooth(nc_rows(st, Zr), nc_ssm(g, g.params, st), {cov = false, fit = true}).yhat);
   % the new releases at what the revised data expected: the base for news
   let B = Zn; B[isnew] = yr[isnew];
-  let base = nc_target(f, B, i, t);
-  let new = nc_target(f, Zn, i, t);
+  let base = nc_target(g, st, B, i, t);
+  let new = nc_target(g, st, Zn, i, t);
   let news = zeros(m, 1); let revs = zeros(m, 1); let surprise = (0 / 0) * ones(m, 1);
-  let one = ones(1, T);
+  let one = ones(1, Tn);
   for j = 1 : m do (
     let ej = zeros(m, 1); ej[j] = 1;
     let row = (ej * one) > 0;
     let mn = isnew & row; let mr = isrev & row;
     if any(any(mr)) then (
       let Zj = Zo; Zj[mr] = Zn[mr];
-      revs[j] = f.sd[i] * (nc_target(f, Zj, i, t) - old)
+      revs[j] = f.sd[i] * (nc_target(g, st, Zj, i, t) - old)
     ) end;
     if any(any(mn)) then (
       let Bn = B; Bn[mn] = Zn[mn];
-      news[j] = f.sd[i] * (nc_target(f, Bn, i, t) - base);
+      news[j] = f.sd[i] * (nc_target(g, st, Bn, i, t) - base);
       surprise[j] = f.sd[j] * mean(Zn[mn] - yr[mn])
     ) end
   ) end;
-  {old = f.mu[i] + f.sd[i] * old, new = f.mu[i] + f.sd[i] * new,
+  let lvl = f.c[i] * st.sumw[i, t];
+  {old = lvl + f.sd[i] * old, new = lvl + f.sd[i] * new,
    revisions = revs, news = news, surprise = surprise, names = f.names, t = t}
 )
 
 let nowcast = {panel = nowcast_panel, data = nowcast_data, model = nowcast_model, fit = nowcast_fit,
-               update = nowcast_update, extend = nowcast_extend, transform = nowcast_transform,
-               nowcast = nowcast_nowcast,
+               report = nowcast_report, update = nowcast_update, extend = nowcast_extend,
+               transform = nowcast_transform, nowcast = nowcast_nowcast, path = nowcast_path,
                news = nowcast_news}

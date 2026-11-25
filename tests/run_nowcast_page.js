@@ -7,7 +7,13 @@
 //   - estimation converges and the cards show a nowcast;
 //   - the news decomposition adds up to the change in the nowcast;
 //   - the script and data the page offers for download, run by the native
-//     interpreter, give the page's nowcast to 1e-9.
+//     interpreter, give the page's nowcast to 1e-9;
+//   - the weekly example (daily, weekly, monthly and quarterly files): a
+//     weekly model converges, GDP gets a nowcast and weekly and monthly
+//     trackers, the convergence report says so, news adds up, and its
+//     exported script reproduces the nowcast too;
+//   - the missing-data example: late starts, a gap, a discontinued series,
+//     irregular releases — estimated, with a backcast, nowcast and forecast.
 // Run from the repository root: node tests/run_nowcast_page.js
 const SKIP = process.env.COZY_REQUIRE_BROWSER ? ", and COZY_REQUIRE_BROWSER is set: FAIL" : ", skipping";
 let chromium;
@@ -70,9 +76,9 @@ async function exercise(browser, url, label) {
   const err = await page.$("#modelmsg .err");
   if (err) fail(label + ": estimation — " + await err.textContent());
   const st = await page.evaluate(() => {
-    const F = window.NowcastApp.S.fit, P = F.P, i = P.names.indexOf("gdp"), t = P.endQ - P.lo;
-    return { conv: F.conv, iters: F.iters, value: F.yv.data[i * F.yv.cols + t], sd: F.ys.data[i * F.ys.cols + t],
-             script: window.NowcastApp.S.lastScript, csv: window.NowcastApp.cleanCSV(P), cards: document.querySelectorAll("#cards .nc").length };
+    const F = window.NowcastApp.S.fit;
+    return { conv: F.conv, iters: F.iters, value: F.now.value, sd: F.now.sd,
+             script: window.NowcastApp.S.lastScript, csv: window.NowcastApp.cleanCSV(F.P), cards: document.querySelectorAll("#cards .nc").length };
   });
   if (!st.conv || st.cards !== 2 || !(st.sd > 0)) fail(label + ": fit " + JSON.stringify({ conv: st.conv, cards: st.cards, sd: st.sd }));
   // news over two held-back months: the parts add up
@@ -85,6 +91,40 @@ async function exercise(browser, url, label) {
   });
   if (!nw || nw.gap > 1e-10 || !(nw.move > 0)) fail(label + ": news " + JSON.stringify(nw));
   if (errors.length) fail(label + ": page errors: " + errors.join("; "));
+  await page.close();
+  return st;
+}
+
+// an example through the page: estimate, read the results, decompose the news
+async function example(browser, url, which) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await page.goto(url);
+  await page.waitForFunction(() => document.getElementById("engine").textContent === "engine ready", null, { timeout: 90000 })
+    .catch(() => fail(which + " example: the engine did not start"));
+  await page.selectOption("#exsel", which);
+  await page.click("#example");
+  await page.click("#run");
+  await page.waitForFunction(() => (window.NowcastApp.S.fit && document.querySelector("#cards .nc")) || document.querySelector("#modelmsg .err"), null, { timeout: 180000 });
+  const err = await page.$("#modelmsg .err");
+  if (err) fail(which + " example: estimation — " + await err.textContent());
+  const st = await page.evaluate(() => {
+    const F = window.NowcastApp.S.fit;
+    return { status: F.status, base: F.P.base, freqs: F.P.freqs.join(""), value: F.now.value, sd: F.now.sd, iters: F.iters,
+             cards: [...document.querySelectorAll("#cards .nc .k")].map(k => k.textContent.split(" ")[0]),
+             report: document.getElementById("emstatus").dataset.status, tracks: Object.keys(F.paths).join(""),
+             trackShown: !document.getElementById("trackwrap").classList.contains("hidden"),
+             script: window.NowcastApp.S.lastScript, csv: window.NowcastApp.cleanCSV(F.P) };
+  });
+  await page.click("#newsrun");
+  await page.waitForFunction(() => window.NowcastApp.S.news || document.querySelector("#newsmsg .err"), null, { timeout: 120000 });
+  const nw = await page.evaluate(() => {
+    const N = window.NowcastApp.S.news; if (!N) return null;
+    return Math.abs(N.oldv + N.items.reduce((a, it) => a + it.value + it.rev, 0) - N.newv);
+  });
+  if (nw == null || nw > 1e-10) fail(which + " example: news " + nw);
+  if (errors.length) fail(which + " example: page errors: " + errors.join("; "));
   await page.close();
   return st;
 }
@@ -106,8 +146,25 @@ async function exercise(browser, url, label) {
     const [v, s] = out.split(" ").map(Number);
     if (!(Math.abs(v - a.value) < 1e-9 && Math.abs(s - a.sd) < 1e-9))
       fail(`the exported script gives ${v} (sd ${s}), the page ${a.value} (sd ${a.sd})`);
+    // the weekly tracker: four files at four frequencies, a weekly model
+    const w = await example(browser, `http://127.0.0.1:${port}/nowcast.html`, "weekly");
+    if (w.status !== "converged" || w.report !== "converged" || w.base !== "W" || w.freqs !== "WWWWWMMMMMQ")
+      fail("weekly example: " + JSON.stringify({ status: w.status, base: w.base, freqs: w.freqs }));
+    if (w.cards.join(" ") !== "Nowcast Forecast" || w.tracks !== "WMQ" || !w.trackShown || !(w.sd > 0))
+      fail("weekly example results: " + JSON.stringify({ cards: w.cards, tracks: w.tracks, shown: w.trackShown, sd: w.sd }));
+    fs.writeFileSync(path.join(tmp, "nowcast_data.csv"), w.csv);
+    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), w.script + 'print("{:.17g} {:.17g}", n.value, n.sd)\n');
+    const wout = execFileSync(path.join(ROOT, "cozy"), ["nowcast_script.cz"], { cwd: tmp, encoding: "utf8" }).trim().split("\n").pop();
+    const [wv, ws] = wout.split(" ").map(Number);
+    if (!(Math.abs(wv - w.value) < 1e-9 && Math.abs(ws - w.sd) < 1e-9))
+      fail(`weekly example: the exported script gives ${wv} (sd ${ws}), the page ${w.value} (sd ${w.sd})`);
+    // missing data: late starts, a gap, a discontinued series, irregular releases
+    const m = await example(browser, `http://127.0.0.1:${port}/nowcast.html`, "missing");
+    if (m.status !== "converged" || m.cards.join(" ") !== "Backcast Nowcast Forecast" || m.base !== "M")
+      fail("missing-data example: " + JSON.stringify({ status: m.status, cards: m.cards, base: m.base }));
     console.log(`nowcast page: served and standalone pages run (EM ${a.iters} iterations); news adds up; ` +
-                `the exported script reproduces the nowcast (${v.toFixed(6)}, |diff| ${Math.abs(v - a.value).toExponential(1)})`);
+                `the exported script reproduces the nowcast (${v.toFixed(6)}, |diff| ${Math.abs(v - a.value).toExponential(1)}); ` +
+                `weekly tracker (${w.iters} iterations, GDP ${w.value.toFixed(3)}, script agrees) and missing-data examples run`);
   } finally {
     await browser.close(); server.close();
     fs.rmSync(tmp, { recursive: true, force: true });

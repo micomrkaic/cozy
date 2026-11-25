@@ -28,7 +28,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define KS_MAXLAG 24          /* largest p accepted (two years of months) */
+#define KS_MAXLAG 400         /* largest p accepted: a quarter of days, by Mariano-Murasawa weights (2 x 92 - 1 = 183), with room */
 
 typedef struct {
     uint32_t n, m, T, p;      /* states, series, periods, measurement lags */

@@ -178,6 +178,7 @@ test: vmtest $(BIN)
 	@python3 tools/gen_doc_table.py --check
 	@python3 tools/gen_reference.py --check
 	@python3 tools/gen_dsge_page.py --check
+	@python3 tools/gen_nowcast_examples.py --check
 	@node tests/run_nowcast_page.js
 	@node tests/run_playground_page.js
 	@bash tests/run_emacs.sh
