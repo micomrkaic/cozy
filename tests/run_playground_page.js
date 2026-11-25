@@ -1,9 +1,14 @@
 // The playground (docs/index.html) in a real browser — Playwright + Chromium;
-// skips politely without them. Since 0.1.51 the page is xterm.js running the
-// native REPL (repl.c and the isocline editor, compiled to WebAssembly, in a
-// Web Worker), so this types at it key by key and reads the screen through
-// xterm's own buffer — the browser's counterpart of tests/run_lineedit.py,
-// which types at the native REPL on a pty.
+// skips politely without them. The page is xterm.js running the REPL; this
+// types at it key by key and reads the screen through xterm's own buffer —
+// the browser's counterpart of tests/run_lineedit.py. It runs everything
+// TWICE, once per engine:
+//   wasm    the REPL compiled to WebAssembly in a Web Worker (GitHub Pages);
+//   native  ./cozy --workbench: the native REPL on a pseudo-terminal (0.1.52);
+// and then the parity test (design entry 34, stage 3): the same keys typed
+// into a fresh session of each engine must put the same characters on the
+// screen, from the first prompt on (the banner carries the build and the
+// backend, so it is left out).
 //   - the REPL: banner, evaluation, editing keys, Tab completion, multi-line
 //     entries, history (up arrow, and across a reload), Ctrl-C at the prompt
 //     and in a running loop, Ctrl-D ending the session and a key starting
@@ -34,10 +39,142 @@ const server = http.createServer((req, res) => {
   let browser;
   try { browser = await chromium.launch(); }
   catch (e) { console.log("playground: no browser for playwright, skipping"); server.close(); process.exit(0); }
-  const url = `http://127.0.0.1:${server.address().port}/index.html`;
-  const checks = [];
-  const check = (name, ok, detail) => { if (!ok) fail(name + (detail ? ": " + detail : "")); checks.push(name); };
+  const wasmUrl = `http://127.0.0.1:${server.address().port}/index.html?engine=wasm`;
   try {
+    const counts = {};
+    counts.wasm = await suite(browser, wasmUrl, "wasm");
+    let wb = await workbench();
+    counts.native = await suite(browser, wb.url, "native");
+    wb.stop();
+    const nat = await workbench();
+    const sw = await parityRun(browser, wasmUrl, "wasm"), sn = await parityRun(browser, nat.url, "native");
+    nat.stop();
+    parityCompare(sw, sn);
+    console.log(`playground: the REPL in xterm.js — ${counts.wasm} checks on the WebAssembly engine, ${counts.native} on the ` +
+                `native workbench; the same ${sw.split("\n").length}-line screen from both for the same keys`);
+  } finally { await browser.close(); server.close(); }
+})().catch(e => fail(e.stack || e));
+
+/* every workbench this test starts dies with it, however it ends (a failed
+   check exits at once) — and takes its REPL, on its pty, with it */
+const LIVE = new Set();
+process.on("exit", () => { for (const c of LIVE) { try { process.kill(-c.pid, "SIGKILL"); } catch (e) { try { c.kill("SIGKILL"); } catch (e2) {} } } });
+
+/* ./cozy --workbench on a free port, in a scratch directory with its own HOME */
+async function workbench() {
+  const os = require("os"), { spawn } = require("child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cozy-wb-"));
+  fs.mkdirSync(path.join(dir, "home"));
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const child = spawn(path.join(ROOT, "cozy"), ["--workbench", String(port)],
+                      { cwd: dir, env: { ...process.env, HOME: path.join(dir, "home") }, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  LIVE.add(child);
+  await new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error("the workbench did not start")), 10000);
+    child.stdout.on("data", d => { if (String(d).includes("cozy workbench:")) { clearTimeout(t); res(); } });
+    child.on("exit", c => rej(new Error("the workbench exited: " + c)));
+  });
+  return { url: `http://127.0.0.1:${port}/`, stop: () => {
+    try { process.kill(-child.pid, "SIGKILL"); } catch (e) { child.kill("SIGKILL"); }
+    LIVE.delete(child); fs.rmSync(dir, { recursive: true, force: true });
+  } };
+}
+
+function helpers(p) {
+  const screen = () => p.evaluate(() => {
+    const b = window.__term.buffer.active, out = [];
+    for (let i = 0; i < b.length; i++) out.push(b.getLine(i).translateToString(true));
+    return out.join("\n").replace(/\s+$/, "");
+  });
+  const lastLine = async () => (await screen()).split("\n").pop();
+  const settle = async (pred, what, ms = 15000) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) { if (await pred()) return; await p.waitForTimeout(40); }
+    fail("timed out waiting for " + what + "\n--- screen tail ---\n" + (await screen()).split("\n").slice(-12).join("\n"));
+  };
+  const atPrompt = () => settle(async () => /cozy> $/.test(await lastLine() + " ") || (await lastLine()) === "cozy>", "the prompt");
+  const mark = async () => (await screen()).length;
+  const since = async m => (await screen()).slice(m);
+  const enter = async (s) => { await p.keyboard.type(s); await p.keyboard.press("Enter"); };
+  const ready = () => settle(() => p.evaluate(() => !!window.__term && window.__term.buffer.active.length > 8), "the REPL to start", 90000);
+  return { screen, lastLine, settle, atPrompt, mark, since, enter, ready };
+}
+
+/* the same keys into a fresh session; the screen from the first prompt on */
+async function parityRun(browser, url, label) {
+  const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  const p = await ctx.newPage();
+  await p.goto(url);
+  const { screen, settle, atPrompt, enter, ready, lastLine, mark, since } = helpers(p);
+  await ready(); await atPrompt(); await p.click("#term");
+  /* each step: do something, then wait until the screen has moved past it
+     to a fresh prompt (or the expected question), so neither engine's
+     timing shows */
+  const step = async (act, until = "prompt") => {
+    const m = await mark();
+    await act();
+    await settle(async () => {
+      const t = await since(m);
+      if (!t.includes("\n")) return false;
+      const last = t.split("\n").pop();
+      return until === "prompt" ? /^cozy> ?$/.test(last) : last.includes(until);
+    }, label + ": a step to finish (" + until + ")");
+  };
+  const line = s => step(() => enter(s));
+  await line("1 + 2");
+  await step(async () => { await p.keyboard.type("2 * 3"); await p.keyboard.press("Home"); await p.keyboard.type("10 + "); await p.keyboard.press("Enter"); });
+  await step(() => enter("let v = [1,"), "...>");
+  await line("2]");
+  await step(async () => { await p.keyboard.type("sqr"); await p.keyboard.press("Tab"); await p.keyboard.type("(81)"); await p.keyboard.press("Enter"); });
+  await step(async () => { await p.keyboard.press("ArrowUp"); await p.keyboard.press("Enter"); });
+  await step(() => enter("let zz = [1,"), "...>");
+  await step(() => p.keyboard.press("Control+c"));
+  await line("zz");
+  await step(async () => { await enter("while true do 1 end"); await p.waitForTimeout(700); await p.keyboard.press("Control+c"); });
+  await line("40 + 2");
+  await step(() => enter('let answer = input("name? ")'), "name?");
+  await line("Ada");
+  await line("answer");
+  await step(() => enter('pause("waiting"); 7'), "waiting");
+  await step(() => p.keyboard.press("Enter"));
+  await line("format(4); pi");
+  await line("format(6); [1, 2; 3, 4] \\ [5; 6]");
+  await line("undefined_thing + 1");
+  await line("let f = fn x -> x^2; f(12)");
+  await line("help sqrt");
+  await line('load("demo")');
+  await step(() => enter("demo()"), "section (number");
+  await step(() => enter("demo5"), "Enter for the next problem");
+  await step(() => p.keyboard.press("Enter"), "Enter for the next problem");
+  await step(() => p.keyboard.press("Enter"), "Enter for the next problem");
+  await step(() => p.keyboard.press("Enter"), "section (number");
+  await line("q");
+  await step(() => enter("manual"), "-- more --");
+  await p.keyboard.press("q"); await atPrompt();        /* q erases the pager's line: wait for the prompt itself */
+  await enter("packeur");                               /* it clears the screen: look at all of it */
+  await settle(async () => (await screen()).includes("space toggles, Enter applies"), label + ": packeur's screen");
+  await p.keyboard.press("q");                          /* packeur clears the screen, then reports */
+  await settle(async () => (await screen()).includes("packeur: cancelled") && /^cozy> ?$/.test(await lastLine()), label + ": packeur");
+  await line("who");
+  const shown = await screen();
+  await ctx.close();
+  return shown.slice(shown.indexOf("cozy> "));
+}
+
+function parityCompare(a, b) {
+  if (a === b) return;
+  const la = a.split("\n"), lb = b.split("\n");
+  for (let i = 0; i < Math.max(la.length, lb.length); i++)
+    if (la[i] !== lb[i])
+      fail(`the engines differ at screen line ${i + 1}:\n  wasm:   ${JSON.stringify(la[i])}\n  native: ${JSON.stringify(lb[i])}\n` +
+           "--- wasm ---\n" + la.slice(Math.max(0, i - 4), i + 4).join("\n") +
+           "\n--- native ---\n" + lb.slice(Math.max(0, i - 4), i + 4).join("\n"));
+}
+
+async function suite(browser, url, label) {
+  const checks = [];
+  const check = (name, ok, detail) => { if (!ok) fail(label + ": " + name + (detail ? ": " + detail : "")); checks.push(name); };
+  {
     const ctx = await browser.newContext({ viewport: { width: 1300, height: 900 } });
     const p = await ctx.newPage();
     const errors = [];
@@ -45,21 +182,7 @@ const server = http.createServer((req, res) => {
     p.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
     p.on("dialog", d => { errors.push("modal dialog: " + d.message()); d.dismiss(); });
     await p.goto(url);
-    const screen = () => p.evaluate(() => {
-      const b = window.__term.buffer.active, out = [];
-      for (let i = 0; i < b.length; i++) out.push(b.getLine(i).translateToString(true));
-      return out.join("\n").replace(/\s+$/, "");
-    });
-    const lastLine = async () => (await screen()).split("\n").pop();
-    const settle = async (pred, what, ms = 15000) => {
-      const end = Date.now() + ms;
-      while (Date.now() < end) { if (await pred()) return; await p.waitForTimeout(40); }
-      fail("timed out waiting for " + what + "\n--- screen tail ---\n" + (await screen()).split("\n").slice(-12).join("\n"));
-    };
-    const atPrompt = () => settle(async () => /cozy> $/.test(await lastLine() + " ") || (await lastLine()) === "cozy>", "the prompt");
-    const mark = async () => (await screen()).length;
-    const since = async m => (await screen()).slice(m);
-    const enter = async (s) => { await p.keyboard.type(s); await p.keyboard.press("Enter"); };
+    const { screen, lastLine, settle, atPrompt, mark, since, enter } = helpers(p);
     const run = async (s, want, name) => {
       const m = await mark(); await enter(s);
       await settle(async () => (await since(m)).includes(want), name + " (wanted " + JSON.stringify(want) + ")");
@@ -68,6 +191,7 @@ const server = http.createServer((req, res) => {
 
     await settle(() => p.evaluate(() => !!window.__term && window.__term.buffer.active.length > 8), "the REPL to start", 90000);
     await atPrompt();
+    check("the " + label + " engine answers", (await p.evaluate(() => document.documentElement.dataset.engine || "wasm")) === label);
     const banner = await screen();
     check("the native banner", /a heavier numerical language, warmly held/.test(banner) && /Ctrl-D to exit/.test(banner), banner.slice(0, 900));
     await p.click("#term");
@@ -152,8 +276,8 @@ const server = http.createServer((req, res) => {
     await atPrompt(); await p.click("#term");
     m = await mark(); await p.keyboard.press("ArrowUp");
     await settle(async () => (await lastLine()).includes("cube(4)"), "the history after a reload"); checks.push("history across a reload");
-    if (errors.length) fail("page errors: " + errors.join("; "));
-    console.log(`playground: the native REPL in xterm.js — ${checks.length} checks (editing, completion, history, ` +
-                "Ctrl-C at the prompt and in a loop, input, pause, demo, pager, packeur, panes, Ctrl-D, reload)");
-  } finally { await browser.close(); server.close(); }
-})().catch(e => fail(e.stack || e));
+    if (errors.length) fail(label + ": page errors: " + errors.join("; "));
+    await ctx.close();
+  }
+  return checks.length;
+}

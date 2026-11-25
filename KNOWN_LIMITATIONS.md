@@ -189,6 +189,11 @@ Status: DOCUMENTED COST. The terminal is the benchmarking surface; the
 workbench's value is the panes around a session that remains hundreds
 of times faster than the boxed era. A persistent warm compute thread is
 parked in the docket with these experiments as its trigger.
+**0.1.52: re-measure.** The workbench no longer evaluates in a daemon
+over HTTP: it runs the ordinary REPL process (the code `./cozy` runs) on a
+pseudo-terminal, with interactive QoS inherited. If the cold-start
+hypothesis was right, the gap should be gone; it has not been measured on
+Apple Silicon since.
 
 ## Scalar loops are interpreted (measured 0.1.39)
 

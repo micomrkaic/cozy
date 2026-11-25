@@ -31,6 +31,7 @@
 #include <setjmp.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 
 #include "lineedit.h"                       /* isocline: editing, history, completion */
 #ifdef __EMSCRIPTEN__
@@ -42,6 +43,34 @@ extern int cozy_term_rows(void);
  * sends the page its workspace from here, so the side panes follow the
  * session without running commands of their own. Null natively. */
 void (*repl_prompt_hook)(Interp *I) = nullptr;
+
+/* The page's notice, in band: before each prompt the workspace listing
+ * travels as a private OSC sequence, ESC ] 5379 ; <base64> BEL, which the
+ * page's xterm.js catches (a terminal ignores an OSC it does not know).
+ * The same bytes whether the REPL is native on the workbench's pty or
+ * WebAssembly in the page: one handler, both engines. */
+void repl_osc_notice(Interp *I)
+{
+    extern void cozy_who_text(Interp *, FILE *);
+    char *buf = nullptr; size_t sz = 0;
+    FILE *m = open_memstream(&buf, &sz);
+    if (!m) return;
+    cozy_who_text(I, m);
+    fclose(m);
+    static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    fputs("\033]5379;", stdout);
+    for (size_t i = 0; i < sz; i += 3) {
+        unsigned v = (unsigned char)buf[i] << 16;
+        if (i + 1 < sz) v |= (unsigned char)buf[i + 1] << 8;
+        if (i + 2 < sz) v |= (unsigned char)buf[i + 2];
+        putchar(b64[(v >> 18) & 63]); putchar(b64[(v >> 12) & 63]);
+        putchar(i + 1 < sz ? b64[(v >> 6) & 63] : '=');
+        putchar(i + 2 < sz ? b64[v & 63] : '=');
+    }
+    fputs("\007", stdout);
+    fflush(stdout);
+    free(buf);
+}
 
 /* is output a terminal? natively isatty; in the browser, the page's */
 static bool out_is_tty(void)
@@ -142,12 +171,46 @@ static FILE *open_pager(void)
     return popen(pager, "w");
 }
 
+/* A small pager for where there is no less: the browser, and the native
+ * workbench (COZY_PAGER=builtin), so the page shows the same thing whichever
+ * engine answers. Space or f pages, Enter or j steps a line, q (or Ctrl-C,
+ * Esc) quits. */
+static int pager_key(void)
+{
 #ifdef __EMSCRIPTEN__
-/* The browser has no less: a small pager in the page's terminal. Space or f
- * pages, Enter or j steps a line, q (or Ctrl-C, Esc) quits. */
+    return cozy_term_readbyte(-1);
+#else
+    struct termios oldt, raw;
+    bool tty = isatty(0) && tcgetattr(0, &oldt) == 0;
+    if (tty) { raw = oldt; raw.c_lflag &= (tcflag_t)~(ICANON | ECHO); raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;
+               tcsetattr(0, TCSANOW, &raw); }
+    unsigned char c = 0;
+    ssize_t n = read(0, &c, 1);
+    if (tty) tcsetattr(0, TCSANOW, &oldt);
+    return n == 1 ? c : -1;
+#endif
+}
+static int pager_rows(void)
+{
+#ifdef __EMSCRIPTEN__
+    return cozy_term_rows();
+#else
+    struct winsize ws;
+    return ioctl(fileno(stdout), TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0 ? ws.ws_row : 24;
+#endif
+}
+static bool pager_builtin_wanted(void)
+{
+#ifdef __EMSCRIPTEN__
+    return true;
+#else
+    const char *p = getenv("COZY_PAGER");
+    return p && !strcmp(p, "builtin");
+#endif
+}
 static void page_builtin(const char *buf, size_t sz)
 {
-    int rows = cozy_term_rows();
+    int rows = pager_rows();
     if (rows < 4) rows = 24;
     int page = rows - 1, shown = 0;
     size_t pos = 0;
@@ -159,7 +222,7 @@ static void page_builtin(const char *buf, size_t sz)
         if (shown >= page && pos < sz) {
             fputs("\033[7m-- more --  space: page  Enter: line  q: quit\033[0m", stdout);
             fflush(stdout);
-            int k = cozy_term_readbyte(-1);
+            int k = pager_key();
             fputs("\r\033[K", stdout);
             if (k < 0 || k == 'q' || k == 'Q' || k == 3 || k == 27) break;
             shown = (k == '\r' || k == '\n' || k == 'j') ? page - 1 : 0;
@@ -167,15 +230,11 @@ static void page_builtin(const char *buf, size_t sz)
     }
     fflush(stdout);
 }
-#endif
 
 static void page_output(const char *buf, size_t sz)
 {
     if (!buf || sz == 0) return;
-#ifdef __EMSCRIPTEN__
-    page_builtin(buf, sz);
-    return;
-#endif
+    if (pager_builtin_wanted()) { page_builtin(buf, sz); return; }
     size_t lines = 0;
     for (size_t i = 0; i < sz; i++) if (buf[i] == '\n') lines++;
     int rows = 24;
@@ -349,6 +408,7 @@ int repl_run(void)
     le_init(histpath, globals);
     extern char *(*cozy_input_hook)(const char *);
     extern bool (*cozy_pause_hook)(const char *);
+    if (getenv("COZY_WORKBENCH") && !repl_prompt_hook) repl_prompt_hook = repl_osc_notice;   /* serve.c's pty */
     if (le_interactive()) {                     /* input() and pause() edit like the prompt */
         cozy_input_hook = le_readline_nohist;
         cozy_pause_hook = le_pause;
@@ -444,21 +504,20 @@ int repl_run(void)
                     snprintf(path, sizeof path, "/usr/local/share/cozy/%s", file);
                     mf = fopen(path, "rb");
                 }
+                if (!mf) mf = fopen_asset(file);          /* beside the binary, wherever we run */
                 if (!mf) {
                     fprintf(stderr, "manual: %s not found (run from the repo root, "
                             "or set COZY_MANUAL for the main manual)\n", file);
                     goto manual_done;
                 }
                 bool tty = out_is_tty();
-#ifdef __EMSCRIPTEN__
-                if (tty) {                             /* no less: render, then the built-in pager */
+                if (tty && pager_builtin_wanted()) {   /* no less: render, then the built-in pager */
                     char *mb = nullptr; size_t ms = 0;
                     FILE *mm = open_memstream(&mb, &ms);
                     if (mm) { md_render(mf, mm, true); fclose(mm); page_builtin(mb, ms); free(mb); }
-                    tty = false; fclose(mf); mf = nullptr;
+                    fclose(mf);
+                    goto manual_done;
                 }
-                if (!mf) goto manual_done;
-#endif
                 if (tty) {
                     FILE *pp = open_pager();
                     if (pp) {
