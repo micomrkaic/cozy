@@ -1029,7 +1029,9 @@ static void term_update_ansi16(term_t* term) {
   }
   #endif
   // this seems to be unreliable on some systems (Ubuntu+Gnome terminal) so only enable when known ok.
-  #if __APPLE__
+  // COZY: not at all — the reply is awaited for up to 400ms at the first prompt and keys typed
+  // meanwhile were eaten (tty_read_esc_response); Cozy paints nothing that needs the palette.
+  #if 0 && __APPLE__
   // otherwise use OSC 4 escape sequence query
   if (tty_start_raw(term->tty)) {
     for(int i = 0; i < 16; i++) {

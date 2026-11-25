@@ -29,5 +29,12 @@ Built as one translation unit (`src/isocline.c` includes the rest) with
   and a Ctrl-C typed just after Enter could vanish as the editor let go of
   the terminal — which is how the macOS CI lost one (0.1.50).
 
+- Keys typed while isocline waits for a terminal's reply to a query are
+  kept, not eaten (`src/tty.c`, `tty_read_esc_response`), and the macOS-only
+  query for the 16-color palette is skipped (`src/term.c`): at the first
+  prompt it waited up to 400 ms for an answer and swallowed what was typed
+  in that time — macOS CI's pager test lost the "m" of "manual". Cozy
+  paints nothing that needs the palette.
+
 To update: copy upstream's `src`, `include` and `LICENSE` over these, and
 re-apply the changes above (each is marked with a `COZY` comment).

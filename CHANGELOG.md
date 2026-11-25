@@ -9,7 +9,7 @@ the same REPL, in the browser.
 
 ### Changed
 - **Line editing is isocline** (third_party/isocline, MIT, vendored with
-  three small marked changes), not GNU readline: no library to install or
+  a few small marked changes), not GNU readline: no library to install or
   detect, no macOS libedit differences. At the prompt: Emacs keys
   (Ctrl-A/E, Ctrl-K/U/W, Alt-B/F, arrows), history with up/down and
   Ctrl-R search, persisted to `~/.cozy_history` (a multi-line entry is one
@@ -19,8 +19,10 @@ the same REPL, in the browser.
   the terminal is edited the same way. Not carried over: `~/.inputrc` and
   vi mode. In Ctrl-R search, Enter takes the entry found into the line; a
   second Enter runs it. What you type while a computation runs is kept for
-  the next prompt, as with readline (isocline's own terminal handling
-  discarded it; changed here).
+  the next prompt, as with readline, and so is what you type before the
+  first prompt appears (isocline's own terminal handling discarded both —
+  on macOS it waited at startup for the terminal's color table and ate the
+  keys typed meanwhile; changed here).
 - The demo's bare-Enter step no longer lands in the history as `next`.
 - `make READLINE=0` is gone (nothing to turn off).
 

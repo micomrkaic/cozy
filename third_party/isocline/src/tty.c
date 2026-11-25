@@ -238,6 +238,7 @@ ic_private bool tty_read_esc_response(tty_t* tty, char esc_start, bool final_st,
   uint8_t c = 0;
   if (!tty_readc_noblock(tty, &c, 2*tty->esc_initial_timeout) || c != '\x1B') {
     debug_msg("initial esc response failed: 0x%02x\n", c);
+    if (c != 0 && c != '\x1B') tty_cpush_char(tty, c);   // COZY: a key typed meanwhile is not a reply: keep it
     return false;
   }
   if (!tty_readc_noblock(tty, &c, tty->esc_timeout) || (c != esc_start)) return false;

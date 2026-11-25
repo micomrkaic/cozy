@@ -35,13 +35,15 @@ UP, LEFT, CTRL_A, CTRL_C, CTRL_D, CTRL_K, CTRL_R, CTRL_W, TAB = "\x1b[A", "\x1b[
 
 
 class Session:
-    def __init__(self, home):
+    def __init__(self, home, term="xterm-256color", typed=None):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
-            os.environ.update(HOME=home, TERM="xterm-256color", NO_COLOR="1")
+            os.environ.update(HOME=home, TERM=term, NO_COLOR="1")
             os.environ.pop("LINES", None); os.environ.pop("COLUMNS", None)
             os.execv("./cozy", ["./cozy"])
         self.buf = ""
+        if typed:                                # keys typed before the first prompt appears
+            os.write(self.fd, typed.encode())
         self.read_until("cozy> ", 10)
 
     def _pump(self, timeout):
@@ -197,6 +199,12 @@ try:
         text = open(hist, errors="replace").read()
         check("a multi-line entry is one history item, continuation lines are not separate",
               "let y = [1," in text and not re.search(r"(?m)^2\]$", text), repr(text[-300:]))
+    # typing before the first prompt has appeared: nothing is lost (macOS once
+    # waited at startup for the terminal's color table and ate those keys)
+    home3 = tempfile.mkdtemp(prefix="cozy-lineedit-")   # its own history: no cross-talk
+    s3 = Session(home3, term="xterm", typed="6 * 7\r")
+    check("keys typed before the first prompt are kept", s3.read_until("42", 5), repr(s3.clean()[-160:]))
+    s3.close(); shutil.rmtree(home3, ignore_errors=True)
     # a new session recalls the last one's history
     s2 = Session(home)
     m = s2.mark(); s2.send(UP); s2.settle(0.3, 2)
