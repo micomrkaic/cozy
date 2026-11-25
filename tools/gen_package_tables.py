@@ -130,6 +130,13 @@ SPECS = {
     ("nowcast.bootstrap(f, opts)", "nowcast.bootstrap(f, {B = 3}).boot.B"),
     ("nowcast.transform(Y, codes, d)", "nowcast.transform([100, 104], [\"pct\"], [0])"),
   ]),
+  "fred": ("load(\"packages/fred.cz\"); let o = {dir = \"tests/data/fred\"}", [
+    ("fred.download(id, opts)", "fred.download(\"gdpc1\", o)"),
+    ("fred.series(id, opts)",   "fred.series(\"ICSA\", o).freq"),
+    ("fred.panel(ids, opts)",   "size(fred.panel([\"GDPC1\"; \"INDPRO\"], {dir = \"tests/data/fred\", start = date(2024, 1, 1)}).Y)"),
+    ("fred.us",                 "numel(fred.us.ids)"),
+    ("fred.pandemic",           "datestr(fred.pandemic[1])"),
+  ]),
 }
 
 def esc(t): return t.replace("|", "\\|")

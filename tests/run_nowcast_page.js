@@ -15,6 +15,10 @@
 //     bands too; the cards break the band into its parts;
 //   - the missing-data example: late starts, a gap, a discontinued series,
 //     irregular releases — estimated, with a backcast, nowcast and forecast.
+//   - FRED, played by the snapshot in tests/data/fred: the starter set
+//     loads with its transformations and settings and estimates (and its
+//     script agrees); refused, as FRED refuses other sites, the page offers
+//     the download links instead.
 // Run from the repository root: node tests/run_nowcast_page.js
 const SKIP = process.env.COZY_REQUIRE_BROWSER ? ", and COZY_REQUIRE_BROWSER is set: FAIL" : ", skipping";
 let chromium;
@@ -96,6 +100,53 @@ async function exercise(browser, url, label) {
   return st;
 }
 
+// FRED, with FRED played by the snapshot in tests/data/fred: first readable
+// (as if FRED allowed other sites), then refused (as it does): the page must
+// load the starter set and estimate it with its settings, or hand over links
+async function fred(browser, url) {
+  const page = await browser.newPage();
+  const errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  let allow = true;
+  await page.route("https://fred.stlouisfed.org/**", route => {
+    if (!allow) return route.abort();
+    const id = new URL(route.request().url()).searchParams.get("id");
+    const f = path.join(ROOT, "tests/data/fred", id + ".csv");
+    if (!fs.existsSync(f)) return route.fulfill({ status: 404, body: "" });
+    route.fulfill({ status: 200, headers: { "access-control-allow-origin": "*", "content-type": "text/csv" }, body: fs.readFileSync(f, "utf8") });
+  });
+  await page.goto(url);
+  await page.waitForFunction(() => document.getElementById("engine").textContent === "engine ready", null, { timeout: 90000 });
+  await page.evaluate(() => window.NowcastApp.fromFred());
+  const loaded = await page.evaluate(() => ({ n: window.NowcastApp.S.series.length, base: document.getElementById("base").value,
+    r: document.getElementById("r").value, start: document.getElementById("start").value, skip: document.getElementById("skip2020").checked,
+    tf: window.NowcastApp.S.series.map(s => s.name + ":" + s.freq + ":" + s.transform).join(" ") }));
+  if (loaded.n !== 9 || loaded.base !== "M" || loaded.r !== "2" || loaded.start !== "2010" || !loaded.skip ||
+      !/gdpc1:Q:pct/.test(loaded.tf) || !/icsa:W:logdiff/.test(loaded.tf) || !/t10y2y:D:diff/.test(loaded.tf))
+    fail("FRED starter set: " + JSON.stringify(loaded));
+  await page.evaluate(() => { document.getElementById("boot").value = "0"; });
+  await page.click("#run");
+  await page.waitForFunction(() => (window.NowcastApp.S.fit && document.querySelector("#cards .nc")) || document.querySelector("#modelmsg .err"), null, { timeout: 180000 });
+  const err = await page.$("#modelmsg .err");
+  if (err) fail("FRED starter set: estimation — " + await err.textContent());
+  const st = await page.evaluate(() => { const F = window.NowcastApp.S.fit;
+    return { status: F.status, base: F.P.base, first: F.P.iso(0), value: F.now.value, sd: F.now.sd, pred: F.now.pred,
+             script: window.NowcastApp.S.lastScript, csv: window.NowcastApp.cleanCSV(F.P),
+             gap: (() => { const i = F.P.names.indexOf("indpro"); let n = 0; for (let t = 0; t < F.P.T; t++) { const iso = F.P.iso(t); if (iso >= "2020-03" && iso < "2020-10" && isFinite(F.P.Y[i * F.P.T + t])) n++; } return n; })() }; });
+  if (st.status !== "converged" || st.base !== "M" || st.first !== "2010-01-01" && st.first > "2015-01-01" || st.gap !== 0)
+    fail("FRED starter set fit: " + JSON.stringify({ status: st.status, base: st.base, first: st.first, gap: st.gap }));
+  // refused: links to download, and nothing loaded twice
+  allow = false;
+  await page.evaluate(() => window.NowcastApp.fromFred());
+  const fb = await page.evaluate(() => ({ shown: !!document.getElementById("fredfallback"),
+    links: [...document.querySelectorAll("#fredfallback a")].map(a => a.getAttribute("href")) }));
+  if (!fb.shown || fb.links.length !== 9 || !fb.links[0].startsWith("https://fred.stlouisfed.org/graph/fredgraph.csv?id=GDPC1"))
+    fail("FRED refused: " + JSON.stringify(fb));
+  if (errors.length) fail("FRED: page errors: " + errors.join("; "));
+  await page.close();
+  return st;
+}
+
 // an example through the page: estimate, read the results, decompose the news
 async function example(browser, url, which) {
   const page = await browser.newPage();
@@ -167,9 +218,18 @@ async function example(browser, url, which) {
     const m = await example(browser, `http://127.0.0.1:${port}/nowcast.html`, "missing");
     if (m.status !== "converged" || m.cards.join(" ") !== "Backcast Nowcast Forecast" || m.base !== "M")
       fail("missing-data example: " + JSON.stringify({ status: m.status, cards: m.cards, base: m.base }));
+    // FRED: the starter set through the page, and its script
+    const fr = await fred(browser, `http://127.0.0.1:${port}/nowcast.html`);
+    fs.writeFileSync(path.join(tmp, "nowcast_data.csv"), fr.csv);
+    fs.writeFileSync(path.join(tmp, "nowcast_script.cz"), fr.script + 'print("{:.17g} {:.17g} {:.17g}", n.value, n.sd, n.sdpred)\n');
+    const fout = execFileSync(path.join(ROOT, "cozy"), ["nowcast_script.cz"], { cwd: tmp, encoding: "utf8" }).trim().split("\n").pop();
+    const [fv, fs2, fp] = fout.split(" ").map(Number);
+    if (!(Math.abs(fv - fr.value) < 1e-9 && Math.abs(fs2 - fr.sd) < 1e-9 && Math.abs(fp - fr.pred) < 1e-9))
+      fail(`FRED starter set: the exported script gives ${fv} (sd ${fs2}), the page ${fr.value} (sd ${fr.sd})`);
     console.log(`nowcast page: served and standalone pages run (EM ${a.iters} iterations); news adds up; ` +
                 `the exported script reproduces the nowcast (${v.toFixed(6)}, |diff| ${Math.abs(v - a.value).toExponential(1)}); ` +
-                `weekly tracker (${w.iters} iterations + bootstrap, GDP ${w.value.toFixed(3)} ± ${w.pred.toFixed(3)}, script agrees) and missing-data examples run`);
+                `weekly tracker (${w.iters} iterations + bootstrap, GDP ${w.value.toFixed(3)} ± ${w.pred.toFixed(3)}, script agrees) and missing-data examples run; ` +
+                `FRED starter set (snapshot; read, and refused with download links) estimates, script agrees`);
   } finally {
     await browser.close(); server.close();
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -1,5 +1,41 @@
 # Cozy changelog
 
+## 0.1.61 — data from FRED
+
+### Added
+- **`fred.cz`: FRED series into nowcasting panels.**
+  - `fred.series(id)` fetches a series by its FRED id from the public CSV
+    download (no API key; curl or wget). It keeps the file in a cache
+    directory (`opts.dir`, default `fred`), reads it from there afterwards
+    without the network, and fetches again on `opts.refresh`. Each series'
+    frequency comes from its own dates.
+  - `fred.panel(ids, opts)` puts series of any frequencies on one weekly or
+    monthly calendar. Daily series are averaged; monthly and quarterly values
+    sit in the last week or month of their period, where `nowcast.cz` looks.
+    It takes `start` and `skip` (`fred.pandemic` turns March–September 2020
+    into missing values).
+  - Ids are checked before they reach the shell.
+- **`fred.us`, a starter set of public-domain US series**: real GDP,
+  industrial production, payrolls, retail sales, unemployment, housing
+  starts, initial and continuing claims, and the 10y–2y spread. It comes
+  with transformations, aggregations and the model that does best on it,
+  measured on real data from 2010 to 2026 without the pandemic: monthly
+  with two factors, whose quarterly path follows published GDP at a
+  correlation of 0.88 (a weekly model, or one factor, about 0.3).
+- **The nowcast page gets FRED series.** A FRED box (the starter set
+  prefilled) asks FRED directly; browsers refuse, since FRED does not allow
+  other sites to read it, so the page hands over one-click download links
+  and reads the files dropped back in. A file is recognized as FRED's by
+  its format and name (`GDPC1.csv`), and known ids get their usual
+  transformation. Loading the starter set applies its settings.
+- **Two new model settings on the page**: the sample's start, and
+  "treat March–September 2020 as missing".
+- **Tests run offline**: a snapshot of the starter set in `tests/data/fred`
+  (since 2015, 104 KB) serves 13 golden cases, the package guide's
+  transcript, and the browser test. In the browser test it stands in for
+  FRED, both readable and refused, and the starter set's exported script
+  must reproduce the page.
+
 ## 0.1.60 — honest bands: parameter uncertainty and the published figure's noise
 
 ### Added
