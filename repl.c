@@ -32,10 +32,7 @@
 #include <unistd.h>
 #include <sys/ioctl.h>
 
-#ifdef HAVE_READLINE
-#  include <readline/readline.h>
-#  include <readline/history.h>
-#endif
+#include "lineedit.h"                       /* isocline: editing, history, completion */
 
 /* ------------------------------------------------------------------ */
 /* session retention: accepted (arena, source) pairs live until exit   */
@@ -61,94 +58,7 @@ static void keep_free_all(Keep *k)
     free(k->arenas); free(k->srcs);
 }
 
-/* ------------------------------------------------------------------ */
-/* tab completion (identifiers + keywords)                             */
-/* ------------------------------------------------------------------ */
-static EnvObj *g_globals;        /* live global frame, for name completion */
-
-#ifdef HAVE_READLINE
-static char  **g_cands;
-static size_t  g_ncands;
-
-static void build_candidates(void)
-{
-    for (size_t i = 0; i < g_ncands; i++) free(g_cands[i]);
-    free(g_cands); g_cands = nullptr; g_ncands = 0;
-
-    static const char *kw[] = { "let", "fn", "if", "then", "else", "end", "for", "while",
-                                "do", "in", "break", "continue", "return", "true", "false", "null" };
-    size_t nk = sizeof kw / sizeof *kw;
-    size_t cap = nk + (g_globals ? g_globals->count : 0);
-    g_cands = malloc(cap * sizeof *g_cands);
-    if (!g_cands) abort();
-
-    for (size_t i = 0; i < nk; i++) g_cands[g_ncands++] = strdup(kw[i]);
-    if (g_globals)
-        for (uint32_t i = 0; i < g_globals->count; i++)
-            g_cands[g_ncands++] = strndup(g_globals->names[i], g_globals->namelens[i]);
-}
-
-static char *name_generator(const char *text, int state)
-{
-    static size_t idx, len;
-    if (state == 0) { build_candidates(); idx = 0; len = strlen(text); }
-    while (idx < g_ncands) {
-        const char *c = g_cands[idx++];
-        if (strncmp(c, text, len) == 0) return strdup(c);
-    }
-    return nullptr;
-}
-
-static char **repl_completion(const char *text, int start, int end)
-{
-    (void)end;
-    rl_attempted_completion_over = 1;          /* we decide; no implicit fallback */
-    rl_completion_append_character = '\0';     /* don't append a space (call-friendly) */
-    /* Inside a double-quoted string — an odd number of unescaped '"' before
-     * the word — complete file names, so load("tests/da<TAB> works. */
-    int quotes = 0;
-    for (int i = 0; i < start; i++) {
-        if (rl_line_buffer[i] == '\\') { i++; continue; }
-        if (rl_line_buffer[i] == '"') quotes++;
-    }
-    if (quotes % 2 == 1)
-        return rl_completion_matches(text, rl_filename_completion_function);
-    return rl_completion_matches(text, name_generator);
-}
-#endif /* HAVE_READLINE */
-
-/* ------------------------------------------------------------------ */
-/* line input (readline, or a plain fgets fallback)                    */
-/* ------------------------------------------------------------------ */
-static char *prompt_line(const char *prompt)
-{
-#ifdef HAVE_READLINE
-    return readline(prompt);
-#else
-    fputs(prompt, stdout); fflush(stdout);
-    char *buf = nullptr; size_t cap = 0;       /* getline: no line-length limit */
-    ssize_t n = getline(&buf, &cap, stdin);
-    if (n < 0) { free(buf); return nullptr; }
-    if (n && buf[n-1] == '\n') buf[n-1] = '\0';
-    return buf;                                 /* caller frees, same as readline */
-#endif
-}
-
-#ifdef HAVE_READLINE
-/* Add to history without the trailing newline(s) that append_line leaves on
- * the accumulated buffer (the parser wants them; recalled commands do not).
- * add_history copies its argument, so a temporary truncation is safe. */
-static void history_add_trimmed(char *s)
-{
-    size_t n = strlen(s), k = n;
-    while (k && (s[k-1] == '\n' || s[k-1] == '\r')) k--;
-    if (k == 0) return;
-    char saved = s[k];
-    s[k] = '\0';
-    add_history(s);
-    s[k] = saved;
-}
-#endif
+/* line input: lineedit.c (isocline) — completion, history, editing */
 
 static char *append_line(char *acc, size_t *len, const char *line)
 {
@@ -378,7 +288,6 @@ int repl_run(void)
     Interp I;
     interp_init(&I);
     EnvObj *globals = globals_new();
-    g_globals = globals;
     Keep keep = {0};
     value_set_multiline(true);                   /* aligned matrices in the interactive shell */
 
@@ -387,26 +296,13 @@ int repl_run(void)
     if (home) snprintf(histpath, sizeof histpath, "%s/.cozy_history", home);
     else      snprintf(histpath, sizeof histpath, ".cozy_history");
 
-#ifdef HAVE_READLINE
-    rl_readline_name = "cozy";
-    rl_attempted_completion_function = repl_completion;
-    rl_variable_bind("blink-matching-paren", "on");
-#ifdef HAVE_GNU_READLINE
-    rl_catch_signals = 0;                       /* we install our own SIGINT */
-#endif
-    using_history();
-    stifle_history(1000);
-    read_history(histpath);
-    if (isatty(fileno(stdin))) {
+    le_init(histpath, globals);
+    extern char *(*cozy_input_hook)(const char *);
+    if (le_interactive()) cozy_input_hook = le_readline_nohist;   /* input() edits like the prompt */
+    if (le_interactive()) {
         print_banner(isatty(fileno(stdout)) && !getenv("NO_COLOR"));
-        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels\n\n", stdout);
+        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit  \u00b7  Ctrl-C cancels  \u00b7  Ctrl-R searches history\n\n", stdout);
     }
-#else
-    if (isatty(fileno(stdin))) {
-        print_banner(isatty(fileno(stdout)) && !getenv("NO_COLOR"));
-        fputs("  type  help  for a tour  \u00b7  Ctrl-D to exit\n\n", stdout);
-    }
-#endif
 
     struct sigaction sa; memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_sigint;
@@ -418,16 +314,18 @@ int repl_run(void)
     acc = nullptr; acclen = 0; cont = false;
 
     for (;;) {
-        if (sigsetjmp(g_sigint_jmp, 1)) {       /* landed here on Ctrl-C */
-#ifdef HAVE_GNU_READLINE
-            rl_free_line_state();
-            rl_cleanup_after_signal();
-#endif
+        if (sigsetjmp(g_sigint_jmp, 1)) {       /* landed here on Ctrl-C during evaluation */
             fputc('\n', stdout);
             free(acc); acc = nullptr; acclen = 0; cont = false;
         }
 
-        char *line = prompt_line(cont ? "     ...> " : "cozy> ");
+        bool cancelled = false;
+        char *line = le_readline(cont ? "     ...> " : "cozy> ", &cancelled);
+        if (line && cancelled) {                /* Ctrl-C at the prompt: abandon the entry */
+            free(line);
+            free(acc); acc = nullptr; acclen = 0; cont = false;
+            continue;
+        }
         if (!line) {                            /* EOF / Ctrl-D */
             if (cont) {                         /* cancel partial entry, back to prompt */
                 fputc('\n', stdout);
@@ -446,9 +344,7 @@ int repl_run(void)
                 q++;
                 if (*q) { fflush(stdout); fflush(stderr); int rc = system(q); (void)rc; }
                 else fputs("usage: !<shell command>\n", stderr);
-#ifdef HAVE_READLINE
-                add_history(line);
-#endif
+                le_history_add(line);
                 free(line);
                 continue;
             }
@@ -457,9 +353,7 @@ int repl_run(void)
                 else if (!strcmp(arg, "off") || !strcmp(arg, "0")) g_more = false;
                 else if (*arg == '\0') printf("more is %s\n", g_more ? "on" : "off");
                 else fputs("usage: more on | off\n", stderr);
-#ifdef HAVE_READLINE
-                add_history(line);
-#endif
+                le_history_add(line);
                 free(line);
                 continue;
             }
@@ -510,9 +404,7 @@ int repl_run(void)
                 }
                 fclose(mf);
                 manual_done: ;
-#ifdef HAVE_READLINE
-                add_history(line);
-#endif
+                le_history_add(line);
                 free(line);
                 continue;
             }
@@ -521,9 +413,7 @@ int repl_run(void)
                 else if (!strcmp(arg, "off") || !strcmp(arg, "0")) value_set_multiline(false);
                 else if (*arg == '\0') printf("pretty is %s\n", value_multiline() ? "on" : "off");
                 else fputs("usage: pretty on | off\n", stderr);
-#ifdef HAVE_READLINE
-                add_history(line);
-#endif
+                le_history_add(line);
                 free(line);
                 continue;
             }
@@ -531,9 +421,7 @@ int repl_run(void)
                 if (*arg == '\0') printf("format: %s\n", value_format_desc());
                 else if (!value_format_by_name(arg))
                     fprintf(stderr, "format: unknown mode '%s' (try short, long, short e, long e, default)\n", arg);
-#ifdef HAVE_READLINE
-                add_history(line);
-#endif
+                le_history_add(line);
                 free(line);
                 continue;
             }
@@ -557,6 +445,7 @@ int repl_run(void)
             } else { free(acc); acc = nullptr; acclen = 0; cont = false; continue; }
         }
 
+        bool synthetic = acc && strcmp(acc, "next") == 0 && acclen == 4;   /* the demo step, not typed */
         Arena *a = arena_new();
         Parser p;
         parser_init(&p, acc, a);
@@ -570,16 +459,12 @@ int repl_run(void)
             }
             print_diag(acc, p.err_tok.line, p.err_tok.col, p.err_msg);
             arena_free(a);
-#ifdef HAVE_READLINE
-            history_add_trimmed(acc);
-#endif
+            le_history_add(acc);
             free(acc); acc = nullptr; acclen = 0; cont = false;
             continue;
         }
 
-#ifdef HAVE_READLINE
-        history_add_trimmed(acc);
-#endif
+        if (!synthetic) le_history_add(acc);
         char  *cap = nullptr; size_t capsz = 0; FILE *ms = nullptr;
         bool   paging = g_more && isatty(fileno(stdout));
         if (paging) {
@@ -605,11 +490,7 @@ int repl_run(void)
         acc = nullptr; acclen = 0; cont = false;
     }
 
-#ifdef HAVE_READLINE
-    write_history(histpath);
-    for (size_t i = 0; i < g_ncands; i++) free(g_cands[i]);
-    free(g_cands);
-#endif
+    /* the history file is kept current after each line (isocline) */
     free(acc);                                   /* any unfinished entry */
     env_clear(globals);                          /* break global closure/env cycles */
     env_release(globals);

@@ -1,5 +1,40 @@
 # Cozy changelog
 
+## 0.1.50 — one line editor everywhere (terminal stage 1)
+
+The first of three stages that make the browser REPL behave exactly like
+the terminal one (design entry 34). This stage replaces GNU readline with
+an editor compiled into Cozy, so that stage 2 can run the same editor, and
+the same REPL, in the browser.
+
+### Changed
+- **Line editing is isocline** (third_party/isocline, MIT, vendored with
+  a few small marked changes), not GNU readline: no library to install or
+  detect, no macOS libedit differences. At the prompt: Emacs keys
+  (Ctrl-A/E, Ctrl-K/U/W, Alt-B/F, arrows), history with up/down and
+  Ctrl-R search, persisted to `~/.cozy_history` (a multi-line entry is one
+  item), Tab completion of names — keywords, builtins, your own — and of
+  file names inside a string, highlighted matching brackets, Ctrl-C to
+  abandon an entry or stop a computation, Ctrl-D to leave. `input()` at
+  the terminal is edited the same way. Not carried over: `~/.inputrc` and
+  vi mode. In Ctrl-R search, Enter takes the entry found into the line; a
+  second Enter runs it. What you type while a computation runs is kept for
+  the next prompt, as with readline, and so is what you type before the
+  first prompt appears (isocline's own terminal handling discarded both —
+  on macOS it waited at startup for the terminal's color table and ate the
+  keys typed meanwhile; changed here).
+- The demo's bare-Enter step no longer lands in the history as `next`.
+- `make READLINE=0` is gone (nothing to turn off).
+
+### Added
+- **tests/run_lineedit.py**: the REPL in a pseudo-terminal, typed at as a
+  person would — editing keys, history within and across sessions, Ctrl-R,
+  completion of names and paths, multi-line entries, Ctrl-C at the prompt
+  and during a computation, typing ahead, input(), the demo's stepping,
+  Ctrl-D — run by
+  `make test`. It replaces the completion smoke test, whose failures
+  `make test` used to ignore.
+
 ## 0.1.49 — the demo in the browser
 
 ### Fixed

@@ -3188,6 +3188,11 @@ static Value bi_names(Interp *I, Value *args, uint32_t n)
  * asked in the page's terminal (wasm_api.c). */
 bool cozy_stdin_ok = true;   /* the workbench server clears this: a one-shot
     HTTP eval must never block on the SERVER's stdin (owner's demo() hang) */
+/* The interactive REPL sets this to its line editor (lineedit.c), so input()
+ * at a terminal is edited like the prompt; elsewhere (vmtest, pipes, the
+ * embedding library) it stays null and input() reads a plain line. Returns
+ * a malloc'd answer. */
+char *(*cozy_input_hook)(const char *prompt) = nullptr;
 
 static Value bi_input(Interp *I, Value *args, uint32_t n)
 {
@@ -3206,6 +3211,15 @@ static Value bi_input(Interp *I, Value *args, uint32_t n)
     free(ans);
     return v;
 #else
+    if (cozy_input_hook) {
+        char pbuf[512];
+        snprintf(pbuf, sizeof pbuf, "%.*s", (int)plen, prompt);
+        fflush(vout());
+        char *ans = cozy_input_hook(pbuf);
+        Value v = val_string(ans ? ans : "", ans ? (uint32_t)strlen(ans) : 0);
+        free(ans);
+        return v;
+    }
     if (plen) { fwrite(prompt, 1, plen, stdout); fflush(stdout); }
     char *line = NULL; size_t cap = 0;
     ssize_t got = getline(&line, &cap, stdin);

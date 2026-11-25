@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
-/* vmtest.c — a minimal non-readline driver that runs each input line through
+/* vmtest.c — a minimal non-interactive driver that runs each input line through
  * the bytecode VM (vm_eval_program). Lets us pipe test programs and run under
- * ASan/UBSan without touching the shipping readline REPL. Each line is parsed
+ * ASan/UBSan without touching the shipping interactive REPL. Each line is parsed
  * and run as an independent program, so a runtime error in one line does not
  * abort the rest (matching the REPL). Accepted (arena, source) pairs are kept
  * and freed at exit so a clean run reports zero leaks. */

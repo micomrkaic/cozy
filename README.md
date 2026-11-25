@@ -91,15 +91,16 @@ C draws, the `dsge` package solves.
 
 ## Build
 
-Requires a C23-capable compiler (gcc 13+ / clang 16+) and `libm`.
-GNU **readline** is optional but recommended — the Makefile auto-detects it
-and falls back to a plain `fgets` REPL when absent.
+Requires a C23-capable compiler (gcc 13+ / clang 16+) and `libm` — nothing
+else. Line editing is built in: [isocline](third_party/isocline/COZY.md)
+(MIT, vendored), the same editor in every build, with history, Ctrl-R
+search, completion of names and file paths, and Emacs keys. (Cozy used GNU
+readline until 0.1.49; `~/.inputrc` settings and vi mode no longer apply.)
 
 ```sh
 make                       # ./cozy with the zero-dependency tier0 backend
 make BACKEND=openblas      # LAPACK-backed kernels (needs libopenblas-dev)
 make BACKEND=accelerate    # Apple Accelerate on macOS
-make READLINE=0            # force the no-readline fallback
 ```
 
 `buildinfo().backend` reports which backend a binary carries; measured on
@@ -110,10 +111,8 @@ The build is `-std=c2x -Wall -Wextra -Werror -O2`. On gcc 14+, pass
 `STD=c23`.
 
 **macOS.** `cc` is Apple Clang; Xcode 15+ Command Line Tools provide the C23
-features used here. The default `STD=c2x` is what to use. Readline: macOS's
-`-lreadline` resolves to Apple's **libedit** shim (works; fewer signal
-helpers) — for the full experience `brew install readline`; the Makefile
-adds `$(brew --prefix)/{include,lib}` automatically. If Apple Clang's warning
+features used here. The default `STD=c2x` is what to use. No readline or
+libedit is needed: the line editor is compiled in. If Apple Clang's warning
 set flags something gcc didn't, build with `make WERROR=` for that build.
 
 **WebAssembly.** `make wasm` with a modern emsdk builds the single-file

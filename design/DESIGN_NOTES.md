@@ -1090,3 +1090,41 @@ package for load("nowcast") from its directory — the download is
 nowcast_script.cz; a live FileList emptied by resetting its input
 mid-import. RESIDUE: a release calendar (news by date); saved projects;
 annual series; Excel offline (SheetJS from cdnjs). TRIGGER: the users.
+
+## 34. One REPL for the terminal and the browser — stage 1 SHIPPED 0.1.50
+(owner's request: "make the browser version behave exactly like the
+terminal version, readline and all"). The browser had a second REPL — the
+page's JavaScript terminal, with its own history, no completion, single
+lines, manual intercepted, packeur refused, pause/input special-cased —
+and every difference was a bug waiting (0.1.49's demo was three of them).
+CONSIDERED: imitating the terminal harder in the page (endless; never
+equal); GNU readline compiled to WebAssembly (it wants a real tty,
+signals and blocking reads — heavy, fragile); readline natively and
+another editor in the page (two behaviours again). DECIDED (owner, with
+the trade-offs named: ~/.inputrc and vi mode lost; phones keep a simple
+input field): one editor compiled into every build, isocline (MIT, one
+translation unit, its keyboard confined to a few functions in tty.c —
+the seam stage 2 replaces with keys from the page), and the same C REPL
+in both places, on xterm.js in the page. Stages, each shippable: (1) the
+editor natively, behind lineedit.c, with a pty test typing at the real
+REPL; (2) the WebAssembly REPL on xterm.js, keys delivered by Asyncify as
+pause() already does, the page's JavaScript REPL deleted; (3) the side
+panes from a notice the REPL emits, never commands of their own, and one
+parity test running the same key scripts at a pty and in the browser.
+STAGE 1: lineedit.c holds every decision (completion of names and of paths
+in strings; whole entries in the history, isocline's own per-line entries
+undone; plain prompts; no hints). Local changes to isocline, marked
+COZY (third_party/isocline/COZY.md): ic_last_cancelled(), since it returns
+"" for Ctrl-C and for an empty Enter alike and the REPL needs to tell them
+apart; a line feed as Enter in single-line mode, as readline had it (the
+pager test types "manual\n"); and raw mode switched with TCSADRAIN, not
+TCSAFLUSH — the flush threw away type-ahead, and on the slower macOS CI it
+swallowed a Ctrl-C typed just after Enter, so the loop it was meant to stop
+ran on (found by a probe on the macOS runner: the REPL's own signal
+handling was right); and keys typed while isocline awaits a terminal's
+reply kept, its macOS-only palette query dropped (it ate the first keys
+typed at startup: the macOS pager test's "manual" lost its "m"). input() reaches the editor through a
+hook the REPL sets, so vmtest, pipes and the embedding library stay free
+of it. tests/run_lineedit.py types at the real REPL on a pty. NOTED:
+Ctrl-R's Enter accepts into the line (readline ran it). TRIGGER for
+stage 2: this.
