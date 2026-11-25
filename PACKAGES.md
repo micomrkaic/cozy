@@ -1000,6 +1000,9 @@ cozy> datestr(pm.dates[k])
 "2025-11-29"
 cozy> let pw = nowcast.path(f, "gdp", "weekly"); numel(pw.value)
 464
+cozy> let fb = nowcast.bootstrap(f, {B = 50}); let n = nowcast.nowcast(fb, "gdp");
+cozy> [n.value, n.sdfilter, n.sdparam, n.sdnoise, n.sdpred]
+[1.04, 0.0415, 0.0208, 0.201, 0.206]
 ```
 
 The default nowcast is the quarter holding the panel's last week (its last
@@ -1015,6 +1018,27 @@ correlation of 0.92 with one factor. Daily data enter averaged to weeks;
 a daily model is not offered, since aggregation windows of a month or a
 quarter of days make each EM step seconds long, and the averages carry
 the signal.
+
+**How wide is the band?** (0.1.60) `n.sd` is the uncertainty of the
+common component given the data, with the parameters taken as known.
+Two things are missing from it. The first is the parameters' own
+uncertainty: `nowcast.bootstrap(f, {B = 50})` adds it by the parametric
+bootstrap (Pfeffermann and Tiller) — simulate data from the fitted model
+with the real data's gaps, re-estimate, re-smooth the real data with each
+draw — and `nowcast` and `path` then fold the draws' spread into `sd`
+(`sdfilter` and `sdparam` are the parts). The second matters more for a
+published figure: the series' own noise, `sdnoise`. `sdpred`, the root of
+`sd^2 + sdnoise^2`, is the band to put around a nowcast of the number that
+will be released. The last lines of the weekly transcript above give, for
+GDP's nowcast, `[n.value, n.sdfilter, n.sdparam, n.sdnoise, n.sdpred]`:
+the common component is known to 0.04, the parameters add 0.02, and
+GDP's own noise dominates: the published figure has a standard error of
+0.21. The truth the example was built from, 0.925, is 0.6 of those away
+— and 2.8 of the common component's alone. Over the published quarters, the
+errors standardized by `sdpred` have a spread of about one (the suite
+checks it); by `sd` alone, several times that. Draw `b` uses `rng(seed +
+b)`, so draws can be added in pieces (`bootstrap` again adds to
+`f.boot`) and repeat exactly.
 
 **Did the EM work?** `fit` records how it ended: `f.status` is
 `"converged"`, `"maxit"` (stopped at the iteration limit) or `"failed"` —
@@ -1049,6 +1073,7 @@ In the table, `d` is the full panel (all 120 months, the same names) and `f` its
 | `nowcast.news(f, Ynew, name, t)` | `let Y2 = Y; Y2[1, 120] = Y[1, 120] + 1; nowcast.news(f, Y2, "gdp").revisions[1]` | `0.194` |
 | `nowcast.path(f, name, freq)` | `numel(nowcast.path(f, "gdp", "quarterly").value)` | `40` |
 | `nowcast.report(f)` | `f.status` | `"converged"` |
+| `nowcast.bootstrap(f, opts)` | `nowcast.bootstrap(f, {B = 3}).boot.B` | `3` |
 | `nowcast.transform(Y, codes, d)` | `nowcast.transform([100, 104], ["pct"], [0])` | `[nan, 4.00]` |
 
 ## Writing your own

@@ -196,6 +196,8 @@
         <div class="grid-controls" style="margin-top:10px">
           <label class="f">Maximum EM iterations <input type="number" id="maxit" value="500" min="1" max="5000"></label>
           <label class="f">Tolerance (relative change in log-likelihood) <input type="text" id="tol" value="1e-5"></label>
+          <label class="f">Parameter uncertainty (bootstrap draws)
+            <select id="boot"><option value="0">none</option><option>20</option><option selected>50</option><option>100</option><option>200</option></select></label>
         </div>
       </details>
       <div class="row" style="margin-top:16px">
@@ -212,12 +214,12 @@
     <p class="hint" id="asof"></p>
     <div class="cards" id="cards"></div>
     <div class="chart-title" id="fan-title"></div>
-    <p class="chart-sub">Model estimate with 68% and 90% bands; dots are published values.</p>
+    <p class="chart-sub">Model estimate with 68% and 90% bands for the published figure — the common component, the parameters (bootstrap) and the series' own noise; dots are published values.</p>
     <div class="chart" id="fan"></div>
     <div class="legend" id="fan-legend"></div>
     <div id="trackwrap" class="hidden">
       <div class="chart-title" id="track-title"></div>
-      <p class="chart-sub">The target inside its periods, from the higher-frequency data, with 68% and 90% bands —
+      <p class="chart-sub">The target inside its periods, from the higher-frequency data, with 68% and 90% bands for its common component —
         <label>frequency <select id="trackfreq"></select></label>
         <label id="annwrap"><input type="checkbox" id="annual"> annualized</label></p>
       <div class="chart" id="tracker"></div>
@@ -290,8 +292,10 @@
       errors, started from principal components; the news decomposition is theirs, computed exactly. The smoother
       underneath solves for the whole factor path as one sparse linear system — Cozy's <code>ksmooth</code> — and the
       model is Cozy's <code>nowcast</code> package, running here as WebAssembly.</p>
-    <p>Standard errors measure the uncertainty of the common component given the data and the estimated parameters;
-      they do not include parameter uncertainty or the series' own noise.</p>
+    <p>The bands around the target's own figures are for the number that will be published: the uncertainty of the common
+      component given the data, plus the parameters' (a parametric bootstrap — simulate data from the fitted model with the
+      real data's gaps, re-estimate, re-smooth; Pfeffermann and Tiller), plus the series' own noise. The finer-frequency
+      tracker has no published figures, so its bands are the common component's and the parameters'.</p>
   </footer>
 </main>
 
@@ -366,7 +370,7 @@ function cozyName(raw, idx) {
 /* the bundle the worker loads, with its content hash: a browser or CDN
    cache can never pair this page with an older engine. Stamped by
    tools/gen_dsge_page.py whenever docs/cozy.js changes; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=7ddb5f91ed4f";
+var COZY_BUNDLE = "cozy.js?v=072405da0656";
 const Engine = (() => {
   const WORKER = `
     self.window = self;
@@ -813,8 +817,9 @@ function scriptText(P, o) {
     "let d = setfield(d, \"Y\", nowcast.transform(d.Y, " + cozyStrings(P.codes) + ", d));",
     "let f = nowcast.fit(d, {r = " + o.r + ", agg = " + cozyStrings(P.aggs) + ", maxit = " + o.maxit + ", tol = " + o.tol + "});",
     "nowcast.report(f);",
+    ...(o.boot ? ["let f = nowcast.bootstrap(f, {B = " + o.boot + "});   % parameter uncertainty: " + o.boot + " draws"] : []),
     "% the target, " + o.target + ", in " + P.label(o.tidx, o.tfreq) + " (period " + (o.tidx + 1) + " of the panel, " + P.iso(o.tidx) + ")",
-    "let n = nowcast.nowcast(f, \"" + o.target + "\", " + (o.tidx + 1) + ")",
+    "let n = nowcast.nowcast(f, \"" + o.target + "\", " + (o.tidx + 1) + ")   % n.sdpred: the band for the published figure",
     "% the target period by period at every frequency the panel has: nowcast.path(f, \"" + o.target + "\", \"" + (P.W ? "weekly" : "monthly") + "\")",
     ""].join("\n");
 }
@@ -834,7 +839,7 @@ function options() {
   const tol = Number($("tol").value);
   const maxit = Math.max(1, Math.round(Number($("maxit").value) || 500));
   return { target: $("target").value, r: +$("r").value, agg: $("agg").value, maxit,
-           tol: fin(tol) && tol >= 0 ? tol : 1e-5 };
+           tol: fin(tol) && tol >= 0 ? tol : 1e-5, boot: +$("boot").value };
 }
 const FREQ_CZ = { W: "weekly", M: "monthly", Q: "quarterly" };
 /* the frequencies the target can be tracked at: its own and every finer one down to the base */
@@ -872,6 +877,15 @@ async function estimate() {
       bar.style.width = (conv || failed ? 100 : Math.min(98, 100 * done / o.maxit)) + "%";
       $("fitstatus").textContent = "EM iteration " + done + (ll.length ? " · log-likelihood " + ll[ll.length - 1].toFixed(2) : "");
     }
+    // parameter uncertainty: the bootstrap, in pieces (draw b is the same however they are split)
+    if (o.boot > 0 && !failed) {
+      for (let b = 0; b < o.boot; b += 10) {
+        const k = Math.min(10, o.boot - b);
+        await Engine.run("let nc_f = nowcast.bootstrap(nc_f, {B = " + k + "});");
+        bar.style.width = Math.round(100 * (b + k) / o.boot) + "%";
+        $("fitstatus").textContent = "bootstrap draw " + (b + k) + " of " + o.boot;
+      }
+    }
     // how it ended: the package's own words, and its warnings
     const txt = await Engine.run("print(\"{}\", nc_f.message); for nc_k = 1 : numel(nc_f.warnings) do print(\"{}\", nc_f.warnings[nc_k]) end;");
     const lines = txt.split("\n").map(x => x.trim());
@@ -884,21 +898,23 @@ async function estimate() {
       while (t + 1 < P.T && id(t + 1) === id(P.lastB)) t++; return t; })();
     o.tidx = curEnd;
     const tq = cozyStrings([o.target]).slice(1, -1);
-    await Engine.run("let nc_now = nowcast.nowcast(nc_f, " + tq + ", " + (curEnd + 1) + "); let nc_nv = [nc_now.value, nc_now.sd];");
+    await Engine.run("let nc_now = nowcast.nowcast(nc_f, " + tq + ", " + (curEnd + 1) + "); let nc_nv = [nc_now.value, nc_now.sd, nc_now.sdpred, nc_now.sdfilter, nc_now.sdparam, nc_now.sdnoise];");
     const paths = {};
     for (const F of trackFreqs(P, tf)) {
-      await Engine.run("let nc_p = nowcast.path(nc_f, " + tq + ", \"" + FREQ_CZ[F] + "\"); let nc_pt = nc_p.t; let nc_pv = nc_p.value; let nc_ps = nc_p.sd; let nc_pa = nc_p.actual;");
-      const g = await Engine.get("nc_pt", "nc_pv", "nc_ps", "nc_pa");
-      paths[F] = { t: Array.from(g.nc_pt.data, x => x - 1), v: Array.from(g.nc_pv.data), sd: Array.from(g.nc_ps.data), a: Array.from(g.nc_pa.data) };
+      await Engine.run("let nc_p = nowcast.path(nc_f, " + tq + ", \"" + FREQ_CZ[F] + "\"); let nc_pt = nc_p.t; let nc_pv = nc_p.value; let nc_ps = nc_p.sd; let nc_pp = nc_p.sdpred; let nc_pa = nc_p.actual;");
+      const g = await Engine.get("nc_pt", "nc_pv", "nc_ps", "nc_pp", "nc_pa");
+      paths[F] = { t: Array.from(g.nc_pt.data, x => x - 1), v: Array.from(g.nc_pv.data), sd: Array.from(g.nc_ps.data),
+                   pred: Array.from(g.nc_pp.data), a: Array.from(g.nc_pa.data) };
     }
     await Engine.run("let nc_fx = nc_f.state.f; let nc_fs = nc_f.state.fsd;");
     const R = await Engine.get("nc_nv", "nc_fx", "nc_fs");
     const secs = (performance.now() - t0) / 1000;
     S.fit = { P, o, ll, conv, failed, status, pkgMsg, warnings, iters: done, secs, paths,
-              now: { value: R.nc_nv.data[0], sd: R.nc_nv.data[1], t: curEnd }, fx: R.nc_fx, fs: R.nc_fs };
+              now: { value: R.nc_nv.data[0], sd: R.nc_nv.data[1], pred: R.nc_nv.data[2], filt: R.nc_nv.data[3], param: R.nc_nv.data[4],
+                     noise: R.nc_nv.data[5], t: curEnd }, fx: R.nc_fx, fs: R.nc_fs };
     S.lastScript = scriptText(P, o);
     $("fitstatus").textContent = { converged: "converged", maxit: "stopped at the iteration limit", failed: "EM failed" }[status] +
-      " after " + done + " iterations · " + (secs < 1 ? Math.round(secs * 1000) + " ms" : secs.toFixed(1) + " s");
+      " after " + done + " iterations" + (o.boot && !failed ? " · " + o.boot + " bootstrap draws" : "") + " · " + (secs < 1 ? Math.round(secs * 1000) + " ms" : secs.toFixed(1) + " s");
     bar.style.width = "100%";
     renderResults();
     if (status === "maxit") message("modelmsg", "warn", "EM stopped at " + o.maxit + " iterations before reaching the tolerance; the estimates are usable, but raise the limit for a converged fit. See the convergence report below.");
@@ -1104,12 +1120,15 @@ function renderResults() {
     const kind = t < o.tidx ? "backcast" : t === o.tidx ? "nowcast" : "forecast";
     const w = PERIODWORD[tf] || "period";
     const kinds = { backcast: "Backcast — published soon", nowcast: "Nowcast — the current " + w, forecast: "Forecast — the next " + w };
-    const v = kind === "nowcast" ? F.now.value : p.v[k], sd = kind === "nowcast" ? F.now.sd : p.sd[k];
+    const v = kind === "nowcast" ? F.now.value : p.v[k], sd = kind === "nowcast" ? F.now.pred : p.pred[k];
+    const parts = kind === "nowcast" ? "of which (variances add): common component " + fmt(F.now.filt, 2) + (o.boot ? ", parameters " + fmt(F.now.param, 2) : "") +
+      ", " + o.target + "'s own noise " + fmt(F.now.noise, 2) : null;
     cards.append(el("div", { class: "nc" + (kind === "nowcast" ? " main" : "") },
       el("div", { class: "k" }, kinds[kind]),
       el("div", { class: "q" }, P.label(t, tf) + " · " + o.target),
       el("div", { class: "v" }, fmt(v, 2)),
       el("div", { class: "ci" }, "90% band " + fmt(v - z90 * sd, 2) + " to " + fmt(v + z90 * sd, 2) + " · sd " + fmt(sd, 2)),
+      parts ? el("div", { class: "act", title: "the standard error of the figure that will be published, and its parts (variances add)" }, parts) : null,
       unit ? el("div", { class: "act" }, unit) : null));
   }
   if (!cards.children.length) cards.append(el("div", { class: "msg info" }, "Every period of the target is already published."));
@@ -1152,7 +1171,7 @@ function drawCharts() {
   const p = F.paths[tf];
   const from = P.T - (P.W ? 8 * 52 : 96);
   const idx = p.t.map((t, k) => k).filter(k => p.t[k] >= from);
-  const xs = idx.map(k => p.t[k]), est = idx.map(k => p.v[k]), sd = idx.map(k => p.sd[k]);
+  const xs = idx.map(k => p.t[k]), est = idx.map(k => p.v[k]), sd = idx.map(k => p.pred[k]);
   const band = z => [est.map((v, i) => v - z * sd[i]), est.map((v, i) => v + z * sd[i])];
   const b90 = band(z90), b68 = band(z68);
   $("fan-title").textContent = o.target + (unit ? " — " + unit : "");
@@ -1290,13 +1309,13 @@ function resultsCSV() {
   const F = S.fit, P = F.P, o = F.o;
   const head = ["date"];
   const fq = Object.keys(F.paths);
-  fq.forEach(x => head.push(o.target + "_" + FREQNAME[x], o.target + "_" + FREQNAME[x] + "_sd", o.target + "_" + FREQNAME[x] + "_published"));
+  fq.forEach(x => head.push(o.target + "_" + FREQNAME[x], o.target + "_" + FREQNAME[x] + "_sd", o.target + "_" + FREQNAME[x] + "_sd_published_figure", o.target + "_" + FREQNAME[x] + "_published"));
   const lines = [head.join(",")];
   const at = fq.map(x => { const m = new Map(); F.paths[x].t.forEach((t, k) => m.set(t, k)); return m; });
   for (let t = 0; t < P.T; t++) {
     const r = [P.iso(t)];
     fq.forEach((x, j) => { const k = at[j].get(t), p = F.paths[x];
-      const g = a => k == null || !fin(a[k]) ? "" : String(a[k]); r.push(g(p.v), g(p.sd), g(p.a)); });
+      const g = a => k == null || !fin(a[k]) ? "" : String(a[k]); r.push(g(p.v), g(p.sd), g(p.pred), g(p.a)); });
     lines.push(r.join(","));
   }
   return lines.join("\n") + "\n";

@@ -155,3 +155,21 @@ load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast
 # a series that is the factor itself: its variance hits the floor, and the fit says so
 rng(3); load("nowcast"); let x = cumsum(randn(1, 80)) / 4; let Y = [x; x; 0.5 * x + 0.3 * randn(1, 80)]; let f = nowcast.fit(nowcast.data(Y, {names = ["a"; "b"; "c"]}), {maxit = 200}); [numel(f.warnings) > 0, contains(f.warnings[numel(f.warnings)], "exactly")]
 => [true, true]
+
+# --- bands: the parameters' uncertainty (parametric bootstrap) and the series' own noise (0.1.60) ---
+# without a bootstrap nothing changes: sd is the common component's, sdpred adds the noise
+load("nowcast"); let Y = readcsv("tests/data/app2_nowcast.csv"); let d = nowcast.data(Y, {quarterly = [0; 0; 0; 0; 0; 1], names = ["a"; "b"; "c"; "d"; "e"; "gdp"]}); let f = nowcast.model(d, {agg = "mean", standardize = false, params = {A = 0.7, Q = 0.25, Lam = [1; 0.8; 0.6; 1.2; 0.4; 1], R = [0.09; 0.25; 0.64; 0.16; 2.25; 0.09]}}); let n = nowcast.nowcast(f, "gdp"); [abs(n.sd - 0.1188324102) < 1e-6, n.sd == n.sdfilter, n.sdparam == 0, abs(n.sdnoise - 0.3) < 1e-12, abs(n.sdpred ^ 2 - n.sd ^ 2 - 0.09) < 1e-12]
+=> [true, true, true, true, true]
+# the draws do not depend on how they are split up, and repeat exactly
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg, maxit = 30}); let a = nowcast.bootstrap(nowcast.bootstrap(fit, {B = 2}), {B = 2}); let b = nowcast.bootstrap(fit, {B = 4}); let c = nowcast.bootstrap(fit, {B = 4}); [a.boot.B == 4, max(max(abs(a.boot.Lam - b.boot.Lam))) == 0, max(max(abs(b.boot.A - c.boot.A))) == 0]
+=> [true, true, true]
+# the parameters widen the band, and the parts add up
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); let fb = nowcast.bootstrap(fit, {B = 20}); let n0 = nowcast.nowcast(fit, "gdp", e); let n = nowcast.nowcast(fb, "gdp", e); [n.value == n0.value, n.sd > n0.sd, n.sdparam > 0, abs(n.sdpred ^ 2 - n.sd ^ 2 - n.sdnoise ^ 2) < 1e-12, n.B == 20]
+=> [true, true, true, true, true]
+# calibration: GDP's published quarters against the model's quarterly path, standardized
+# by the predictive sd, spread about one (by the common component's alone, far more)
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg}); let fb = nowcast.bootstrap(fit, {B = 20}); let pq = nowcast.path(fb, "gdp", "quarterly"); let ok = find(!isnan(pq.actual)); let z = (pq.actual[ok] - pq.value[ok]) ./ pq.sdpred[ok]; let z0 = (pq.actual[ok] - pq.value[ok]) ./ pq.sdfilter[ok]; [std(z) > 0.5, std(z) < 1.6, std(z0) > 2]
+=> [true, true, true]
+# a finer frequency has no published figures: no noise term there
+load("tests/data/nowcast_weekly.cz"); let fit = nowcast.fit(d, {agg = wagg, maxit = 30}); let pm = nowcast.path(fit, "gdp", "monthly"); let pq = nowcast.path(fit, "gdp", "quarterly"); [pm.sdnoise == 0, pq.sdnoise > 0, max(abs(pm.sdpred - pm.sd)) == 0]
+=> [true, true, true]

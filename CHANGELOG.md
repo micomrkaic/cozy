@@ -1,5 +1,38 @@
 # Cozy changelog
 
+## 0.1.60 — honest bands: parameter uncertainty and the published figure's noise
+
+### Added
+- **`nowcast.bootstrap(f, opts)`: parameter uncertainty** by the parametric
+  bootstrap (Pfeffermann and Tiller). For each of B draws (default 100):
+  simulate data from the fitted model with the real data's gaps,
+  re-estimate by EM from the fit's parameters, and re-smooth the real data
+  with the draw. `nowcast` and `path` then fold the draws' spread into `sd`
+  (`sdfilter` and `sdparam` are the parts). Draw b uses `rng(seed + b)`, so
+  draws can be added in pieces and repeat exactly; a draw whose EM failed is
+  dropped and counted. Starting each draw at the fit's parameters is enough:
+  on the weekly example the parameters' sd is 0.0195 at the fit's tolerance
+  and 0.0199 at 1e-8 (forty times the work).
+- **`sdnoise` and `sdpred`.** The band for a figure that will be published
+  must include the series' own noise, not only the common component:
+  `sdpred` = sqrt(sd^2 + sdnoise^2), from `nowcast` and, at the series' own
+  frequency, `path`. On the weekly example GDP's nowcast has a common
+  component known to 0.04, parameters adding 0.02, and its own noise 0.20.
+  The truth is 0.6 predictive standard errors away, against 2.8 of the old
+  ones. In-sample, errors standardized by `sdpred` have a spread of about
+  one (0.88 on the test panel, against 5.5 by `sd`), and the suite checks it.
+- **The page's bands are for the published figure.** The cards and the fan
+  chart use `sdpred` and break it into its parts. The tracker (no published
+  weekly or monthly GDP) shows the common component's band. A new setting,
+  "Parameter uncertainty", sets the bootstrap draws (default 50; about 3
+  seconds on the weekly example in the browser, in pieces with progress).
+  The exported script runs the same bootstrap and reproduces the page's
+  bands; the browser test checks it.
+
+### Changed
+- `fit`'s EM loop is now `nc_em`, shared with the bootstrap; fits are
+  unchanged.
+
 ## 0.1.59 — nowcasting with weekly and daily data, GDP week by week, and a convergence report
 
 ### Added
