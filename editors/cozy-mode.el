@@ -240,6 +240,7 @@
     "trace"
     "trim"
     "trunc"
+    "tutor"
     "unique"
     "upper"
     "var"

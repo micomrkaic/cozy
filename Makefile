@@ -165,6 +165,7 @@ test: vmtest $(BIN)
 	@bash tests/run_ascii_plot.sh
 	@bash tests/run_longline.sh
 	@timeout 300 python3 tests/run_lineedit.py
+	@timeout 600 python3 tests/run_tutor.py
 	@bash tests/run_svg.sh
 	@bash tests/run_demo.sh
 	@sh tests/run_packeur.sh ./vmtest 2>/dev/null || sh tests/run_packeur.sh ./cozy

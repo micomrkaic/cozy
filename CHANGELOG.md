@@ -1,5 +1,42 @@
 # Cozy changelog
 
+## 0.1.62 — the tutor
+
+### Added
+- **`tutor`: learn Cozy at its own prompt**, in the manner of vimtutor.
+  - Sixteen lessons, 91 steps:
+    - arithmetic and `ans`, names (and why a typo is an error);
+    - arrays and masks, matrices and the dot operators, linear algebra with
+      `\`;
+    - functions, defaults, sections and closures;
+    - pipes (`|>`, `@`, `~>`, `|>>`, fan-out);
+    - blackboard notation (`sum[k = 1:n]`, `where`, chained comparisons);
+    - control flow as expressions, records and packages, missing data;
+    - complex numbers, and duals for exact derivatives;
+    - reproducible randomness; text, dates and tables; the solvers;
+    - finding your way, and why the language is built as it is.
+  - You type at the ordinary prompt, with the real line editor and error
+    messages. The tutor checks each entry's text, value and error, says ✓
+    or what is wrong, and moves on.
+  - While it runs: `hint` (twice: the answer), `skip`, `back`, `again`,
+    `lessons`, and Enter turns a page. `tutor off` leaves; `tutor` resumes
+    from `~/.cozy_tutor`; `tutor N` opens lesson N; `tutor restart` starts
+    over.
+  - It works in the browser playground too.
+- **How it is built**: the lessons and their checks are Cozy
+  (`packages/tutor.cz`). The REPL starts them and hands each entry to the
+  lesson (`tutor_after`, with the entry's text, value and error). It maps
+  the tutor's words to `tutor_cmd` only while the tutor runs (otherwise they
+  are ordinary names) and keeps the place.
+- **`tests/run_tutor.py` plays the whole tutor** through the REPL with every
+  step's answer: all 73 checks must pass, the only errors must be the two
+  the lessons teach, and the place must be saved. It also checks every
+  command. A change to the language that breaks a lesson breaks the build.
+
+### Changed
+- The startup banner now begins "new here? type tutor".
+- `tutor` typed in a script says it is a REPL command, like `manual`.
+
 ## 0.1.61 — data from FRED
 
 ### Added
