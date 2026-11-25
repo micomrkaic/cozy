@@ -53,8 +53,11 @@ extern void zpotrf_(const char *uplo, const int *n, double *a, const int *lda,
  * the whole worker pool: on a laptop with many cores and deep idle states
  * that cost 5-50 ms per call at the REPL, for a 100x100 inverse that takes
  * 0.3 ms on one core. Below OB_SMALL_N the call drops to one thread and
- * the cleanup attribute restores the count on every return path. gemm is
- * left alone: OpenBLAS sizes its own threading there. Accelerate (the
+ * the cleanup attribute restores the count on every return path. gemm
+ * gets the same treatment by work, not shape (0.1.58): OpenBLAS threads a
+ * product from m*n*k > 64^3, but threads only pay from about 300^3, so a
+ * product below OB_SMALL_N^3 multiply-adds runs on one thread and a long
+ * thin one (10000x5 times 5x10000) still gets the pool. Accelerate (the
  * other user of this file) manages its own threads and has no such call. */
 #ifdef COZY_OPENBLAS
 extern void openblas_set_num_threads(int);
@@ -72,6 +75,11 @@ static void ob_restore(int *t) { if (*t > 0) openblas_set_num_threads(*t); }
 #else
 #define OB_SMALL(n) ((void)0)
 #endif
+/* the side of the cube with as many multiply-adds as an m x k by k x n product */
+static inline uint32_t ob_cube_side(uint32_t m, uint32_t k, uint32_t n)
+{
+    return (uint32_t)cbrt((double)m * (double)k * (double)n);
+}
 
 /* row-major (r x c) -> new column-major buffer */
 static Cplx *to_cm(const Cplx *rm, uint32_t r, uint32_t c)
@@ -347,6 +355,7 @@ static int ob_gemm_d(const double *A, const double *B, double *C,
     int M = (int)n, N = (int)m, K = (int)k, lda = (int)n, ldb = (int)(k ? k : 1), ldc = (int)n;
     double one = 1.0, zero = 0.0;
     if (!k) { for (size_t q = 0; q < (size_t)m * n; q++) C[q] = 0.0; return 0; }
+    OB_SMALL(ob_cube_side(m, k, n));
     dgemm_("N", "N", &M, &N, &K, &one, B, &lda, A, &ldb, &zero, C, &ldc);
     return 0;
 }
@@ -357,6 +366,7 @@ static int ob_gemm_z(const Cplx *A, const Cplx *B, Cplx *C,
     int M = (int)n, N = (int)m, K = (int)k, lda = (int)n, ldb = (int)(k ? k : 1), ldc = (int)n;
     Cplx one = { 1.0, 0.0 }, zero = { 0.0, 0.0 };
     if (!k) { for (size_t q = 0; q < (size_t)m * n; q++) C[q] = (Cplx){ 0, 0 }; return 0; }
+    OB_SMALL(ob_cube_side(m, k, n));
     zgemm_("N", "N", &M, &N, &K, &one, B, &lda, A, &ldb, &zero, C, &ldc);
     return 0;
 }
