@@ -1,5 +1,20 @@
 # Cozy changelog
 
+## 0.1.58 — small matrix products on one thread too
+
+### Fixed
+- **`A * B` on small matrices had the same OpenBLAS wake cost as `inv`
+  did** (0.1.57). OpenBLAS threads a product once m·n·k passes 64³, so a
+  100×100 product woke the whole worker pool; measured on 4 cores, threads
+  only pay from about 300×300, and one thread is as fast or faster below
+  that. A product with fewer multiply-adds than a 160×160×160 one now runs
+  on one thread, real and complex. The test is on work, not shape, so a
+  long thin product (4000×5 by 5×4000) still gets the threads. With
+  0.1.57's guard on every LAPACK kernel (solve and `\`, `inv`, `det`,
+  `eig`, `svd`, `chol`, `schur`, `ordschur`), every OpenBLAS call Cozy makes
+  is now covered; the Kalman kernels use their own loops and never called
+  OpenBLAS.
+
 ## 0.1.57 — the cursor blinks to the open paren; small LAPACK calls on one thread
 
 ### Added
