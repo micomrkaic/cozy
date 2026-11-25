@@ -1,5 +1,39 @@
 # Cozy changelog
 
+## 0.1.52 — one page, two engines, the same screen (terminal stage 3)
+
+The last stage of design entry 34: the native workbench runs the native
+REPL in the same xterm.js page as the browser, and a test holds the two
+engines to the same screen for the same keys.
+
+### Changed
+- **`cozy --workbench` is the native REPL in your browser.** The server
+  forks `repl_run()` — what `./cozy` runs — onto a pseudo-terminal and
+  relays it to docs/index.html: keys in, bytes out (long-polled HTTP), the
+  page's size as the pty's, Ctrl-C as a real SIGINT, your real files and
+  `~/.cozy_history`. The page finds it at `/native-ping`; on GitHub Pages,
+  or with `?engine=wasm`, the WebAssembly engine answers instead. The
+  line-mode workbench page (docs/workbench.html) and its in-process
+  `/eval` are retired, with tools/gen_page_pkgs.py and tests/run_page.js.
+- **The workbench is locked to its page.** Every request that reaches the
+  REPL or the disk carries a per-session token that only a page served by
+  the workbench can read, and the Host must be localhost — before, any web
+  page could POST to `/eval` on a running workbench.
+- **One notice for both engines.** Before each prompt the REPL writes the
+  workspace listing as a private escape sequence (OSC 5379); the page's
+  terminal catches it, whichever engine wrote it.
+- **The built-in pager natively** when `COZY_PAGER=builtin` (the workbench
+  sets it), so `manual` looks the same on both engines; `manual` also
+  finds the books beside the binary from any directory.
+
+### Added
+- **The parity test** (tests/run_playground_page.js): its 21 checks run on
+  both engines, and then the same keys — editing, completion, history,
+  multi-line entries, Ctrl-C at the prompt and in a loop, input, pause,
+  errors, help, the demo and its pauses, the manual's pager, packeur, who —
+  go into a fresh session of each, and the two screens must match from the
+  first prompt on (238 lines today, character for character).
+
 ## 0.1.51 — the browser runs the terminal's REPL (terminal stage 2)
 
 The playground is now the native REPL itself — `repl.c` and the isocline

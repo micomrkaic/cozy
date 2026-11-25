@@ -85,7 +85,7 @@ int main(int argc, char **argv)
             printf("usage: cozy [options] [file.cz ...]\n"
                    "  (no arguments)      interactive REPL\n"
                    "  file.cz             run a script (several run in order)\n"
-                   "  --workbench [port]  serve the browser workbench (default 8765)\n"
+                   "  --workbench [port]  the REPL in your browser, natively (default 8765)\n"
                    "  --version           print version and build info\n"
                    "  --tokens | --ast | --dis   compiler introspection on stdin\n"
                    "  --sample            print a sample session\n"

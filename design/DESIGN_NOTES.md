@@ -1148,3 +1148,22 @@ native workbench serves (evaluation in the native process); its parity is
 stage 3's (a native pty over the workbench socket). RESIDUE: Ctrl-C does
 not reach inside one long builtin in the browser; type-ahead is not echoed
 until read; no shell. TRIGGER for stage 3: this.
+STAGE 3 SHIPPED 0.1.52: one page, two engines. cozy --workbench forks
+repl_run() onto a pty (forkpty; PR_SET_PDEATHSIG on Linux, the pty's
+hangup elsewhere) and relays it over long-polled HTTP — CONSIDERED: a
+WebSocket (a SHA-1 handshake and framing in C, for no gain on a loopback);
+the old in-process /eval (a second REPL by another name — the thing this
+entry removes). The page picks its engine by /native-ping, which also hands
+it the session token; Host is checked against DNS rebinding. The notice
+went in band, OSC 5379 with base64 of who, so both engines share the
+page's handler (the worker keeps a message only for localStorage
+history). COZY_PAGER=builtin gives the native REPL the browser's pager, so
+manual is the same on both. PROOF: the playground test runs its checks on
+both engines, then types one script into a fresh session of each and
+compares the screens character for character from the first prompt (the
+banner differs by build and backend). The first runs found only test
+timing (a stale prompt read as the new one; screens that shrink when the
+pager erases its line or packeur clears) — the engines agreed. RESIDUE:
+the browser's Ctrl-C does not reach inside a single builtin; type-ahead is
+echoed only when read in the browser (a tty echoes at once); no shell in
+the browser. DOCKET CLOSED.

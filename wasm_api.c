@@ -291,13 +291,10 @@ static int interrupt_poll(void)
 /* before each new prompt: the workspace, for the page's side panes */
 static void prompt_notice(Interp *I)
 {
-    extern void cozy_who_text(Interp *, FILE *);
-    char *buf = NULL; size_t sz = 0;
-    FILE *m = open_memstream(&buf, &sz);
-    if (m) { cozy_who_text(I, m); fclose(m); }
+    extern void repl_osc_notice(Interp *);
+    repl_osc_notice(I);                               /* the workspace, in band, as natively */
     term_flush();
-    EM_ASM({ if (globalThis.__cozyNotice) globalThis.__cozyNotice(UTF8ToString($0)); }, buf ? buf : "");
-    free(buf);
+    EM_ASM({ if (globalThis.__cozyNotice) globalThis.__cozyNotice(); });   /* history for localStorage */
 }
 
 /* the REPL itself; returns when the session ends (Ctrl-D). Call with

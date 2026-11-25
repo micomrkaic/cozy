@@ -7,6 +7,7 @@ language, REPL, and tools, with every example verified against the
 interpreter. **[Try it in the browser](https://micomrkaic.github.io/cozy/)** —
 the same REPL as the terminal (line editor, completion, history, Ctrl-C and
 all), compiled to WebAssembly and run on xterm.js, with the books built in.
+`cozy --workbench` opens the same page on the native engine.
 **[DSGE demos](https://micomrkaic.github.io/cozy/dsge.html)** — three macro
 models solved live in the page by the `dsge` package.
 **[Nowcast](https://micomrkaic.github.io/cozy/nowcast.html)** — drop in a

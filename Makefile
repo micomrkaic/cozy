@@ -26,6 +26,11 @@ LIBS     = -lm $(LINALG_LIBS) $(OPTIM_LIBS)
 ISOCLINE_INC = -Ithird_party/isocline/include
 CFLAGS += $(ISOCLINE_INC)
 
+# The workbench forks the REPL onto a pseudo-terminal (serve.c): forkpty is
+# in libc on macOS and on glibc 2.34+, in libutil on older glibc and the BSDs.
+PTY_LIBS := $(shell printf '\043include <stdlib.h>\nint forkpty(int*,char*,void*,void*);\nint main(void){int m;return forkpty(&m,0,0,0);}\n' \
+              | $(CC) -xc - -o /dev/null 2>/dev/null || echo -lutil)
+
 # ---------------------------------------------------------------------------
 # Object build: each .c compiles once into build/obj/, with compiler-generated
 # header dependencies (-MMD -MP), so an edit recompiles exactly the affected
@@ -102,7 +107,7 @@ $(ASANDIR)/%.o: %.c | $(ASANDIR)
 -include $(wildcard $(OBJDIR)/*.d) $(wildcard $(ASANDIR)/*.d)
 
 $(BIN): $(CORE_O) $(OBJDIR)/repl.o $(OBJDIR)/lineedit.o $(OBJDIR)/isocline.o $(OBJDIR)/serve.o $(OBJDIR)/main.o
-	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) -o $@
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LIBS) $(PTY_LIBS) -o $@
 
 # isocline is vendored, not ours: its own warning set, never -Werror (third_party/isocline/COZY.md)
 $(OBJDIR)/isocline.o: third_party/isocline/src/isocline.c $(wildcard third_party/isocline/src/*.[ch]) third_party/isocline/include/isocline.h | $(OBJDIR)
@@ -151,7 +156,6 @@ test: vmtest $(BIN)
 	@python3 tools/gen_dsge_page.py --check
 	@node tests/run_nowcast_page.js
 	@node tests/run_playground_page.js
-	@python3 tools/gen_page_pkgs.py --check
 	@bash tests/run_emacs.sh
 
 # Same corpus, every input run under AddressSanitizer/UBSan; fails on any leak.

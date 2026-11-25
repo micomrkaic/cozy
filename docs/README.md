@@ -11,11 +11,10 @@ This folder is served by GitHub Pages at
   each prompt and type at the prompt like a person — the page evaluates
   nothing on its own. History persists in localStorage. On touch screens a
   line field and Tab/arrow/Ctrl-C buttons type into the same terminal.
-  Tested in Chromium by `tests/run_playground_page.js`.
-- `workbench.html` — the line-mode page the native workbench (`cozy
-  --workbench`) serves, with evaluation routed to the native process; it
-  also falls back to the WebAssembly engine one command at a time when
-  opened on its own.
+  Served by `cozy --workbench`, the same page drives the native REPL on a
+  pseudo-terminal instead (0.1.52). Tested in Chromium, with both engines,
+  by `tests/run_playground_page.js`, which also checks that the two put the
+  same characters on the screen for the same keys.
 - `cozy.js` — the whole interpreter as a single self-contained file: the
   WebAssembly binary is embedded as base64 (`-sSINGLE_FILE=1`), so there is no
   separate `.wasm` to fetch and no MIME/CORS/path concerns. The three books
@@ -51,14 +50,16 @@ site — the /docs folder is where index.html lives; this bit us at 0.0.20.)
 
 ## The workbench (native engine)
 
-`cozy --workbench` serves this same page at http://localhost:8765 with
-evals routed through the NATIVE interpreter — Accelerate/OpenBLAS speed,
-your real filesystem and workspace. The page detects the local engine and
-says so in the terminal; without it (GitHub Pages, or double-clicking
-index.html), the embedded wasm engine answers instead. Panes: Plots,
-Editor, Docs, Workspace (live who), Packages (one-click loads). Scope
-fence: the server binds 127.0.0.1 only — a loopback tool, not a network
-service.
+`cozy --workbench [port]` serves this same page at http://localhost:8765
+with the NATIVE REPL behind the terminal: the server forks `repl_run()` —
+the code `./cozy` runs — onto a pseudo-terminal and relays keys and bytes
+(long-polled HTTP; `serve.c`). Accelerate/OpenBLAS speed, your real files,
+your `~/.cozy_history`, `!commands`, and Ctrl-C as a real SIGINT. The page
+finds the native engine by `/native-ping`, which also hands it the session
+token every pty and upload request must carry (so another web page cannot
+drive this REPL); without it — GitHub Pages, or `?engine=wasm` — the
+WebAssembly engine answers. Scope fence: the server binds 127.0.0.1 only and
+checks the Host header — a loopback tool, not a network service.
 
 ## Rebuilding cozy.js after interpreter changes
 

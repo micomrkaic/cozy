@@ -242,14 +242,16 @@
 <script>
 "use strict";
 /* The playground's terminal is the native REPL — repl.c, the isocline
- * editor, the same commands — compiled to WebAssembly and run in a Web
- * Worker; xterm.js draws it (0.1.51, design entry 34). The page never
- * evaluates anything itself: it sends keys, draws bytes, and keeps the side
- * panes in step with the notice the REPL sends before each prompt. */
+ * editor, the same commands — drawn by xterm.js (design entry 34). On GitHub
+ * Pages it runs compiled to WebAssembly in a Web Worker (0.1.51); served by
+ * cozy --workbench it is the native process on a pseudo-terminal (0.1.52).
+ * Either way the page never evaluates anything itself: it sends keys, draws
+ * bytes, and keeps the side panes in step with the notice the REPL sends
+ * before each prompt. */
 
 /* the bundle the worker loads, with its content hash: a cached older engine
    can never meet this page. Stamped by tools/gen_dsge_page.py; make test checks it. */
-var COZY_BUNDLE = "cozy.js?v=51125657fa24";
+var COZY_BUNDLE = "cozy.js?v=71648ea1a294";
 
 var $ = function (id) { return document.getElementById(id); };
 var HISTKEY = 'cozy_history_v2', EDKEY = 'cozy_editor_v1';
@@ -273,7 +275,7 @@ var WORKER = function () {
   function history() {
     try { return new TextDecoder().decode(M.FS.readFile('/home/web_user/.cozy_history')); } catch (e) { return ''; }
   }
-  globalThis.__cozyNotice = function (who) { flush(); postMessage({ t: 'notice', who: who, hist: history() }); };
+  globalThis.__cozyNotice = function () { flush(); postMessage({ t: 'notice', hist: history() }); };
   function byte(c) { if (c !== null && c !== undefined) { out.push(c & 255); if (out.length >= 16384) flush(); } }
   var cfg = {
     preRun: [function () { cfg.FS.init(function () { return null; }, byte, byte); }],
@@ -341,10 +343,6 @@ var WORKER = function () {
   });
 };
 
-var worker = new Worker(URL.createObjectURL(new Blob([
-  'self.COZY_BUNDLE_URL = ' + JSON.stringify(new URL(COZY_BUNDLE, location.href).href) + ';\n(' + WORKER.toString() + ')();'
-], { type: 'text/javascript' })));
-
 /* ---- the terminal ----------------------------------------------------- */
 var term = new Terminal({
   convertEol: true, cursorBlink: true, scrollback: 10000, allowProposedApi: false,
@@ -355,67 +353,170 @@ var term = new Terminal({
 });
 var fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
-var ready = false, ended = false;
+var ready = false, ended = false, E = null;     /* E: the engine — the worker, or the native workbench */
 function keys(s) {
   if (!ready) return;
-  if (ended) { ended = false; worker.postMessage({ t: 'restart' }); return; }
-  worker.postMessage({ t: 'keys', d: s });
+  if (ended) { ended = false; E.restart(); return; }
+  E.keys(s);
 }
-function sendSize() { worker.postMessage({ t: 'size', cols: term.cols, rows: term.rows }); }
+function sendSize() { if (E) E.size(term.cols, term.rows); }
 term.onData(keys);
 term.onResize(sendSize);
 window.__term = term;                    /* the browser test reads the screen through this */
+var pkgChecks = {}, docCache = {};
 
-var pkgChecks = {}, docCache = {}, pending = {}, reqId = 0;
-function request(msg) {
-  return new Promise(function (res) { msg.id = ++reqId; pending[msg.id] = res; worker.postMessage(msg); });
+/* the REPL's notice before each prompt, in band (repl.c repl_osc_notice):
+   the workspace listing, the same bytes from either engine */
+term.parser.registerOscHandler(5379, function (data) {
+  var who = '';
+  try { who = new TextDecoder().decode(Uint8Array.from(atob(data), function (c) { return c.charCodeAt(0); })); } catch (e) {}
+  $('ws-pre').textContent = who.trim() ? who : '(empty workspace)';
+  for (var p in pkgChecks) pkgChecks[p].checked = who.indexOf('packages/' + p) !== -1;
+  if (E && E.afterEntry) E.afterEntry();
+  return true;
+});
+function sessionEnded() {
+  if (ended) return;
+  ended = true;
+  term.write('\r\n\x1b[2m[session ended — press any key for a new one]\x1b[0m\r\n');
+}
+function addPlot(svg) {
+  var box = $('plots');
+  if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
+  box.insertAdjacentHTML('afterbegin', svg);
+  showPane('plots');
+}
+function opened() {
+  $('booting').remove();
+  term.open($('term'));
+  fit.fit();
 }
 
-worker.onmessage = function (e) {
-  var m = e.data;
-  if (m.t === 'out') term.write(m.d);
-  else if (m.t === 'ready') {
-    $('booting').remove();
-    term.open($('term'));
-    fit.fit();
-    var hist = ''; try { hist = localStorage.getItem(HISTKEY) || ''; } catch (err) {}
-    sendSize();
-    worker.postMessage({ t: 'start', hist: hist });
-    ready = true;
-    term.focus();
-    worker.postMessage({ t: 'packages' });
+/* ---- engine 1: the REPL as WebAssembly, in a worker (GitHub Pages) ---- */
+function wasmEngine() {
+  var worker = new Worker(URL.createObjectURL(new Blob([
+    'self.COZY_BUNDLE_URL = ' + JSON.stringify(new URL(COZY_BUNDLE, location.href).href) + ';\n(' + WORKER.toString() + ')();'
+  ], { type: 'text/javascript' })));
+  var pending = {}, reqId = 0;
+  function request(msg) {
+    return new Promise(function (res) { msg.id = ++reqId; pending[msg.id] = res; worker.postMessage(msg); });
   }
-  else if (m.t === 'notice') {
-    $('ws-pre').textContent = m.who.trim() ? m.who : '(empty workspace)';
-    for (var p in pkgChecks) pkgChecks[p].checked = m.who.indexOf('packages/' + p) !== -1;
-    try { if (m.hist) localStorage.setItem(HISTKEY, m.hist); } catch (err) {}
-  }
-  else if (m.t === 'ended') {
-    ended = true;
-    term.write('\r\n\x1b[2m[session ended — press any key for a new one]\x1b[0m\r\n');
-  }
-  else if (m.t === 'plot') {
-    var box = $('plots');
-    if (box.firstChild && box.firstChild.className === 'placeholder') box.innerHTML = '';
-    box.insertAdjacentHTML('afterbegin', m.svg);
-    showPane('plots');
-  }
-  else if (m.t === 'file') { var f = pending[m.id]; delete pending[m.id]; if (f) f(m.d); }
-  else if (m.t === 'written') {
-    toast('uploaded ' + m.name + ' (' + m.n + ' bytes) — ' +
-          (/\.cz$/i.test(m.name) ? 'load("/' + m.name + '")' : 'readtable("/' + m.name + '")'));
-  }
-  else if (m.t === 'toast') toast(m.msg);
-  else if (m.t === 'newfiles') {
-    m.files.forEach(function (f) {
-      var a = document.createElement('a');
-      a.href = URL.createObjectURL(new Blob([f.d])); a.download = f.name; a.click();
-      setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  worker.onmessage = function (e) {
+    var m = e.data;
+    if (m.t === 'out') term.write(m.d);
+    else if (m.t === 'ready') {
+      opened();
+      var hist = ''; try { hist = localStorage.getItem(HISTKEY) || ''; } catch (err) {}
+      sendSize();
+      worker.postMessage({ t: 'start', hist: hist });
+      ready = true; term.focus();
+      worker.postMessage({ t: 'packages' });
+    }
+    else if (m.t === 'notice') { try { if (m.hist) localStorage.setItem(HISTKEY, m.hist); } catch (err) {} }
+    else if (m.t === 'ended') sessionEnded();
+    else if (m.t === 'plot') addPlot(m.svg);
+    else if (m.t === 'file') { var f = pending[m.id]; delete pending[m.id]; if (f) f(m.d); }
+    else if (m.t === 'written') {
+      toast('uploaded ' + m.name + ' (' + m.n + ' bytes) — ' +
+            (/\.cz$/i.test(m.name) ? 'load("/' + m.name + '")' : 'readtable("/' + m.name + '")'));
+    }
+    else if (m.t === 'toast') toast(m.msg);
+    else if (m.t === 'newfiles') {
+      m.files.forEach(function (f) {
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([f.d])); a.download = f.name; a.click();
+        setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+      });
+      toast(m.files.length + ' new file' + (m.files.length === 1 ? '' : 's') + ' downloaded');
+    }
+    else if (m.t === 'packages') buildPkgs(m.list);
+  };
+  return {
+    name: 'wasm',
+    keys: function (s) { worker.postMessage({ t: 'keys', d: s }); },
+    size: function (c, r) { worker.postMessage({ t: 'size', cols: c, rows: r }); },
+    restart: function () { worker.postMessage({ t: 'restart' }); },
+    readDoc: function (path) { return request({ t: 'read', path: path }); },
+    upload: function (name, buf) { worker.postMessage({ t: 'write', name: name, data: buf }, [buf]); },
+    newFiles: function () { worker.postMessage({ t: 'newfiles' }); }
+  };
+}
+
+/* ---- engine 2: the native REPL on the workbench's pty (cozy --workbench) ---- */
+function nativeEngine(token) {
+  var H = { 'X-Cozy-Token': token };
+  var from = 0, chain = Promise.resolve(), seenPlots = {};
+  function post(url, body) {                      /* in order: keys must not overtake each other */
+    chain = chain.then(function () {
+      return fetch(url, { method: 'POST', headers: H, body: body }).catch(function () {});
     });
-    toast(m.files.length + ' new file' + (m.files.length === 1 ? '' : 's') + ' downloaded');
+    return chain;
   }
-  else if (m.t === 'packages') buildPkgs(m.list);
-};
+  function poll() {
+    fetch('/pty/out?from=' + from, { headers: H }).then(function (r) {
+      var next = +r.headers.get('X-Next'), gone = r.headers.get('X-Ended') === '1';
+      return r.arrayBuffer().then(function (b) {
+        if (b.byteLength) term.write(new Uint8Array(b));
+        if (next >= from) from = next;
+        if (gone) sessionEnded();
+        setTimeout(poll, 0);
+      });
+    }).catch(function () { setTimeout(poll, 1000); });
+  }
+  function plots() {
+    fetch('/plots').then(function (r) { return r.text(); }).then(function (txt) {
+      txt.split('\n').sort().forEach(function (f) {
+        if (!f || seenPlots[f]) return;
+        seenPlots[f] = true;
+        fetch('/' + f).then(function (r) { return r.text(); }).then(addPlot);
+      });
+    }).catch(function () {});
+  }
+  /* plots written before this page opened are not news */
+  fetch('/plots').then(function (r) { return r.text(); }).then(function (txt) {
+    txt.split('\n').forEach(function (f) { if (f) seenPlots[f] = true; });
+  }).catch(function () {}).then(function () {
+    opened();
+    post('/pty/size?cols=' + term.cols + '&rows=' + term.rows, '');
+    ready = true; term.focus();
+    poll();
+    fetch('/packages-list').then(function (r) { return r.text(); }).then(function (t) {
+      buildPkgs(t.split('\n').filter(Boolean).sort());
+    });
+  });
+  $('dl').title = 'the native engine writes into its working directory: your files are already there';
+  return {
+    name: 'native',
+    keys: function (s) { post('/pty/in', s); },
+    size: function (c, r) { post('/pty/size?cols=' + c + '&rows=' + r, ''); },
+    restart: function () { post('/pty/restart', ''); },
+    readDoc: function (path) {
+      return fetch('/doc' + path).then(function (r) { return r.ok ? r.arrayBuffer() : null; })
+        .then(function (b) { return b ? new Uint8Array(b) : null; });
+    },
+    upload: function (name, buf) {
+      post('/upload?name=' + encodeURIComponent(name), buf).then(function () {
+        toast('uploaded ' + name + ' to the working directory — ' +
+              (/\.cz$/i.test(name) ? 'load("' + name + '")' : 'readtable("' + name + '")'));
+      });
+    },
+    newFiles: function () { toast('the native engine works in your directory: its files are already there'); },
+    afterEntry: plots
+  };
+}
+
+/* which engine: the workbench answers /native-ping with its token; GitHub
+   Pages (or ?engine=wasm) has none, and the WebAssembly one starts */
+(function chooseEngine() {
+  var want = (location.search.match(/[?&]engine=(\w+)/) || [])[1];
+  if (want === 'wasm' || location.protocol === 'file:') { E = wasmEngine(); return; }
+  fetch('/native-ping', { cache: 'no-store' }).then(function (r) { return r.ok ? r.text() : ''; })
+    .catch(function () { return ''; }).then(function (txt) {
+      var parts = txt.trim().split(/\s+/);
+      E = (parts[0] === 'cozy' && parts[3] && parts[3].length === 32) ? nativeEngine(parts[3]) : wasmEngine();
+      document.documentElement.dataset.engine = E.name;
+    });
+})();
 window.addEventListener('resize', function () { if (ready) fit.fit(); });
 if (window.ResizeObserver) new ResizeObserver(function () { if (ready) fit.fit(); }).observe($('term'));
 $('term').addEventListener('click', function () { term.focus(); });
@@ -543,7 +644,7 @@ function loadDoc(path) {
   if (path) docPick.value = path;
   var p = docPick.value;
   if (docCache[p]) { $('docview').innerHTML = docCache[p]; $('docview').scrollTop = 0; return; }
-  request({ t: 'read', path: p }).then(function (d) {
+  E.readDoc(p).then(function (d) {
     docCache[p] = d ? mdToHtml(new TextDecoder().decode(d)) : '<p>(document not found in this build)</p>';
     $('docview').innerHTML = docCache[p]; $('docview').scrollTop = 0;
   });
@@ -590,11 +691,11 @@ $('ed-save').addEventListener('click', function () {
 });
 
 /* ---- files in and out ---- */
-function upload(f) { f.arrayBuffer().then(function (buf) { worker.postMessage({ t: 'write', name: f.name, data: buf }, [buf]); }); }
+function upload(f) { f.arrayBuffer().then(function (buf) { E.upload(f.name, buf); }); }
 $('upload').addEventListener('change', function (ev) {
   Array.prototype.slice.call(ev.target.files).forEach(upload); ev.target.value = '';
 });
-$('dl').addEventListener('click', function () { worker.postMessage({ t: 'newfiles' }); });
+$('dl').addEventListener('click', function () { E.newFiles(); });
 var dragDepth = 0;
 window.addEventListener('dragenter', function (ev) { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
 window.addEventListener('dragleave', function () { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
